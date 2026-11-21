@@ -836,9 +836,14 @@ mod tests {
         let entries = list_from(&[], &sources);
         assert_eq!(entries.len(), 2, "{entries:#?}");
         let agent = entries.iter().find(|e| e.name == "Agent").expect("shortcut");
+        // Compared after resolution: the temp folder may be given by its short 8.3 name
+        // ("RUNNER~1") while the shortcut resolves to the long one.
         assert_eq!(
-            agent.executable.to_lowercase(),
-            target.display().to_string().to_lowercase()
+            std::fs::canonicalize(&agent.executable).ok(),
+            std::fs::canonicalize(&target).ok(),
+            "{} vs {}",
+            agent.executable,
+            target.display()
         );
         assert!(agent.command.ends_with("--background") && agent.enabled && agent.kind == "folder");
         assert_eq!(agent.value, "Agent.lnk");
