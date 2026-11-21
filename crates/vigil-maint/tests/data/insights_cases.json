@@ -1,0 +1,1500 @@
+{
+ "source": "synthetic hardware, tuning and volume data",
+ "cases": [
+  {
+   "name": "empty",
+   "hw": {},
+   "tuning": null,
+   "volumes": [],
+   "uptime_seconds": 0,
+   "today": "2026-06-01",
+   "expected": []
+  },
+  {
+   "name": "healthy_desktop",
+   "hw": {
+    "disks": [
+     {
+      "number": 0,
+      "name": "Example NVMe",
+      "media": "SSD",
+      "bus": "NVMe",
+      "size": 1000204886016,
+      "health": "Healthy",
+      "status": "OK",
+      "letters": [
+       "C:"
+      ],
+      "temperature": 41,
+      "temperature_max": 70,
+      "wear": 2,
+      "power_on_hours": 1200,
+      "read_errors": 0,
+      "write_errors": 0
+     },
+     {
+      "number": 1,
+      "name": null,
+      "media": "HDD",
+      "health": "Healthy",
+      "temperature": null
+     }
+    ],
+    "trim": {
+     "ntfs": true,
+     "refs": null,
+     "source": "registry"
+    },
+    "memory": {
+     "modules": [
+      {
+       "capacity": 17179869184,
+       "speed": 3200,
+       "configured_speed": 3200,
+       "manufacturer": "Example",
+       "part_number": "PART-A",
+       "slot": "DIMM",
+       "bank": "BANK 0",
+       "form_factor": "DIMM",
+       "type": "DDR4"
+      },
+      {
+       "capacity": 17179869184,
+       "speed": 3200,
+       "configured_speed": 3200,
+       "manufacturer": "Example",
+       "part_number": "PART-A",
+       "slot": "DIMM",
+       "bank": "BANK 0",
+       "form_factor": "DIMM",
+       "type": "DDR4"
+      }
+     ],
+     "slots": 4,
+     "max_capacity": 137438953472
+    },
+    "gpus": [
+     {
+      "name": "Example GeForce",
+      "vendor_id": "10DE",
+      "driver_date": "2026-04-02"
+     }
+    ],
+    "bios": {
+     "date": "2024-07-01"
+    },
+    "pagefiles": [
+     {
+      "path": "C:\\pagefile.sys",
+      "allocated_mb": 4096,
+      "peak_mb": 1000
+     }
+    ],
+    "computer": {
+     "auto_pagefile": true
+    },
+    "battery": null
+   },
+   "tuning": {
+    "power_plans": [
+     {
+      "guid": "381b4222-f694-41f0-9685-ff5bb260df2e",
+      "name": "Balanced",
+      "active": true
+     },
+     {
+      "guid": "a1841308-3541-4fab-bc81-f71556f20b4a",
+      "name": "Power saver",
+      "active": false
+     }
+    ]
+   },
+   "volumes": [
+    {
+     "mount": "C:\\",
+     "label": "",
+     "fs": "NTFS",
+     "total": 1073741824000,
+     "used": 644245094400,
+     "free": 429496729600,
+     "removable": false,
+     "network": false
+    }
+   ],
+   "uptime_seconds": 259200,
+   "today": "2026-06-01",
+   "expected": [
+    {
+     "level": "ok",
+     "area": "Storage",
+     "text": "Every disk reports a healthy status.",
+     "fix": ""
+    },
+    {
+     "level": "ok",
+     "area": "Memory",
+     "text": "32 GB in 2 modules at 3200 MT/s.",
+     "fix": ""
+    },
+    {
+     "level": "ok",
+     "area": "Graphics",
+     "text": "The Example GeForce driver is recent (2026-04-02).",
+     "fix": ""
+    }
+   ]
+  },
+  {
+   "name": "failing_disks",
+   "hw": {
+    "disks": [
+     {
+      "number": 0,
+      "name": "Disk A",
+      "media": "SSD",
+      "health": "Warning",
+      "temperature": 59,
+      "wear": 79
+     },
+     {
+      "number": 1,
+      "name": "",
+      "media": "ssd",
+      "health": "Unhealthy",
+      "temperature": 60,
+      "wear": 80
+     },
+     {
+      "number": 2,
+      "name": "Disk C",
+      "media": "HDD",
+      "health": "0",
+      "temperature": 69,
+      "wear": 94,
+      "read_errors": 2,
+      "write_errors": 1
+     },
+     {
+      "name": "Disk D",
+      "media": "SSD",
+      "health": "healthy",
+      "temperature": 70,
+      "wear": 95
+     },
+     {
+      "number": 4,
+      "name": "Disk E",
+      "media": "SSD",
+      "health": "",
+      "temperature": 0,
+      "wear": 0,
+      "read_errors": null,
+      "write_errors": 3
+     }
+    ],
+    "trim": {
+     "ntfs": false
+    }
+   },
+   "tuning": null,
+   "volumes": [],
+   "uptime_seconds": 0,
+   "today": "2026-06-01",
+   "expected": [
+    {
+     "level": "bad",
+     "area": "Storage",
+     "text": "Disk 0 (Disk A) reports its health as Warning.",
+     "fix": "Back up your files now and plan to replace the drive."
+    },
+    {
+     "level": "bad",
+     "area": "Storage",
+     "text": "Disk 1 (unknown model) reports its health as Unhealthy.",
+     "fix": "Back up your files now and plan to replace the drive."
+    },
+    {
+     "level": "bad",
+     "area": "Storage",
+     "text": "Disk None (Disk D) is at 70 °C.",
+     "fix": "Improve airflow around the drive; sustained heat shortens its life."
+    },
+    {
+     "level": "bad",
+     "area": "Storage",
+     "text": "Disk None (Disk D) has used 95% of its rated write endurance.",
+     "fix": "Back up your files and replace the SSD soon."
+    },
+    {
+     "level": "bad",
+     "area": "Storage",
+     "text": "TRIM is turned off, so the SSD slows down as it fills.",
+     "fix": "Run as administrator: fsutil behavior set DisableDeleteNotify 0"
+    },
+    {
+     "level": "warn",
+     "area": "Storage",
+     "text": "Disk 1 (unknown model) runs warm (60 °C).",
+     "fix": "Check the case airflow or add a heatsink to the SSD."
+    },
+    {
+     "level": "warn",
+     "area": "Storage",
+     "text": "Disk 1 (unknown model) has used 80% of its rated write endurance.",
+     "fix": "Keep backups current; the drive is nearing the end of its rated life."
+    },
+    {
+     "level": "warn",
+     "area": "Storage",
+     "text": "Disk 2 (Disk C) runs warm (69 °C).",
+     "fix": "Check the case airflow or add a heatsink to the SSD."
+    },
+    {
+     "level": "warn",
+     "area": "Storage",
+     "text": "Disk 2 (Disk C) has used 94% of its rated write endurance.",
+     "fix": "Keep backups current; the drive is nearing the end of its rated life."
+    },
+    {
+     "level": "warn",
+     "area": "Storage",
+     "text": "Disk 2 (Disk C) reports 3 uncorrected read/write errors.",
+     "fix": "Back up your files and run the manufacturer's diagnostic tool."
+    },
+    {
+     "level": "warn",
+     "area": "Storage",
+     "text": "Disk 4 (Disk E) reports 3 uncorrected read/write errors.",
+     "fix": "Back up your files and run the manufacturer's diagnostic tool."
+    }
+   ]
+  },
+  {
+   "name": "hot_disk_only",
+   "hw": {
+    "disks": [
+     {
+      "number": 0,
+      "name": "Example NVMe",
+      "media": "SSD",
+      "bus": "NVMe",
+      "size": 1000204886016,
+      "health": "Healthy",
+      "status": "OK",
+      "letters": [
+       "C:"
+      ],
+      "temperature": 72,
+      "temperature_max": 70,
+      "wear": 2,
+      "power_on_hours": 1200,
+      "read_errors": 0,
+      "write_errors": 0
+     }
+    ],
+    "trim": {
+     "ntfs": null
+    }
+   },
+   "tuning": null,
+   "volumes": [],
+   "uptime_seconds": 0,
+   "today": "2026-06-01",
+   "expected": [
+    {
+     "level": "bad",
+     "area": "Storage",
+     "text": "Disk 0 (Example NVMe) is at 72 °C.",
+     "fix": "Improve airflow around the drive; sustained heat shortens its life."
+    }
+   ]
+  },
+  {
+   "name": "trim_off_without_ssd",
+   "hw": {
+    "disks": [
+     {
+      "number": 0,
+      "media": "HDD",
+      "health": "Healthy"
+     }
+    ],
+    "trim": {
+     "ntfs": false
+    }
+   },
+   "tuning": null,
+   "volumes": [],
+   "uptime_seconds": 0,
+   "today": "2026-06-01",
+   "expected": [
+    {
+     "level": "ok",
+     "area": "Storage",
+     "text": "Every disk reports a healthy status.",
+     "fix": ""
+    }
+   ]
+  },
+  {
+   "name": "unknown_health",
+   "hw": {
+    "disks": [
+     {
+      "number": 0,
+      "name": "Disk",
+      "media": "SSD",
+      "health": ""
+     }
+    ]
+   },
+   "tuning": null,
+   "volumes": [],
+   "uptime_seconds": 0,
+   "today": "2026-06-01",
+   "expected": []
+  },
+  {
+   "name": "small_single_slow_memory",
+   "hw": {
+    "memory": {
+     "modules": [
+      {
+       "capacity": 4294967296,
+       "speed": 3200,
+       "configured_speed": 2400,
+       "manufacturer": "Example",
+       "part_number": "PART-A",
+       "slot": "DIMM",
+       "bank": "BANK 0",
+       "form_factor": "DIMM",
+       "type": "DDR4"
+      }
+     ],
+     "slots": 2
+    }
+   },
+   "tuning": null,
+   "volumes": [],
+   "uptime_seconds": 0,
+   "today": "2026-06-01",
+   "expected": [
+    {
+     "level": "warn",
+     "area": "Memory",
+     "text": "Only 4 GB of RAM installed.",
+     "fix": "8 GB is the practical minimum for Windows 11 with a browser; 16 GB is comfortable."
+    },
+    {
+     "level": "warn",
+     "area": "Memory",
+     "text": "A single memory module runs in single-channel mode.",
+     "fix": "Adding a second identical module enables dual-channel and roughly doubles memory bandwidth (noticeable in games and with integrated graphics)."
+    },
+    {
+     "level": "warn",
+     "area": "Memory",
+     "text": "Memory runs at 2400 MT/s although the modules report 3200 MT/s.",
+     "fix": "Enable the memory profile in the BIOS (XMP, EXPO or DOCP)."
+    }
+   ]
+  },
+  {
+   "name": "mixed_memory",
+   "hw": {
+    "memory": {
+     "modules": [
+      {
+       "capacity": 8589934592,
+       "speed": 3200,
+       "configured_speed": 3200,
+       "manufacturer": "Example",
+       "part_number": "A",
+       "slot": "DIMM",
+       "bank": "BANK 0",
+       "form_factor": "DIMM",
+       "type": "DDR4"
+      },
+      {
+       "capacity": 17179869184,
+       "speed": 3200,
+       "configured_speed": 3200,
+       "manufacturer": "Example",
+       "part_number": "B",
+       "slot": "DIMM",
+       "bank": "BANK 0",
+       "form_factor": "DIMM",
+       "type": "DDR4"
+      }
+     ],
+     "slots": 4
+    }
+   },
+   "tuning": null,
+   "volumes": [],
+   "uptime_seconds": 0,
+   "today": "2026-06-01",
+   "expected": [
+    {
+     "level": "info",
+     "area": "Memory",
+     "text": "The memory modules are not identical (size or model differ).",
+     "fix": "Mixed modules usually work but may run at the slowest module's speed."
+    }
+   ]
+  },
+  {
+   "name": "memory_without_running_speed",
+   "hw": {
+    "memory": {
+     "modules": [
+      {
+       "capacity": 8589934592,
+       "speed": 3200,
+       "configured_speed": 0,
+       "manufacturer": "Example",
+       "part_number": "PART-A",
+       "slot": "DIMM",
+       "bank": "BANK 0",
+       "form_factor": "DIMM",
+       "type": "DDR4"
+      },
+      {
+       "capacity": 8589934592,
+       "speed": 3200,
+       "configured_speed": 0,
+       "manufacturer": "Example",
+       "part_number": "PART-A",
+       "slot": "DIMM",
+       "bank": "BANK 0",
+       "form_factor": "DIMM",
+       "type": "DDR4"
+      }
+     ],
+     "slots": 2
+    }
+   },
+   "tuning": null,
+   "volumes": [],
+   "uptime_seconds": 0,
+   "today": "2026-06-01",
+   "expected": [
+    {
+     "level": "ok",
+     "area": "Memory",
+     "text": "16 GB in 2 modules.",
+     "fix": ""
+    }
+   ]
+  },
+  {
+   "name": "memory_slightly_slower",
+   "hw": {
+    "memory": {
+     "modules": [
+      {
+       "capacity": 8589934592,
+       "speed": 3200,
+       "configured_speed": 3100,
+       "manufacturer": "Example",
+       "part_number": "PART-A",
+       "slot": "DIMM",
+       "bank": "BANK 0",
+       "form_factor": "DIMM",
+       "type": "DDR4"
+      },
+      {
+       "capacity": 8589934592,
+       "speed": 3200,
+       "configured_speed": 3040,
+       "manufacturer": "Example",
+       "part_number": "PART-A",
+       "slot": "DIMM",
+       "bank": "BANK 0",
+       "form_factor": "DIMM",
+       "type": "DDR4"
+      }
+     ],
+     "slots": 2
+    }
+   },
+   "tuning": null,
+   "volumes": [],
+   "uptime_seconds": 0,
+   "today": "2026-06-01",
+   "expected": [
+    {
+     "level": "ok",
+     "area": "Memory",
+     "text": "16 GB in 2 modules at 3040 MT/s.",
+     "fix": ""
+    }
+   ]
+  },
+  {
+   "name": "memory_7_5_gib",
+   "hw": {
+    "memory": {
+     "modules": [
+      {
+       "capacity": 8053063680,
+       "speed": 3200,
+       "configured_speed": 3200,
+       "manufacturer": "Example",
+       "part_number": "PART-A",
+       "slot": "DIMM",
+       "bank": "BANK 0",
+       "form_factor": "DIMM",
+       "type": "DDR4"
+      }
+     ],
+     "slots": 1
+    }
+   },
+   "tuning": null,
+   "volumes": [],
+   "uptime_seconds": 0,
+   "today": "2026-06-01",
+   "expected": [
+    {
+     "level": "warn",
+     "area": "Memory",
+     "text": "Only 8 GB of RAM installed.",
+     "fix": "8 GB is the practical minimum for Windows 11 with a browser; 16 GB is comfortable."
+    }
+   ]
+  },
+  {
+   "name": "memory_6_5_gib",
+   "hw": {
+    "memory": {
+     "modules": [
+      {
+       "capacity": 6979321856,
+       "speed": 3200,
+       "configured_speed": 3200,
+       "manufacturer": "Example",
+       "part_number": "PART-A",
+       "slot": "DIMM",
+       "bank": "BANK 0",
+       "form_factor": "DIMM",
+       "type": "DDR4"
+      }
+     ],
+     "slots": 1
+    }
+   },
+   "tuning": null,
+   "volumes": [],
+   "uptime_seconds": 0,
+   "today": "2026-06-01",
+   "expected": [
+    {
+     "level": "warn",
+     "area": "Memory",
+     "text": "Only 6 GB of RAM installed.",
+     "fix": "8 GB is the practical minimum for Windows 11 with a browser; 16 GB is comfortable."
+    }
+   ]
+  },
+  {
+   "name": "memory_one_module_one_slot",
+   "hw": {
+    "memory": {
+     "modules": [
+      {
+       "capacity": 34359738368,
+       "speed": 5600,
+       "configured_speed": 5600,
+       "manufacturer": "Example",
+       "part_number": "PART-A",
+       "slot": "DIMM",
+       "bank": "BANK 0",
+       "form_factor": "DIMM",
+       "type": "DDR4"
+      }
+     ],
+     "slots": 1
+    }
+   },
+   "tuning": null,
+   "volumes": [],
+   "uptime_seconds": 0,
+   "today": "2026-06-01",
+   "expected": [
+    {
+     "level": "ok",
+     "area": "Memory",
+     "text": "32 GB in 1 module at 5600 MT/s.",
+     "fix": ""
+    }
+   ]
+  },
+  {
+   "name": "memory_zero_capacity_ignored",
+   "hw": {
+    "memory": {
+     "modules": [
+      {
+       "capacity": 0,
+       "speed": 3200,
+       "configured_speed": 3200,
+       "manufacturer": "Example",
+       "part_number": "PART-A",
+       "slot": "DIMM",
+       "bank": "BANK 0",
+       "form_factor": "DIMM",
+       "type": "DDR4"
+      },
+      {
+       "capacity": 17179869184,
+       "speed": 3200,
+       "configured_speed": 3200,
+       "manufacturer": "Example",
+       "part_number": "PART-A",
+       "slot": "DIMM",
+       "bank": "BANK 0",
+       "form_factor": "DIMM",
+       "type": "DDR4"
+      }
+     ],
+     "slots": 2
+    }
+   },
+   "tuning": null,
+   "volumes": [],
+   "uptime_seconds": 0,
+   "today": "2026-06-01",
+   "expected": [
+    {
+     "level": "warn",
+     "area": "Memory",
+     "text": "A single memory module runs in single-channel mode.",
+     "fix": "Adding a second identical module enables dual-channel and roughly doubles memory bandwidth (noticeable in games and with integrated graphics)."
+    }
+   ]
+  },
+  {
+   "name": "memory_no_modules",
+   "hw": {
+    "memory": {
+     "modules": [],
+     "slots": 4
+    }
+   },
+   "tuning": null,
+   "volumes": [],
+   "uptime_seconds": 0,
+   "today": "2026-06-01",
+   "expected": []
+  },
+  {
+   "name": "graphics",
+   "hw": {
+    "gpus": [
+     {
+      "name": "Example GeForce",
+      "vendor_id": "10de",
+      "driver_date": "2025-04-27"
+     },
+     {
+      "name": "Example Radeon",
+      "vendor_id": "1002",
+      "driver_date": "2023-01-15"
+     },
+     {
+      "name": "Example Arc",
+      "vendor_id": "8086",
+      "driver_date": "2025-06-01"
+     },
+     {
+      "name": null,
+      "vendor_id": "8086",
+      "driver_date": "2025-05-31"
+     },
+     {
+      "name": "Basic Display",
+      "vendor_id": "1414",
+      "driver_date": "2006-06-21"
+     },
+     {
+      "name": "No date",
+      "vendor_id": "10DE",
+      "driver_date": null
+     },
+     {
+      "name": "Bad date",
+      "vendor_id": "10DE",
+      "driver_date": "garbage"
+     },
+     {
+      "name": "Bad month",
+      "vendor_id": "10DE",
+      "driver_date": "2025-13-01"
+     },
+     {
+      "name": "Basic format",
+      "vendor_id": "1002",
+      "driver_date": "20250101"
+     },
+     {
+      "name": "Future",
+      "vendor_id": "1002",
+      "driver_date": "2027-01-01"
+     },
+     {
+      "name": "",
+      "vendor_id": null,
+      "driver_date": "2026-05-22"
+     },
+     {
+      "name": "",
+      "vendor_id": "1002",
+      "driver_date": "2026-05-22"
+     }
+    ]
+   },
+   "tuning": null,
+   "volumes": [],
+   "uptime_seconds": 0,
+   "today": "2026-06-01",
+   "expected": [
+    {
+     "level": "warn",
+     "area": "Graphics",
+     "text": "The Example GeForce driver is 13 months old (2025-04-27).",
+     "fix": "Install the current driver from nvidia.com/drivers."
+    },
+    {
+     "level": "warn",
+     "area": "Graphics",
+     "text": "The Example Radeon driver is 41 months old (2023-01-15).",
+     "fix": "Install the current driver from amd.com/support."
+    },
+    {
+     "level": "warn",
+     "area": "Graphics",
+     "text": "The Intel driver is 12 months old (2025-05-31).",
+     "fix": "Install the current driver from intel.com/support (Driver & Support Assistant)."
+    },
+    {
+     "level": "warn",
+     "area": "Graphics",
+     "text": "The Basic format driver is 17 months old (20250101).",
+     "fix": "Install the current driver from amd.com/support."
+    },
+    {
+     "level": "ok",
+     "area": "Graphics",
+     "text": "The Example Arc driver is recent (2025-06-01).",
+     "fix": ""
+    },
+    {
+     "level": "ok",
+     "area": "Graphics",
+     "text": "The Future driver is recent (2027-01-01).",
+     "fix": ""
+    },
+    {
+     "level": "ok",
+     "area": "Graphics",
+     "text": "The AMD driver is recent (2026-05-22).",
+     "fix": ""
+    }
+   ]
+  },
+  {
+   "name": "system_old_bios_no_pagefile",
+   "hw": {
+    "bios": {
+     "date": "2022-06-01"
+    },
+    "pagefiles": [],
+    "computer": {
+     "auto_pagefile": false
+    }
+   },
+   "tuning": null,
+   "volumes": [],
+   "uptime_seconds": 1208736.0,
+   "today": "2026-06-01",
+   "expected": [
+    {
+     "level": "warn",
+     "area": "System",
+     "text": "There is no page file.",
+     "fix": "Programs can crash when memory runs out. Let Windows manage the page file size."
+    },
+    {
+     "level": "info",
+     "area": "System",
+     "text": "The BIOS is from 2022-06-01.",
+     "fix": "Check the motherboard maker's site: BIOS updates fix security and stability issues. Update only on stable power."
+    }
+   ]
+  },
+  {
+   "name": "system_bios_exactly_four_years",
+   "hw": {
+    "bios": {
+     "date": "2022-06-02"
+    },
+    "pagefiles": [],
+    "computer": {
+     "auto_pagefile": true
+    }
+   },
+   "tuning": null,
+   "volumes": [],
+   "uptime_seconds": 1209600,
+   "today": "2026-06-01",
+   "expected": [
+    {
+     "level": "info",
+     "area": "System",
+     "text": "Windows has been running for 14 days.",
+     "fix": "Restart now and then: some updates and driver changes only finish after a restart."
+    }
+   ]
+  },
+  {
+   "name": "system_pagefile_missing_section",
+   "hw": {
+    "computer": {
+     "auto_pagefile": false
+    }
+   },
+   "tuning": null,
+   "volumes": [],
+   "uptime_seconds": 1252800.0,
+   "today": "2026-06-01",
+   "expected": [
+    {
+     "level": "info",
+     "area": "System",
+     "text": "Windows has been running for 14 days.",
+     "fix": "Restart now and then: some updates and driver changes only finish after a restart."
+    }
+   ]
+  },
+  {
+   "name": "system_pagefile_peaks",
+   "hw": {
+    "pagefiles": [
+     {
+      "path": "C:\\pagefile.sys",
+      "allocated_mb": 1000,
+      "peak_mb": 900
+     },
+     {
+      "path": "D:\\pagefile.sys",
+      "allocated_mb": 1000,
+      "peak_mb": 899
+     },
+     {
+      "path": "E:\\pagefile.sys",
+      "allocated_mb": 0,
+      "peak_mb": 500
+     },
+     {
+      "path": "F:\\pagefile.sys",
+      "allocated_mb": 2048,
+      "peak_mb": 4096
+     }
+    ]
+   },
+   "tuning": null,
+   "volumes": [],
+   "uptime_seconds": 1771200.0,
+   "today": "2026-06-01",
+   "expected": [
+    {
+     "level": "warn",
+     "area": "System",
+     "text": "The page file reached 900 MB of its 1000 MB.",
+     "fix": "Memory runs short at times: close heavy programs or add RAM."
+    },
+    {
+     "level": "warn",
+     "area": "System",
+     "text": "The page file reached 4096 MB of its 2048 MB.",
+     "fix": "Memory runs short at times: close heavy programs or add RAM."
+    },
+    {
+     "level": "info",
+     "area": "System",
+     "text": "Windows has been running for 20 days.",
+     "fix": "Restart now and then: some updates and driver changes only finish after a restart."
+    }
+   ]
+  },
+  {
+   "name": "battery_bad",
+   "hw": {
+    "battery": {
+     "charge": 80,
+     "status": 2,
+     "designed_capacity": 50000,
+     "full_capacity": 22000,
+     "cycles": 812
+    }
+   },
+   "tuning": {
+    "power_plans": [
+     {
+      "guid": "381b4222-f694-41f0-9685-ff5bb260df2e",
+      "name": "Balanced",
+      "active": false
+     },
+     {
+      "guid": "a1841308-3541-4fab-bc81-f71556f20b4a",
+      "name": "Power saver",
+      "active": true
+     }
+    ]
+   },
+   "volumes": [],
+   "uptime_seconds": 0,
+   "today": "2026-06-01",
+   "expected": [
+    {
+     "level": "bad",
+     "area": "Battery",
+     "text": "The battery holds 44% of its original capacity after 812 cycles.",
+     "fix": "Consider replacing it."
+    }
+   ]
+  },
+  {
+   "name": "battery_warn",
+   "hw": {
+    "battery": {
+     "charge": 80,
+     "status": 2,
+     "designed_capacity": 50000,
+     "full_capacity": 32500,
+     "cycles": null
+    }
+   },
+   "tuning": null,
+   "volumes": [],
+   "uptime_seconds": 0,
+   "today": "2026-06-01",
+   "expected": [
+    {
+     "level": "warn",
+     "area": "Battery",
+     "text": "The battery holds 65% of its original capacity.",
+     "fix": "Consider replacing it."
+    }
+   ]
+  },
+  {
+   "name": "battery_ok",
+   "hw": {
+    "battery": {
+     "charge": 80,
+     "status": 2,
+     "designed_capacity": 50000,
+     "full_capacity": 45000,
+     "cycles": 0
+    }
+   },
+   "tuning": null,
+   "volumes": [],
+   "uptime_seconds": 0,
+   "today": "2026-06-01",
+   "expected": [
+    {
+     "level": "ok",
+     "area": "Battery",
+     "text": "The battery holds 90% of its original capacity.",
+     "fix": ""
+    }
+   ]
+  },
+  {
+   "name": "battery_half",
+   "hw": {
+    "battery": {
+     "charge": 80,
+     "status": 2,
+     "designed_capacity": 40000,
+     "full_capacity": 25000,
+     "cycles": 3
+    }
+   },
+   "tuning": null,
+   "volumes": [],
+   "uptime_seconds": 0,
+   "today": "2026-06-01",
+   "expected": [
+    {
+     "level": "warn",
+     "area": "Battery",
+     "text": "The battery holds 62% of its original capacity after 3 cycles.",
+     "fix": "Consider replacing it."
+    }
+   ]
+  },
+  {
+   "name": "battery_unknown_design",
+   "hw": {
+    "battery": {
+     "charge": 80,
+     "status": 2,
+     "designed_capacity": null,
+     "full_capacity": 25000
+    }
+   },
+   "tuning": null,
+   "volumes": [],
+   "uptime_seconds": 0,
+   "today": "2026-06-01",
+   "expected": []
+  },
+  {
+   "name": "space",
+   "hw": {},
+   "tuning": null,
+   "volumes": [
+    {
+     "mount": "C:\\",
+     "label": "",
+     "fs": "NTFS",
+     "total": 1073741824000,
+     "used": 1030792151040,
+     "free": 42949672960,
+     "removable": false,
+     "network": false
+    },
+    {
+     "mount": "D:\\",
+     "label": "",
+     "fs": "NTFS",
+     "total": 1073741824000,
+     "used": 955630223360,
+     "free": 118111600640,
+     "removable": false,
+     "network": false
+    },
+    {
+     "mount": "E:\\",
+     "label": "",
+     "fs": "NTFS",
+     "total": 1073741824000,
+     "used": 536870912000,
+     "free": 536870912000,
+     "removable": false,
+     "network": false
+    },
+    {
+     "mount": "F:\\",
+     "label": "",
+     "fs": "NTFS",
+     "total": 68719476736,
+     "used": 68182605824,
+     "free": 536870912,
+     "removable": true,
+     "network": false
+    },
+    {
+     "mount": "Z:\\",
+     "label": "",
+     "fs": "NTFS",
+     "total": 1073741824000,
+     "used": 1072668082176,
+     "free": 1073741824,
+     "removable": false,
+     "network": true
+    },
+    {
+     "mount": "G:\\",
+     "label": "",
+     "fs": "NTFS",
+     "total": 0,
+     "used": 0,
+     "free": 0,
+     "removable": false,
+     "network": false
+    },
+    {
+     "mount": "H:\\",
+     "label": "",
+     "fs": "NTFS",
+     "total": 1000,
+     "used": 975,
+     "free": 25,
+     "removable": false,
+     "network": false
+    },
+    {
+     "mount": "I:\\",
+     "label": "",
+     "fs": "NTFS",
+     "total": 1000,
+     "used": 885,
+     "free": 115,
+     "removable": false,
+     "network": false
+    },
+    {
+     "mount": "J:\\",
+     "label": "",
+     "fs": "NTFS",
+     "total": 1000,
+     "used": 880,
+     "free": 120,
+     "removable": false,
+     "network": false
+    }
+   ],
+   "uptime_seconds": 0,
+   "today": "2026-06-01",
+   "expected": [
+    {
+     "level": "bad",
+     "area": "Storage",
+     "text": "C: is almost full (4% free).",
+     "fix": "Free space in Storage: Windows needs room for updates, the page file and caches."
+    },
+    {
+     "level": "bad",
+     "area": "Storage",
+     "text": "H: is almost full (2% free).",
+     "fix": "Free space in Storage: Windows needs room for updates, the page file and caches."
+    },
+    {
+     "level": "warn",
+     "area": "Storage",
+     "text": "D: is getting full (11% free).",
+     "fix": "Clean up junk files or move large files in Storage."
+    },
+    {
+     "level": "warn",
+     "area": "Storage",
+     "text": "I: is getting full (12% free).",
+     "fix": "Clean up junk files or move large files in Storage."
+    }
+   ]
+  },
+  {
+   "name": "power_saver_desktop",
+   "hw": {},
+   "tuning": {
+    "power_plans": [
+     {
+      "guid": "381b4222-f694-41f0-9685-ff5bb260df2e",
+      "name": "Balanced",
+      "active": false
+     },
+     {
+      "guid": "a1841308-3541-4fab-bc81-f71556f20b4a",
+      "name": "Power saver",
+      "active": true
+     }
+    ]
+   },
+   "volumes": [],
+   "uptime_seconds": 0,
+   "today": "2026-06-01",
+   "expected": [
+    {
+     "level": "warn",
+     "area": "Power",
+     "text": "This desktop uses the Power saver plan, which caps the CPU speed.",
+     "fix": "Switch to Balanced or High performance in Optimize."
+    }
+   ]
+  },
+  {
+   "name": "power_saver_upper_case",
+   "hw": {},
+   "tuning": {
+    "power_plans": [
+     {
+      "guid": "381b4222-f694-41f0-9685-ff5bb260df2e",
+      "name": "Balanced",
+      "active": false
+     },
+     {
+      "guid": "A1841308-3541-4FAB-BC81-F71556F20B4A",
+      "name": "Power saver",
+      "active": true
+     }
+    ]
+   },
+   "volumes": [],
+   "uptime_seconds": 0,
+   "today": "2026-06-01",
+   "expected": [
+    {
+     "level": "warn",
+     "area": "Power",
+     "text": "This desktop uses the Power saver plan, which caps the CPU speed.",
+     "fix": "Switch to Balanced or High performance in Optimize."
+    }
+   ]
+  },
+  {
+   "name": "power_saver_laptop",
+   "hw": {
+    "battery": {
+     "charge": 50,
+     "status": 1
+    }
+   },
+   "tuning": {
+    "power_plans": [
+     {
+      "guid": "381b4222-f694-41f0-9685-ff5bb260df2e",
+      "name": "Balanced",
+      "active": false
+     },
+     {
+      "guid": "a1841308-3541-4fab-bc81-f71556f20b4a",
+      "name": "Power saver",
+      "active": true
+     }
+    ]
+   },
+   "volumes": [],
+   "uptime_seconds": 0,
+   "today": "2026-06-01",
+   "expected": []
+  },
+  {
+   "name": "power_no_active_plan",
+   "hw": {},
+   "tuning": {
+    "power_plans": [
+     {
+      "guid": "381b4222-f694-41f0-9685-ff5bb260df2e",
+      "name": "Balanced",
+      "active": false
+     },
+     {
+      "guid": "a1841308-3541-4fab-bc81-f71556f20b4a",
+      "name": "Power saver",
+      "active": false
+     }
+    ]
+   },
+   "volumes": [],
+   "uptime_seconds": 0,
+   "today": "2026-06-01",
+   "expected": []
+  },
+  {
+   "name": "everything_sorted",
+   "hw": {
+    "disks": [
+     {
+      "number": 0,
+      "name": "Example NVMe",
+      "media": "SSD",
+      "bus": "NVMe",
+      "size": 1000204886016,
+      "health": "Warning",
+      "status": "OK",
+      "letters": [
+       "C:"
+      ],
+      "temperature": 41,
+      "temperature_max": 70,
+      "wear": 2,
+      "power_on_hours": 1200,
+      "read_errors": 0,
+      "write_errors": 0
+     },
+     {
+      "number": 1,
+      "name": "Example NVMe",
+      "media": "SSD",
+      "bus": "NVMe",
+      "size": 1000204886016,
+      "health": "Healthy",
+      "status": "OK",
+      "letters": [
+       "C:"
+      ],
+      "temperature": 64,
+      "temperature_max": 70,
+      "wear": 2,
+      "power_on_hours": 1200,
+      "read_errors": 0,
+      "write_errors": 0
+     }
+    ],
+    "trim": {
+     "ntfs": false
+    },
+    "memory": {
+     "modules": [
+      {
+       "capacity": 17179869184,
+       "speed": 3200,
+       "configured_speed": 3200,
+       "manufacturer": "Example",
+       "part_number": "A",
+       "slot": "DIMM",
+       "bank": "BANK 0",
+       "form_factor": "DIMM",
+       "type": "DDR4"
+      },
+      {
+       "capacity": 17179869184,
+       "speed": 3200,
+       "configured_speed": 3200,
+       "manufacturer": "Example",
+       "part_number": "B",
+       "slot": "DIMM",
+       "bank": "BANK 0",
+       "form_factor": "DIMM",
+       "type": "DDR4"
+      }
+     ],
+     "slots": 2
+    },
+    "gpus": [
+     {
+      "name": "Example GeForce",
+      "vendor_id": "10DE",
+      "driver_date": "2026-05-02"
+     },
+     {
+      "name": "Example Radeon",
+      "vendor_id": "1002",
+      "driver_date": "2024-03-23"
+     }
+    ],
+    "bios": {
+     "date": "2015-02-02"
+    },
+    "pagefiles": [],
+    "computer": {
+     "auto_pagefile": false
+    },
+    "battery": {
+     "charge": 10,
+     "status": 1,
+     "designed_capacity": 100,
+     "full_capacity": 75,
+     "cycles": 9
+    }
+   },
+   "tuning": {
+    "power_plans": [
+     {
+      "guid": "381b4222-f694-41f0-9685-ff5bb260df2e",
+      "name": "Balanced",
+      "active": false
+     },
+     {
+      "guid": "a1841308-3541-4fab-bc81-f71556f20b4a",
+      "name": "Power saver",
+      "active": true
+     }
+    ]
+   },
+   "volumes": [
+    {
+     "mount": "C:\\",
+     "label": "",
+     "fs": "NTFS",
+     "total": 1000,
+     "used": 970,
+     "free": 30,
+     "removable": false,
+     "network": false
+    },
+    {
+     "mount": "D:\\",
+     "label": "",
+     "fs": "NTFS",
+     "total": 1000,
+     "used": 910,
+     "free": 90,
+     "removable": false,
+     "network": false
+    }
+   ],
+   "uptime_seconds": 3456000,
+   "today": "2026-06-01",
+   "expected": [
+    {
+     "level": "bad",
+     "area": "Storage",
+     "text": "Disk 0 (Example NVMe) reports its health as Warning.",
+     "fix": "Back up your files now and plan to replace the drive."
+    },
+    {
+     "level": "bad",
+     "area": "Storage",
+     "text": "TRIM is turned off, so the SSD slows down as it fills.",
+     "fix": "Run as administrator: fsutil behavior set DisableDeleteNotify 0"
+    },
+    {
+     "level": "bad",
+     "area": "Storage",
+     "text": "C: is almost full (3% free).",
+     "fix": "Free space in Storage: Windows needs room for updates, the page file and caches."
+    },
+    {
+     "level": "warn",
+     "area": "Storage",
+     "text": "Disk 1 (Example NVMe) runs warm (64 °C).",
+     "fix": "Check the case airflow or add a heatsink to the SSD."
+    },
+    {
+     "level": "warn",
+     "area": "Storage",
+     "text": "D: is getting full (9% free).",
+     "fix": "Clean up junk files or move large files in Storage."
+    },
+    {
+     "level": "warn",
+     "area": "Graphics",
+     "text": "The Example Radeon driver is 26 months old (2024-03-23).",
+     "fix": "Install the current driver from amd.com/support."
+    },
+    {
+     "level": "warn",
+     "area": "System",
+     "text": "There is no page file.",
+     "fix": "Programs can crash when memory runs out. Let Windows manage the page file size."
+    },
+    {
+     "level": "info",
+     "area": "Memory",
+     "text": "The memory modules are not identical (size or model differ).",
+     "fix": "Mixed modules usually work but may run at the slowest module's speed."
+    },
+    {
+     "level": "info",
+     "area": "System",
+     "text": "The BIOS is from 2015-02-02.",
+     "fix": "Check the motherboard maker's site: BIOS updates fix security and stability issues. Update only on stable power."
+    },
+    {
+     "level": "info",
+     "area": "System",
+     "text": "Windows has been running for 40 days.",
+     "fix": "Restart now and then: some updates and driver changes only finish after a restart."
+    },
+    {
+     "level": "ok",
+     "area": "Graphics",
+     "text": "The Example GeForce driver is recent (2026-05-02).",
+     "fix": ""
+    },
+    {
+     "level": "ok",
+     "area": "Battery",
+     "text": "The battery holds 75% of its original capacity after 9 cycles.",
+     "fix": ""
+    }
+   ]
+  }
+ ]
+}

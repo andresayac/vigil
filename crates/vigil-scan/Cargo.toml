@@ -1,0 +1,33 @@
+[package]
+name = "vigil-scan"
+description = "Vigil's read-only security scan: collectors, local rules, analysis, reports, AI review and VirusTotal."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+regex = "1"
+serde = "1"
+# preserve_order: reports keep a stable key order, so saved files and payloads read the same.
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+vigil-i18n = { path = "../vigil-i18n" }
+ureq = { version = "3", default-features = false, features = ["rustls", "json"] }
+
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.62"
+features = [
+    "Wdk_System_SystemInformation",
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Registry",
+    "Win32_UI_Shell",
+]
+
+[dev-dependencies]
+base64 = "0.22"

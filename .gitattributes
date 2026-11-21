@@ -1,0 +1,4 @@
+# Text files use LF everywhere (embedded CSS/JS/PowerShell and reference outputs are compared byte for byte).
+* text=auto eol=lf
+# Test fixtures keep their exact bytes (some are compared byte for byte).
+crates/*/tests/data/** -text

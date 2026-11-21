@@ -1,0 +1,61 @@
+{
+ "type": "object",
+ "properties": {
+  "risk_level": {
+   "type": "string",
+   "enum": [
+    "low",
+    "moderate",
+    "high",
+    "critical"
+   ]
+  },
+  "headline": {
+   "type": "string"
+  },
+  "summary": {
+   "type": "string"
+  },
+  "priority_actions": {
+   "type": "array",
+   "description": "Complete to-do list ordered by importance; one entry for each group of findings that requires action.",
+   "items": {
+    "type": "object",
+    "properties": {
+     "title": {
+      "type": "string"
+     },
+     "detail": {
+      "type": "string"
+     },
+     "ids": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     }
+    },
+    "required": [
+     "title",
+     "detail",
+     "ids"
+    ],
+    "additionalProperties": false
+   }
+  },
+  "good_practices": {
+   "type": "array",
+   "items": {
+    "type": "string"
+   }
+  }
+ },
+ "required": [
+  "risk_level",
+  "headline",
+  "summary",
+  "priority_actions",
+  "good_practices"
+ ],
+ "additionalProperties": false
+}

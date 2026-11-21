@@ -1,0 +1,29 @@
+# Scan data is a detailed inventory of a real computer: never commit it.
+scan-*.json
+scan-*.html
+*-report.json
+*-inventory.json
+*-sent-to-ai.json
+reports/
+*.log
+
+# Secrets
+.env
+*.key
+*.pem
+
+# Editors, assistants and Windows
+.vscode/
+.idea/
+.claude/
+.playwright-mcp/
+Thumbs.db
+desktop.ini
+*.zip
+
+# Rust and the web UI
+target/
+node_modules/
+ui/dist/
+*.pdb
+crates/vigil-app/gen/

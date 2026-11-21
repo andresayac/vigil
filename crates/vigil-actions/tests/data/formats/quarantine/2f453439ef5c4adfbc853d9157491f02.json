@@ -1,0 +1,12 @@
+{
+ "id": "2f453439ef5c4adfbc853d9157491f02",
+ "original_path": "{{FILES}}\\evil.exe",
+ "name": "evil.exe",
+ "size": 10251,
+ "sha256": "158df2e9eced545fdbe7731adf7ca49cc3766fb92efa13479ff1901099404b33",
+ "quarantined_at": "2026-11-21T12:37:56",
+ "modified": 1795282676.5358448,
+ "created": 1795282676.5358448,
+ "reason": "fixture",
+ "state": "removed"
+}

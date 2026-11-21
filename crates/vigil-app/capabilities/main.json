@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "The main window: events, window control (show, focus, theme of the title bar and Mica) and nothing else. Every action goes through Rust commands, which confirm destructive changes in a native dialog.",
+  "windows": ["main"],
+  "permissions": ["core:default", "core:window:allow-show", "core:window:allow-set-focus", "core:window:allow-set-theme"]
+}

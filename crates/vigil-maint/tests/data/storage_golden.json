@@ -1,0 +1,368 @@
+{
+ "source": "fake folder tree built by the storage tests",
+ "targets": [
+  {
+   "key": "user_temp",
+   "label": "Temporary files (your account)",
+   "description": "Files programs left in your temporary folder. Files from the last 24 hours are kept, in case a program or installer is still using them.",
+   "group": "Windows",
+   "roots": [
+    "Local\\Temp"
+   ],
+   "kind": "files",
+   "size": 0,
+   "files": 0,
+   "admin": false,
+   "selected": true,
+   "note": "",
+   "min_age_hours": 24,
+   "patterns": []
+  },
+  {
+   "key": "windows_temp",
+   "label": "Temporary files (Windows)",
+   "description": "Files Windows and services left in the Windows temporary folder. Files from the last 24 hours are kept.",
+   "group": "Windows",
+   "roots": [
+    "Windows\\Temp"
+   ],
+   "kind": "files",
+   "size": 0,
+   "files": 0,
+   "admin": true,
+   "selected": true,
+   "note": "",
+   "min_age_hours": 24,
+   "patterns": []
+  },
+  {
+   "key": "update_cache",
+   "label": "Windows Update downloads",
+   "description": "Installers Windows Update has already used. Anything still needed is downloaded again. Files from the last two days are kept so an update in progress is not disturbed.",
+   "group": "Windows",
+   "roots": [
+    "Windows\\SoftwareDistribution\\Download"
+   ],
+   "kind": "files",
+   "size": 0,
+   "files": 0,
+   "admin": true,
+   "selected": true,
+   "note": "",
+   "min_age_hours": 48,
+   "patterns": []
+  },
+  {
+   "key": "thumbnails",
+   "label": "Thumbnail cache",
+   "description": "Picture and video previews Explorer stores. They are created again as you browse.",
+   "group": "Windows",
+   "roots": [
+    "Local\\Microsoft\\Windows\\Explorer"
+   ],
+   "kind": "files",
+   "size": 0,
+   "files": 0,
+   "admin": false,
+   "selected": true,
+   "note": "Explorer keeps some of these files open; those are skipped.",
+   "min_age_hours": 0,
+   "patterns": [
+    "thumbcache_*.db"
+   ]
+  },
+  {
+   "key": "wer_user",
+   "label": "Error reports (your account)",
+   "description": "Crash and problem reports already sent to Microsoft, or never going to be.",
+   "group": "Windows",
+   "roots": [
+    "Local\\Microsoft\\Windows\\WER"
+   ],
+   "kind": "files",
+   "size": 0,
+   "files": 0,
+   "admin": false,
+   "selected": true,
+   "note": "",
+   "min_age_hours": 0,
+   "patterns": []
+  },
+  {
+   "key": "wer_system",
+   "label": "Error reports (Windows)",
+   "description": "System-wide crash and problem reports already sent to Microsoft, or never going to be.",
+   "group": "Windows",
+   "roots": [
+    "ProgramData\\Microsoft\\Windows\\WER\\ReportQueue"
+   ],
+   "kind": "files",
+   "size": 0,
+   "files": 0,
+   "admin": true,
+   "selected": true,
+   "note": "",
+   "min_age_hours": 0,
+   "patterns": []
+  },
+  {
+   "key": "crash_dumps_user",
+   "label": "Crash dumps (your account)",
+   "description": "Memory snapshots saved when a program crashed. Only useful to investigate those crashes.",
+   "group": "Windows",
+   "roots": [
+    "Local\\CrashDumps"
+   ],
+   "kind": "files",
+   "size": 0,
+   "files": 0,
+   "admin": false,
+   "selected": true,
+   "note": "",
+   "min_age_hours": 0,
+   "patterns": []
+  },
+  {
+   "key": "crash_dumps_system",
+   "label": "Crash dumps (Windows)",
+   "description": "Memory snapshots saved after a blue screen. Only useful to investigate that crash.",
+   "group": "Windows",
+   "roots": [
+    "Windows\\MEMORY.DMP"
+   ],
+   "kind": "files",
+   "size": 0,
+   "files": 0,
+   "admin": true,
+   "selected": true,
+   "note": "",
+   "min_age_hours": 0,
+   "patterns": []
+  },
+  {
+   "key": "d3d_cache",
+   "label": "DirectX shader cache",
+   "description": "Compiled shaders that games and apps keep to start faster.",
+   "group": "Graphics",
+   "roots": [
+    "Local\\D3DSCache"
+   ],
+   "kind": "files",
+   "size": 0,
+   "files": 0,
+   "admin": false,
+   "selected": false,
+   "note": "Rebuilt automatically; the first launch of a game can be slower.",
+   "min_age_hours": 0,
+   "patterns": []
+  },
+  {
+   "key": "nvidia_cache",
+   "label": "NVIDIA shader cache",
+   "description": "Compiled shaders the NVIDIA driver keeps.",
+   "group": "Graphics",
+   "roots": [
+    "Local\\NVIDIA\\DXCache"
+   ],
+   "kind": "files",
+   "size": 0,
+   "files": 0,
+   "admin": false,
+   "selected": false,
+   "note": "Rebuilt automatically; the first launch of a game can be slower.",
+   "min_age_hours": 0,
+   "patterns": []
+  },
+  {
+   "key": "browser_chrome",
+   "label": "Google Chrome cache",
+   "description": "Copies of web pages, scripts and images the browser keeps to load sites faster.",
+   "group": "Browsers",
+   "roots": [
+    "Local\\Google\\Chrome\\User Data\\Default\\Cache\\Cache_Data",
+    "Local\\Google\\Chrome\\User Data\\Default\\Code Cache",
+    "Local\\Google\\Chrome\\User Data\\Profile 1\\GPUCache",
+    "Local\\Google\\Chrome\\User Data\\ShaderCache"
+   ],
+   "kind": "files",
+   "size": 0,
+   "files": 0,
+   "admin": false,
+   "selected": false,
+   "note": "Close the browser first; files in use are skipped. Sign-ins, cookies, history and saved passwords are not touched.",
+   "min_age_hours": 0,
+   "patterns": []
+  },
+  {
+   "key": "browser_firefox",
+   "label": "Firefox cache",
+   "description": "Copies of web pages, scripts and images Firefox keeps to load sites faster.",
+   "group": "Browsers",
+   "roots": [
+    "Local\\Mozilla\\Firefox\\Profiles\\ab.default\\cache2"
+   ],
+   "kind": "files",
+   "size": 0,
+   "files": 0,
+   "admin": false,
+   "selected": false,
+   "note": "Close the browser first; files in use are skipped. Sign-ins, cookies, history and saved passwords are not touched.",
+   "min_age_hours": 0,
+   "patterns": []
+  },
+  {
+   "key": "app_discord",
+   "label": "Discord cache",
+   "description": "Cached pictures, scripts and graphics.",
+   "group": "Apps",
+   "roots": [
+    "Roaming\\discord\\Cache"
+   ],
+   "kind": "files",
+   "size": 0,
+   "files": 0,
+   "admin": false,
+   "selected": false,
+   "note": "Close the app first; files in use are skipped. Rebuilt automatically.",
+   "min_age_hours": 0,
+   "patterns": []
+  }
+ ],
+ "measured": {
+  "user_temp": [
+   1500,
+   2
+  ],
+  "windows_temp": [
+   300,
+   1
+  ],
+  "update_cache": [
+   4000,
+   1
+  ],
+  "thumbnails": [
+   220,
+   2
+  ],
+  "wer_user": [
+   60,
+   1
+  ],
+  "wer_system": [
+   70,
+   1
+  ],
+  "crash_dumps_user": [
+   800,
+   1
+  ],
+  "crash_dumps_system": [
+   9000,
+   1
+  ],
+  "d3d_cache": [
+   111,
+   1
+  ],
+  "nvidia_cache": [
+   222,
+   1
+  ],
+  "browser_chrome": [
+   3475,
+   4
+  ],
+  "browser_firefox": [
+   700,
+   1
+  ],
+  "app_discord": [
+   90,
+   1
+  ]
+ },
+ "clean": {
+  "freed": 15950,
+  "deleted": 10,
+  "skipped": 0,
+  "errors": [],
+  "per_target": {
+   "user_temp": 1500,
+   "windows_temp": 300,
+   "update_cache": 4000,
+   "thumbnails": 220,
+   "wer_user": 60,
+   "wer_system": 70,
+   "crash_dumps_user": 800,
+   "crash_dumps_system": 9000
+  }
+ },
+ "gone": [
+  "dump_user",
+  "memory_dmp",
+  "temp_nested",
+  "temp_old",
+  "thumb",
+  "thumb_idx",
+  "update",
+  "wer_system",
+  "wer_user",
+  "wintemp"
+ ],
+ "kept": [
+  "cookies",
+  "history",
+  "no_profile",
+  "outside",
+  "prefs",
+  "prefs1"
+ ],
+ "folders_left": [
+  "Local",
+  "Local\\CrashDumps",
+  "Local\\D3DSCache",
+  "Local\\D3DSCache\\abc",
+  "Local\\Google",
+  "Local\\Google\\Chrome",
+  "Local\\Google\\Chrome\\User Data",
+  "Local\\Google\\Chrome\\User Data\\Default",
+  "Local\\Google\\Chrome\\User Data\\Default\\Cache",
+  "Local\\Google\\Chrome\\User Data\\Default\\Cache\\Cache_Data",
+  "Local\\Google\\Chrome\\User Data\\Default\\Code Cache",
+  "Local\\Google\\Chrome\\User Data\\Default\\Code Cache\\js",
+  "Local\\Google\\Chrome\\User Data\\Default\\Network",
+  "Local\\Google\\Chrome\\User Data\\Profile 1",
+  "Local\\Google\\Chrome\\User Data\\Profile 1\\GPUCache",
+  "Local\\Google\\Chrome\\User Data\\ShaderCache",
+  "Local\\Google\\Chrome\\User Data\\System Profile",
+  "Local\\Google\\Chrome\\User Data\\System Profile\\Cache",
+  "Local\\Google\\Chrome\\User Data\\System Profile\\Cache\\Cache_Data",
+  "Local\\Microsoft",
+  "Local\\Microsoft\\Windows",
+  "Local\\Microsoft\\Windows\\Explorer",
+  "Local\\Microsoft\\Windows\\WER",
+  "Local\\Mozilla",
+  "Local\\Mozilla\\Firefox",
+  "Local\\Mozilla\\Firefox\\Profiles",
+  "Local\\Mozilla\\Firefox\\Profiles\\ab.default",
+  "Local\\Mozilla\\Firefox\\Profiles\\ab.default\\cache2",
+  "Local\\Mozilla\\Firefox\\Profiles\\ab.default\\cache2\\entries",
+  "Local\\NVIDIA",
+  "Local\\NVIDIA\\DXCache",
+  "Local\\Temp",
+  "ProgramData",
+  "ProgramData\\Microsoft",
+  "ProgramData\\Microsoft\\Windows",
+  "ProgramData\\Microsoft\\Windows\\WER",
+  "ProgramData\\Microsoft\\Windows\\WER\\ReportQueue",
+  "Roaming",
+  "Roaming\\discord",
+  "Roaming\\discord\\Cache",
+  "Roaming\\discord\\Cache\\Cache_Data",
+  "Windows",
+  "Windows\\SoftwareDistribution",
+  "Windows\\SoftwareDistribution\\Download",
+  "Windows\\Temp"
+ ]
+}

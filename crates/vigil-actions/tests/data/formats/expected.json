@@ -1,0 +1,28 @@
+{
+ "names": {
+  "quarantine": "75b9e9ea8f454fc7808cc2eaa329481e",
+  "startup": "36a8ccf5766d48739b9cd0241d9f301d",
+  "registry": "45a5e0505fa44005933b4b4c44118ec7",
+  "service": "c482ef85d4464a709c8cb2289808dd9e",
+  "task": "a0ec253233cf4deca93284103edabfe2",
+  "firewall": "e341778b271c4346b9b36e918217886c",
+  "power": "db7a1564475a4dedb9ebdb14765e527b",
+  "power_undone": "1efe83451107429498b7896960761371",
+  "batch": "4fbbca44553c4f56b635ee7e6c643e8e",
+  "batch_ok": "0e3c115cde3b4f2bbe46b3d027b92960",
+  "batch_failed": "b9e8d544f1ee4c74af0e10431224962e"
+ },
+ "can_undo": {
+  "75b9e9ea8f454fc7808cc2eaa329481e": true,
+  "36a8ccf5766d48739b9cd0241d9f301d": true,
+  "45a5e0505fa44005933b4b4c44118ec7": true,
+  "c482ef85d4464a709c8cb2289808dd9e": true,
+  "a0ec253233cf4deca93284103edabfe2": true,
+  "e341778b271c4346b9b36e918217886c": true,
+  "db7a1564475a4dedb9ebdb14765e527b": true,
+  "1efe83451107429498b7896960761371": false,
+  "0e3c115cde3b4f2bbe46b3d027b92960": true,
+  "b9e8d544f1ee4c74af0e10431224962e": false
+ },
+ "count": 10
+}

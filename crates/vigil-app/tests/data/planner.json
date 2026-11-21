@@ -1,0 +1,1154 @@
+{
+ "scan_started": "2026-01-01T10:00:00",
+ "plans": {
+  "C1": [
+   {
+    "op": "startup.disable",
+    "label": "Disable startup entry \"Updater\"",
+    "target": "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\Updater",
+    "explain": "Turns the entry off with the same switch as Task Manager.",
+    "params": {
+     "key": "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+     "value": "Updater"
+    },
+    "group": "disable",
+    "destructive": false,
+    "reversible": true,
+    "admin": true,
+    "warning": "",
+    "steps": []
+   },
+   {
+    "op": "registry.delete",
+    "label": "Delete startup entry \"Updater\"",
+    "target": "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\Updater",
+    "explain": "Deletes the registry value. Its data is saved so it can be restored.",
+    "params": {
+     "key": "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+     "value": "Updater"
+    },
+    "group": "remove",
+    "destructive": true,
+    "reversible": true,
+    "admin": true,
+    "warning": "",
+    "steps": []
+   },
+   {
+    "op": "shell.regedit",
+    "label": "Open in Registry Editor",
+    "target": "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+    "explain": "Opens Registry Editor at this key.",
+    "params": {
+     "key": "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run"
+    },
+    "group": "inspect",
+    "destructive": false,
+    "reversible": true,
+    "admin": false,
+    "warning": "",
+    "steps": []
+   }
+  ],
+  "B1": [
+   {
+    "op": "plan.remove",
+    "label": "Remove completely",
+    "target": "helper.exe",
+    "explain": "Ends it, turns off every way it starts and moves its file to quarantine. Every step except ending the process can be undone from History.",
+    "params": {},
+    "group": "remove",
+    "destructive": true,
+    "reversible": true,
+    "admin": true,
+    "warning": "",
+    "steps": [
+     {
+      "op": "winlogon.restore",
+      "label": "Restore Winlogon Userinit",
+      "target": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon\\Userinit",
+      "explain": "Puts the Windows default back (or removes the per-user override). The current value is saved.",
+      "params": {
+       "key": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon",
+       "value": "Userinit"
+      },
+      "group": "remove",
+      "destructive": true,
+      "reversible": true,
+      "admin": true,
+      "warning": "A wrong Winlogon value can prevent signing in. The default is restored, which is what a clean Windows uses.",
+      "steps": []
+     },
+     {
+      "op": "file.quarantine",
+      "label": "Quarantine \"helper.exe\"",
+      "target": "C:\\Users\\victim\\AppData\\Roaming\\helper.exe",
+      "explain": "Moves the file into quarantine.",
+      "params": {
+       "path": "C:\\Users\\victim\\AppData\\Roaming\\helper.exe",
+       "reason": "helper.exe",
+       "kill": true
+      },
+      "group": "remove",
+      "destructive": true,
+      "reversible": true,
+      "admin": true,
+      "warning": "",
+      "steps": []
+     }
+    ]
+   },
+   {
+    "op": "winlogon.restore",
+    "label": "Restore Winlogon Userinit",
+    "target": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon\\Userinit",
+    "explain": "Puts the Windows default back (or removes the per-user override). The current value is saved.",
+    "params": {
+     "key": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon",
+     "value": "Userinit"
+    },
+    "group": "remove",
+    "destructive": true,
+    "reversible": true,
+    "admin": true,
+    "warning": "A wrong Winlogon value can prevent signing in. The default is restored, which is what a clean Windows uses.",
+    "steps": []
+   },
+   {
+    "op": "file.quarantine",
+    "label": "Quarantine file",
+    "target": "C:\\Users\\victim\\AppData\\Roaming\\helper.exe",
+    "explain": "Ends any process running it, then moves the file into quarantine (it can be restored).",
+    "params": {
+     "path": "C:\\Users\\victim\\AppData\\Roaming\\helper.exe",
+     "reason": "helper.exe",
+     "kill": true
+    },
+    "group": "remove",
+    "destructive": true,
+    "reversible": true,
+    "admin": true,
+    "warning": "",
+    "steps": []
+   },
+   {
+    "op": "firewall.block",
+    "label": "Block network access",
+    "target": "C:\\Users\\victim\\AppData\\Roaming\\helper.exe",
+    "explain": "Adds Windows Firewall rules that block all its incoming and outgoing traffic.",
+    "params": {
+     "path": "C:\\Users\\victim\\AppData\\Roaming\\helper.exe"
+    },
+    "group": "contain",
+    "destructive": false,
+    "reversible": true,
+    "admin": true,
+    "warning": "",
+    "steps": []
+   },
+   {
+    "op": "shell.location",
+    "label": "Open file location",
+    "target": "C:\\Users\\victim\\AppData\\Roaming\\helper.exe",
+    "explain": "Opens the folder with the file selected.",
+    "params": {
+     "path": "C:\\Users\\victim\\AppData\\Roaming\\helper.exe"
+    },
+    "group": "inspect",
+    "destructive": false,
+    "reversible": true,
+    "admin": false,
+    "warning": "",
+    "steps": []
+   },
+   {
+    "op": "shell.properties",
+    "label": "File properties",
+    "target": "C:\\Users\\victim\\AppData\\Roaming\\helper.exe",
+    "explain": "Opens the Windows Properties dialog.",
+    "params": {
+     "path": "C:\\Users\\victim\\AppData\\Roaming\\helper.exe"
+    },
+    "group": "inspect",
+    "destructive": false,
+    "reversible": true,
+    "admin": false,
+    "warning": "",
+    "steps": []
+   },
+   {
+    "op": "signature.verify",
+    "label": "Verify signature now",
+    "target": "C:\\Users\\victim\\AppData\\Roaming\\helper.exe",
+    "explain": "Checks the digital signature again, live.",
+    "params": {
+     "path": "C:\\Users\\victim\\AppData\\Roaming\\helper.exe"
+    },
+    "group": "inspect",
+    "destructive": false,
+    "reversible": true,
+    "admin": false,
+    "warning": "",
+    "steps": []
+   },
+   {
+    "op": "defender.scan_file",
+    "label": "Scan with Microsoft Defender",
+    "target": "C:\\Users\\victim\\AppData\\Roaming\\helper.exe",
+    "explain": "Runs a Defender scan on this file; if it finds a threat, Defender handles it.",
+    "params": {
+     "path": "C:\\Users\\victim\\AppData\\Roaming\\helper.exe"
+    },
+    "group": "inspect",
+    "destructive": false,
+    "reversible": false,
+    "admin": false,
+    "warning": "",
+    "steps": []
+   },
+   {
+    "op": "shell.regedit",
+    "label": "Open in Registry Editor",
+    "target": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon",
+    "explain": "Opens Registry Editor at this key.",
+    "params": {
+     "key": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon"
+    },
+    "group": "inspect",
+    "destructive": false,
+    "reversible": true,
+    "admin": false,
+    "warning": "",
+    "steps": []
+   }
+  ],
+  "B2": [
+   {
+    "op": "plan.remove",
+    "label": "Remove completely",
+    "target": "svchost.exe",
+    "explain": "Ends it, turns off every way it starts and moves its file to quarantine. Every step except ending the process can be undone from History.",
+    "params": {},
+    "group": "remove",
+    "destructive": true,
+    "reversible": true,
+    "admin": true,
+    "warning": "",
+    "steps": [
+     {
+      "op": "process.terminate",
+      "label": "End process",
+      "target": "svchost.exe",
+      "explain": "Ends the running instances right now. It may start again if something launches it at startup.",
+      "params": {
+       "path": "C:\\Users\\victim\\AppData\\Roaming\\svchost.exe",
+       "pids": [
+        4242
+       ],
+       "names": [
+        "svchost.exe"
+       ],
+       "scan_started": "2026-01-01T10:00:00"
+      },
+      "group": "contain",
+      "destructive": true,
+      "reversible": false,
+      "admin": true,
+      "warning": "",
+      "steps": []
+     },
+     {
+      "op": "file.quarantine",
+      "label": "Quarantine \"svchost.exe\"",
+      "target": "C:\\Users\\victim\\AppData\\Roaming\\svchost.exe",
+      "explain": "Moves the file into quarantine.",
+      "params": {
+       "path": "C:\\Users\\victim\\AppData\\Roaming\\svchost.exe",
+       "reason": "svchost.exe",
+       "kill": true
+      },
+      "group": "remove",
+      "destructive": true,
+      "reversible": true,
+      "admin": true,
+      "warning": "",
+      "steps": []
+     }
+    ]
+   },
+   {
+    "op": "process.terminate",
+    "label": "End process",
+    "target": "svchost.exe",
+    "explain": "Ends the running instances right now. It may start again if something launches it at startup.",
+    "params": {
+     "path": "C:\\Users\\victim\\AppData\\Roaming\\svchost.exe",
+     "pids": [
+      4242
+     ],
+     "names": [
+      "svchost.exe"
+     ],
+     "scan_started": "2026-01-01T10:00:00"
+    },
+    "group": "contain",
+    "destructive": true,
+    "reversible": false,
+    "admin": true,
+    "warning": "",
+    "steps": []
+   },
+   {
+    "op": "file.quarantine",
+    "label": "Quarantine file",
+    "target": "C:\\Users\\victim\\AppData\\Roaming\\svchost.exe",
+    "explain": "Ends any process running it, then moves the file into quarantine (it can be restored).",
+    "params": {
+     "path": "C:\\Users\\victim\\AppData\\Roaming\\svchost.exe",
+     "reason": "svchost.exe",
+     "kill": true
+    },
+    "group": "remove",
+    "destructive": true,
+    "reversible": true,
+    "admin": true,
+    "warning": "",
+    "steps": []
+   },
+   {
+    "op": "firewall.block",
+    "label": "Block network access",
+    "target": "C:\\Users\\victim\\AppData\\Roaming\\svchost.exe",
+    "explain": "Adds Windows Firewall rules that block all its incoming and outgoing traffic.",
+    "params": {
+     "path": "C:\\Users\\victim\\AppData\\Roaming\\svchost.exe"
+    },
+    "group": "contain",
+    "destructive": false,
+    "reversible": true,
+    "admin": true,
+    "warning": "",
+    "steps": []
+   },
+   {
+    "op": "shell.location",
+    "label": "Open file location",
+    "target": "C:\\Users\\victim\\AppData\\Roaming\\svchost.exe",
+    "explain": "Opens the folder with the file selected.",
+    "params": {
+     "path": "C:\\Users\\victim\\AppData\\Roaming\\svchost.exe"
+    },
+    "group": "inspect",
+    "destructive": false,
+    "reversible": true,
+    "admin": false,
+    "warning": "",
+    "steps": []
+   },
+   {
+    "op": "shell.properties",
+    "label": "File properties",
+    "target": "C:\\Users\\victim\\AppData\\Roaming\\svchost.exe",
+    "explain": "Opens the Windows Properties dialog.",
+    "params": {
+     "path": "C:\\Users\\victim\\AppData\\Roaming\\svchost.exe"
+    },
+    "group": "inspect",
+    "destructive": false,
+    "reversible": true,
+    "admin": false,
+    "warning": "",
+    "steps": []
+   },
+   {
+    "op": "signature.verify",
+    "label": "Verify signature now",
+    "target": "C:\\Users\\victim\\AppData\\Roaming\\svchost.exe",
+    "explain": "Checks the digital signature again, live.",
+    "params": {
+     "path": "C:\\Users\\victim\\AppData\\Roaming\\svchost.exe"
+    },
+    "group": "inspect",
+    "destructive": false,
+    "reversible": true,
+    "admin": false,
+    "warning": "",
+    "steps": []
+   },
+   {
+    "op": "defender.scan_file",
+    "label": "Scan with Microsoft Defender",
+    "target": "C:\\Users\\victim\\AppData\\Roaming\\svchost.exe",
+    "explain": "Runs a Defender scan on this file; if it finds a threat, Defender handles it.",
+    "params": {
+     "path": "C:\\Users\\victim\\AppData\\Roaming\\svchost.exe"
+    },
+    "group": "inspect",
+    "destructive": false,
+    "reversible": false,
+    "admin": false,
+    "warning": "",
+    "steps": []
+   }
+  ],
+  "B3": [
+   {
+    "op": "plan.remove",
+    "label": "Remove completely",
+    "target": "winupd.exe",
+    "explain": "Ends it, turns off every way it starts and moves its file to quarantine. Every step except ending the process can be undone from History.",
+    "params": {},
+    "group": "remove",
+    "destructive": true,
+    "reversible": true,
+    "admin": true,
+    "warning": "",
+    "steps": [
+     {
+      "op": "task.disable",
+      "label": "Disable task \"\\WinUpdateCheck\"",
+      "target": "scheduled task \\WinUpdateCheck",
+      "explain": "Turns the scheduled task off; it stays in Task Scheduler and can be enabled again.",
+      "params": {
+       "path": "\\",
+       "name": "WinUpdateCheck"
+      },
+      "group": "disable",
+      "destructive": false,
+      "reversible": true,
+      "admin": true,
+      "warning": "",
+      "steps": []
+     },
+     {
+      "op": "file.quarantine",
+      "label": "Quarantine \"winupd.exe\"",
+      "target": "C:\\ProgramData\\WinUpdate\\winupd.exe",
+      "explain": "Moves the file into quarantine.",
+      "params": {
+       "path": "C:\\ProgramData\\WinUpdate\\winupd.exe",
+       "reason": "winupd.exe",
+       "kill": true
+      },
+      "group": "remove",
+      "destructive": true,
+      "reversible": true,
+      "admin": true,
+      "warning": "",
+      "steps": []
+     }
+    ]
+   },
+   {
+    "op": "task.disable",
+    "label": "Disable task \"\\WinUpdateCheck\"",
+    "target": "scheduled task \\WinUpdateCheck",
+    "explain": "Turns the scheduled task off; it stays in Task Scheduler and can be enabled again.",
+    "params": {
+     "path": "\\",
+     "name": "WinUpdateCheck"
+    },
+    "group": "disable",
+    "destructive": false,
+    "reversible": true,
+    "admin": true,
+    "warning": "",
+    "steps": []
+   },
+   {
+    "op": "task.delete",
+    "label": "Delete task \"\\WinUpdateCheck\"",
+    "target": "scheduled task \\WinUpdateCheck",
+    "explain": "Deletes the scheduled task. Its definition is saved first so it can be recreated.",
+    "params": {
+     "path": "\\",
+     "name": "WinUpdateCheck"
+    },
+    "group": "remove",
+    "destructive": true,
+    "reversible": true,
+    "admin": true,
+    "warning": "",
+    "steps": []
+   },
+   {
+    "op": "file.quarantine",
+    "label": "Quarantine file",
+    "target": "C:\\ProgramData\\WinUpdate\\winupd.exe",
+    "explain": "Ends any process running it, then moves the file into quarantine (it can be restored).",
+    "params": {
+     "path": "C:\\ProgramData\\WinUpdate\\winupd.exe",
+     "reason": "winupd.exe",
+     "kill": true
+    },
+    "group": "remove",
+    "destructive": true,
+    "reversible": true,
+    "admin": true,
+    "warning": "",
+    "steps": []
+   },
+   {
+    "op": "firewall.block",
+    "label": "Block network access",
+    "target": "C:\\ProgramData\\WinUpdate\\winupd.exe",
+    "explain": "Adds Windows Firewall rules that block all its incoming and outgoing traffic.",
+    "params": {
+     "path": "C:\\ProgramData\\WinUpdate\\winupd.exe"
+    },
+    "group": "contain",
+    "destructive": false,
+    "reversible": true,
+    "admin": true,
+    "warning": "",
+    "steps": []
+   },
+   {
+    "op": "shell.location",
+    "label": "Open file location",
+    "target": "C:\\ProgramData\\WinUpdate\\winupd.exe",
+    "explain": "Opens the folder with the file selected.",
+    "params": {
+     "path": "C:\\ProgramData\\WinUpdate\\winupd.exe"
+    },
+    "group": "inspect",
+    "destructive": false,
+    "reversible": true,
+    "admin": false,
+    "warning": "",
+    "steps": []
+   },
+   {
+    "op": "shell.properties",
+    "label": "File properties",
+    "target": "C:\\ProgramData\\WinUpdate\\winupd.exe",
+    "explain": "Opens the Windows Properties dialog.",
+    "params": {
+     "path": "C:\\ProgramData\\WinUpdate\\winupd.exe"
+    },
+    "group": "inspect",
+    "destructive": false,
+    "reversible": true,
+    "admin": false,
+    "warning": "",
+    "steps": []
+   },
+   {
+    "op": "signature.verify",
+    "label": "Verify signature now",
+    "target": "C:\\ProgramData\\WinUpdate\\winupd.exe",
+    "explain": "Checks the digital signature again, live.",
+    "params": {
+     "path": "C:\\ProgramData\\WinUpdate\\winupd.exe"
+    },
+    "group": "inspect",
+    "destructive": false,
+    "reversible": true,
+    "admin": false,
+    "warning": "",
+    "steps": []
+   },
+   {
+    "op": "defender.scan_file",
+    "label": "Scan with Microsoft Defender",
+    "target": "C:\\ProgramData\\WinUpdate\\winupd.exe",
+    "explain": "Runs a Defender scan on this file; if it finds a threat, Defender handles it.",
+    "params": {
+     "path": "C:\\ProgramData\\WinUpdate\\winupd.exe"
+    },
+    "group": "inspect",
+    "destructive": false,
+    "reversible": false,
+    "admin": false,
+    "warning": "",
+    "steps": []
+   },
+   {
+    "op": "shell.console",
+    "label": "Open Task Scheduler",
+    "target": "Task Scheduler",
+    "explain": "Opens Task Scheduler.",
+    "params": {
+     "name": "taskschd.msc"
+    },
+    "group": "inspect",
+    "destructive": false,
+    "reversible": true,
+    "admin": false,
+    "warning": "",
+    "steps": []
+   }
+  ],
+  "B4": [
+   {
+    "op": "plan.remove",
+    "label": "Remove completely",
+    "target": "upd.exe",
+    "explain": "Ends it, turns off every way it starts and moves its file to quarantine. Every step except ending the process can be undone from History.",
+    "params": {},
+    "group": "remove",
+    "destructive": true,
+    "reversible": true,
+    "admin": true,
+    "warning": "",
+    "steps": [
+     {
+      "op": "service.disable",
+      "label": "Disable service \"WinUpd\"",
+      "target": "service WinUpd",
+      "explain": "Stops the service and sets it to disabled so it no longer starts.",
+      "params": {
+       "name": "WinUpd",
+       "stop": true
+      },
+      "group": "disable",
+      "destructive": false,
+      "reversible": true,
+      "admin": true,
+      "warning": "",
+      "steps": []
+     },
+     {
+      "op": "file.quarantine",
+      "label": "Quarantine \"upd.exe\"",
+      "target": "C:\\Windows\\Temp\\upd.exe",
+      "explain": "Moves the file into quarantine.",
+      "params": {
+       "path": "C:\\Windows\\Temp\\upd.exe",
+       "reason": "upd.exe",
+       "kill": true
+      },
+      "group": "remove",
+      "destructive": true,
+      "reversible": true,
+      "admin": true,
+      "warning": "",
+      "steps": []
+     }
+    ]
+   },
+   {
+    "op": "service.stop",
+    "label": "Stop service \"WinUpd\"",
+    "target": "service WinUpd",
+    "explain": "Stops the service now; it will start again at the next restart unless you disable it.",
+    "params": {
+     "name": "WinUpd"
+    },
+    "group": "contain",
+    "destructive": false,
+    "reversible": true,
+    "admin": true,
+    "warning": "",
+    "steps": []
+   },
+   {
+    "op": "service.disable",
+    "label": "Disable service \"WinUpd\"",
+    "target": "service WinUpd",
+    "explain": "Stops the service and sets it to disabled so it no longer starts.",
+    "params": {
+     "name": "WinUpd",
+     "stop": true
+    },
+    "group": "disable",
+    "destructive": false,
+    "reversible": true,
+    "admin": true,
+    "warning": "",
+    "steps": []
+   },
+   {
+    "op": "service.delete",
+    "label": "Delete service \"WinUpd\"",
+    "target": "service WinUpd",
+    "explain": "Removes the service from Windows. Its registry key is exported first so it can be restored.",
+    "params": {
+     "name": "WinUpd"
+    },
+    "group": "remove",
+    "destructive": true,
+    "reversible": true,
+    "admin": true,
+    "warning": "",
+    "steps": []
+   },
+   {
+    "op": "file.quarantine",
+    "label": "Quarantine file",
+    "target": "C:\\Windows\\Temp\\upd.exe",
+    "explain": "Ends any process running it, then moves the file into quarantine (it can be restored).",
+    "params": {
+     "path": "C:\\Windows\\Temp\\upd.exe",
+     "reason": "upd.exe",
+     "kill": true
+    },
+    "group": "remove",
+    "destructive": true,
+    "reversible": true,
+    "admin": true,
+    "warning": "",
+    "steps": []
+   },
+   {
+    "op": "firewall.block",
+    "label": "Block network access",
+    "target": "C:\\Windows\\Temp\\upd.exe",
+    "explain": "Adds Windows Firewall rules that block all its incoming and outgoing traffic.",
+    "params": {
+     "path": "C:\\Windows\\Temp\\upd.exe"
+    },
+    "group": "contain",
+    "destructive": false,
+    "reversible": true,
+    "admin": true,
+    "warning": "",
+    "steps": []
+   },
+   {
+    "op": "shell.location",
+    "label": "Open file location",
+    "target": "C:\\Windows\\Temp\\upd.exe",
+    "explain": "Opens the folder with the file selected.",
+    "params": {
+     "path": "C:\\Windows\\Temp\\upd.exe"
+    },
+    "group": "inspect",
+    "destructive": false,
+    "reversible": true,
+    "admin": false,
+    "warning": "",
+    "steps": []
+   },
+   {
+    "op": "shell.properties",
+    "label": "File properties",
+    "target": "C:\\Windows\\Temp\\upd.exe",
+    "explain": "Opens the Windows Properties dialog.",
+    "params": {
+     "path": "C:\\Windows\\Temp\\upd.exe"
+    },
+    "group": "inspect",
+    "destructive": false,
+    "reversible": true,
+    "admin": false,
+    "warning": "",
+    "steps": []
+   },
+   {
+    "op": "signature.verify",
+    "label": "Verify signature now",
+    "target": "C:\\Windows\\Temp\\upd.exe",
+    "explain": "Checks the digital signature again, live.",
+    "params": {
+     "path": "C:\\Windows\\Temp\\upd.exe"
+    },
+    "group": "inspect",
+    "destructive": false,
+    "reversible": true,
+    "admin": false,
+    "warning": "",
+    "steps": []
+   },
+   {
+    "op": "defender.scan_file",
+    "label": "Scan with Microsoft Defender",
+    "target": "C:\\Windows\\Temp\\upd.exe",
+    "explain": "Runs a Defender scan on this file; if it finds a threat, Defender handles it.",
+    "params": {
+     "path": "C:\\Windows\\Temp\\upd.exe"
+    },
+    "group": "inspect",
+    "destructive": false,
+    "reversible": false,
+    "admin": false,
+    "warning": "",
+    "steps": []
+   },
+   {
+    "op": "shell.console",
+    "label": "Open Services",
+    "target": "Services",
+    "explain": "Opens the Services console.",
+    "params": {
+     "name": "services.msc"
+    },
+    "group": "inspect",
+    "destructive": false,
+    "reversible": true,
+    "admin": false,
+    "warning": "",
+    "steps": []
+   }
+  ],
+  "S1": [
+   {
+    "op": "shell.hosts",
+    "label": "Edit the hosts file",
+    "target": "hosts file",
+    "explain": "Opens the hosts file in Notepad (as administrator).",
+    "params": {},
+    "group": "fix",
+    "destructive": false,
+    "reversible": true,
+    "admin": true,
+    "warning": "",
+    "steps": []
+   }
+  ],
+  "S2": [
+   {
+    "op": "defender.realtime_on",
+    "label": "Turn real-time protection on",
+    "target": "Microsoft Defender",
+    "explain": "Turns real-time protection back on.",
+    "params": {},
+    "group": "fix",
+    "destructive": false,
+    "reversible": false,
+    "admin": true,
+    "warning": "",
+    "steps": []
+   }
+  ],
+  "S3": [
+   {
+    "op": "shell.url",
+    "label": "Open Virus & threat protection",
+    "target": "Windows Security",
+    "explain": "Opens the Defender settings.",
+    "params": {
+     "url": "windowsdefender://threatsettings"
+    },
+    "group": "inspect",
+    "destructive": false,
+    "reversible": true,
+    "admin": false,
+    "warning": "",
+    "steps": []
+   }
+  ],
+  "S4": [
+   {
+    "op": "account.disable",
+    "label": "Disable account \"support$\"",
+    "target": "local account support$",
+    "explain": "Disables the local account; it can be enabled again.",
+    "params": {
+     "name": "support$"
+    },
+    "group": "fix",
+    "destructive": true,
+    "reversible": true,
+    "admin": true,
+    "warning": "",
+    "steps": []
+   }
+  ],
+  "E1": [],
+  "X1": [
+   {
+    "op": "shell.browser",
+    "label": "Open Chrome extensions page",
+    "target": "Chrome",
+    "explain": "Opens the browser's extensions page so you can remove it there (browsers protect their extension settings, so removal happens in the browser).",
+    "params": {
+     "browser": "Chrome"
+    },
+    "group": "inspect",
+    "destructive": false,
+    "reversible": true,
+    "admin": false,
+    "warning": "",
+    "steps": []
+   }
+  ],
+  "P1": [
+   {
+    "op": "shell.url",
+    "label": "Open Installed apps",
+    "target": "Settings",
+    "explain": "Opens Settings → Apps → Installed apps.",
+    "params": {
+     "url": "ms-settings:appsfeatures"
+    },
+    "group": "inspect",
+    "destructive": false,
+    "reversible": true,
+    "admin": false,
+    "warning": "",
+    "steps": []
+   }
+  ],
+  "S5": [],
+  "S6": [],
+  "S7": [
+   {
+    "op": "defender.update",
+    "label": "Update security intelligence",
+    "target": "Microsoft Defender",
+    "explain": "Downloads the latest Defender definitions.",
+    "params": {},
+    "group": "fix",
+    "destructive": false,
+    "reversible": false,
+    "admin": true,
+    "warning": "",
+    "steps": []
+   }
+  ],
+  "S8": [
+   {
+    "op": "firewall.enable",
+    "label": "Turn the firewall on",
+    "target": "Windows Firewall",
+    "explain": "Turns Windows Firewall on for the profiles where it is off.",
+    "params": {},
+    "group": "fix",
+    "destructive": false,
+    "reversible": true,
+    "admin": true,
+    "warning": "",
+    "steps": []
+   }
+  ],
+  "S9": [
+   {
+    "op": "defender.remove_exclusion",
+    "label": "Remove exclusion \"C:\\ProgramData\\WinUpdate\"",
+    "target": "C:\\ProgramData\\WinUpdate",
+    "explain": "Lets Defender scan it again.",
+    "params": {
+     "kind": "path",
+     "value": "C:\\ProgramData\\WinUpdate"
+    },
+    "group": "fix",
+    "destructive": false,
+    "reversible": true,
+    "admin": true,
+    "warning": "",
+    "steps": []
+   }
+  ],
+  "S10": [],
+  "S11": [
+   {
+    "op": "rdp.disable",
+    "label": "Turn Remote Desktop off",
+    "target": "Remote Desktop",
+    "explain": "Stops the computer from accepting Remote Desktop connections.",
+    "params": {},
+    "group": "fix",
+    "destructive": false,
+    "reversible": true,
+    "admin": true,
+    "warning": "",
+    "steps": []
+   }
+  ],
+  "S12": [
+   {
+    "op": "shell.url",
+    "label": "Open Virus & threat protection",
+    "target": "Windows Security",
+    "explain": "Tamper Protection can only be turned on from Windows Security.",
+    "params": {
+     "url": "windowsdefender://threatsettings"
+    },
+    "group": "inspect",
+    "destructive": false,
+    "reversible": true,
+    "admin": false,
+    "warning": "",
+    "steps": []
+   }
+  ],
+  "B5": [
+   {
+    "op": "plan.remove",
+    "label": "Remove completely",
+    "target": "acme.exe",
+    "explain": "Ends it, turns off every way it starts and moves its file to quarantine. Every step except ending the process can be undone from History.",
+    "params": {},
+    "group": "remove",
+    "destructive": true,
+    "reversible": true,
+    "admin": true,
+    "warning": "",
+    "steps": [
+     {
+      "op": "process.terminate",
+      "label": "End process",
+      "target": "acme.exe",
+      "explain": "Ends the running instances right now. It may start again if something launches it at startup.",
+      "params": {
+       "path": "C:\\Program Files\\Acme\\acme.exe",
+       "pids": [
+        5000
+       ],
+       "names": [
+        "acme.exe"
+       ],
+       "scan_started": "2026-01-01T10:00:00"
+      },
+      "group": "contain",
+      "destructive": true,
+      "reversible": false,
+      "admin": true,
+      "warning": "",
+      "steps": []
+     },
+     {
+      "op": "file.quarantine",
+      "label": "Quarantine \"acme.exe\"",
+      "target": "C:\\Program Files\\Acme\\acme.exe",
+      "explain": "Moves the file into quarantine.",
+      "params": {
+       "path": "C:\\Program Files\\Acme\\acme.exe",
+       "reason": "acme.exe",
+       "kill": true
+      },
+      "group": "remove",
+      "destructive": true,
+      "reversible": true,
+      "admin": true,
+      "warning": "",
+      "steps": []
+     }
+    ]
+   },
+   {
+    "op": "process.terminate",
+    "label": "End process",
+    "target": "acme.exe",
+    "explain": "Ends the running instances right now. It may start again if something launches it at startup.",
+    "params": {
+     "path": "C:\\Program Files\\Acme\\acme.exe",
+     "pids": [
+      5000
+     ],
+     "names": [
+      "acme.exe"
+     ],
+     "scan_started": "2026-01-01T10:00:00"
+    },
+    "group": "contain",
+    "destructive": true,
+    "reversible": false,
+    "admin": true,
+    "warning": "",
+    "steps": []
+   },
+   {
+    "op": "file.quarantine",
+    "label": "Quarantine file",
+    "target": "C:\\Program Files\\Acme\\acme.exe",
+    "explain": "Ends any process running it, then moves the file into quarantine (it can be restored).",
+    "params": {
+     "path": "C:\\Program Files\\Acme\\acme.exe",
+     "reason": "acme.exe",
+     "kill": true
+    },
+    "group": "remove",
+    "destructive": true,
+    "reversible": true,
+    "admin": true,
+    "warning": "",
+    "steps": []
+   },
+   {
+    "op": "firewall.block",
+    "label": "Block network access",
+    "target": "C:\\Program Files\\Acme\\acme.exe",
+    "explain": "Adds Windows Firewall rules that block all its incoming and outgoing traffic.",
+    "params": {
+     "path": "C:\\Program Files\\Acme\\acme.exe"
+    },
+    "group": "contain",
+    "destructive": false,
+    "reversible": true,
+    "admin": true,
+    "warning": "",
+    "steps": []
+   },
+   {
+    "op": "shell.location",
+    "label": "Open file location",
+    "target": "C:\\Program Files\\Acme\\acme.exe",
+    "explain": "Opens the folder with the file selected.",
+    "params": {
+     "path": "C:\\Program Files\\Acme\\acme.exe"
+    },
+    "group": "inspect",
+    "destructive": false,
+    "reversible": true,
+    "admin": false,
+    "warning": "",
+    "steps": []
+   },
+   {
+    "op": "shell.properties",
+    "label": "File properties",
+    "target": "C:\\Program Files\\Acme\\acme.exe",
+    "explain": "Opens the Windows Properties dialog.",
+    "params": {
+     "path": "C:\\Program Files\\Acme\\acme.exe"
+    },
+    "group": "inspect",
+    "destructive": false,
+    "reversible": true,
+    "admin": false,
+    "warning": "",
+    "steps": []
+   },
+   {
+    "op": "signature.verify",
+    "label": "Verify signature now",
+    "target": "C:\\Program Files\\Acme\\acme.exe",
+    "explain": "Checks the digital signature again, live.",
+    "params": {
+     "path": "C:\\Program Files\\Acme\\acme.exe"
+    },
+    "group": "inspect",
+    "destructive": false,
+    "reversible": true,
+    "admin": false,
+    "warning": "",
+    "steps": []
+   },
+   {
+    "op": "defender.scan_file",
+    "label": "Scan with Microsoft Defender",
+    "target": "C:\\Program Files\\Acme\\acme.exe",
+    "explain": "Runs a Defender scan on this file; if it finds a threat, Defender handles it.",
+    "params": {
+     "path": "C:\\Program Files\\Acme\\acme.exe"
+    },
+    "group": "inspect",
+    "destructive": false,
+    "reversible": false,
+    "admin": false,
+    "warning": "",
+    "steps": []
+   }
+  ],
+  "P2": [
+   {
+    "op": "shell.url",
+    "label": "Open Installed apps",
+    "target": "Settings",
+    "explain": "Opens Settings → Apps → Installed apps.",
+    "params": {
+     "url": "ms-settings:appsfeatures"
+    },
+    "group": "inspect",
+    "destructive": false,
+    "reversible": true,
+    "admin": false,
+    "warning": "",
+    "steps": []
+   }
+  ],
+  "C2": []
+ }
+}

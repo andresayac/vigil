@@ -1,0 +1,18 @@
+[workspace]
+resolver = "3"
+members = ["crates/vigil-i18n", "crates/vigil-sys", "crates/vigil-scan", "crates/vigil-actions", "crates/vigil-maint", "crates/vigil-app"]
+
+[workspace.package]
+version = "1.0.0"
+edition = "2024"
+license = "MIT"
+authors = ["andresayac"]
+repository = "https://github.com/andresayac/vigil"
+rust-version = "1.90"
+
+[profile.release]
+# Small, fast binary: the app ships as a single executable.
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
