@@ -381,6 +381,8 @@ pub async fn scan_finish(app: AppHandle, review: bool, selected: Option<bool>) -
             ai.insert("reason".into(), json!(reason));
             pending.analysis.ai = ai;
         }
+        // What changed since the previous scan in the same folder travels with the report.
+        vigil_scan::pipeline::attach_changes(&mut pending.analysis, &pending.base);
         let saved = vigil_scan::pipeline::save_report(&pending.analysis, &pending.base, false);
         let path = match saved {
             Ok((json, _)) => Some(json),
@@ -558,6 +560,47 @@ pub async fn choose_exe(app: AppHandle) -> Option<String> {
         dialog = dialog.set_directory(PathBuf::from(dir));
     }
     dialog.blocking_pick_file().map(|p| p.to_string())
+}
+
+/// Run new task's Browse button. The path only fills the dialog's text box: running it is a
+/// separate request, checked and confirmed like any other.
+#[tauri::command]
+pub async fn choose_program(app: AppHandle) -> Option<String> {
+    let mut dialog = app
+        .dialog()
+        .file()
+        .set_title(vigil_i18n::tr!("Choose a program to run"))
+        .add_filter(vigil_i18n::tr!("Programs"), &vigil_actions::run::RUNNABLE);
+    if let Some(dir) = std::env::var_os("ProgramFiles") {
+        dialog = dialog.set_directory(PathBuf::from(dir));
+    }
+    dialog.blocking_pick_file().map(|p| p.to_string())
+}
+
+/// The logical processors of this computer and the ones a process may use now (read-only).
+#[derive(Serialize)]
+pub struct Affinity {
+    processors: Vec<vigil_sys::cpusets::LogicalProcessor>,
+    allowed: Vec<u32>,
+}
+
+#[tauri::command]
+pub async fn process_affinity(pid: u32, created_ms: i64) -> CmdResult<Affinity> {
+    blocking(move || {
+        let started = vigil_actions::Proc::get(i64::from(pid))
+            .ok()
+            .and_then(|p| p.create_time())
+            .ok_or(vigil_i18n::tr!("The process has exited."))?;
+        if created_ms != 0 && (started * 1000.0 - created_ms as f64).abs() > 1000.0 {
+            return Err(vigil_i18n::tr!("The process has exited."));
+        }
+        let allowed = vigil_sys::cpusets::process_processors(pid).map_err(|e| e.to_string())?;
+        Ok(Affinity {
+            processors: vigil_sys::cpusets::logical_processors(),
+            allowed,
+        })
+    })
+    .await?
 }
 
 async fn cached_hardware(app: &AppHandle, force: bool) -> CmdResult<Hardware> {
@@ -845,6 +888,10 @@ async fn build_plan(app: &AppHandle, request: &Request) -> CmdResult<Plan> {
         Request::Service { .. } => blocking(|| vigil_sys::services::list().map_err(|e| e.to_string())).await??,
         _ => Vec::new(),
     };
+    let startup = match request {
+        Request::Startup { .. } => blocking(vigil_sys::startup::list).await?,
+        _ => Vec::new(),
+    };
     let st = state(app);
     let inner = st.lock();
     let cleanup: Vec<Value> = inner
@@ -857,6 +904,7 @@ async fn build_plan(app: &AppHandle, request: &Request) -> CmdResult<Plan> {
         processes: &processes,
         cleanup: &cleanup,
         services: &services,
+        startup: &startup,
         space_files: &inner.space_files,
         power_plans: &power_plans,
         drive_media: &drive_media,
@@ -1206,6 +1254,108 @@ pub async fn services_list() -> CmdResult<Vec<ServiceView>> {
             service,
         })
         .collect())
+}
+
+// ------------------------------------------------------------------------------------ startup apps
+
+/// The programs Windows starts at sign-in, read now (read-only).
+#[tauri::command]
+pub async fn startup_list() -> CmdResult<Vec<vigil_sys::startup::StartupEntry>> {
+    blocking(vigil_sys::startup::list).await
+}
+
+/// The signature of a startup program, as the Startup apps page shows it.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct StartupSignature {
+    /// "valid", "unsigned", "broken", "untrusted", "missing" or "unknown".
+    status: String,
+    signer: String,
+}
+
+/// Checked signatures by lower-case path, for this session (each check starts PowerShell).
+static STARTUP_SIGNATURES: std::sync::LazyLock<Mutex<std::collections::HashMap<String, StartupSignature>>> =
+    std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+
+fn startup_signature(path: &str) -> StartupSignature {
+    let Ok(info) = vigil_actions::verify_signature(Path::new(path)) else {
+        return StartupSignature {
+            status: "unknown".into(),
+            signer: String::new(),
+        };
+    };
+    let status = match (info.exists, info.sig_status.as_deref()) {
+        (Some(false), _) => "missing",
+        (_, Some("Valid")) => "valid",
+        (_, Some("NotSigned")) => "unsigned",
+        (_, Some("HashMismatch")) => "broken",
+        (_, Some("NotTrusted")) => "untrusted",
+        _ => "unknown",
+    };
+    StartupSignature {
+        status: status.into(),
+        signer: info.signer.unwrap_or_default(),
+    }
+}
+
+/// The Authenticode signatures of startup programs (read-only). Only programs of the live startup
+/// list are checked, a few at a time; results are kept for the session.
+#[tauri::command]
+pub async fn startup_signatures(paths: Vec<String>) -> CmdResult<std::collections::HashMap<String, StartupSignature>> {
+    blocking(move || {
+        let known: std::collections::HashSet<String> = vigil_sys::startup::list()
+            .into_iter()
+            .filter(|e| e.exists && !e.host)
+            .map(|e| e.executable.to_lowercase())
+            .collect();
+        let mut out = std::collections::HashMap::new();
+        let mut todo: Vec<String> = Vec::new();
+        {
+            let cache = STARTUP_SIGNATURES
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            for path in paths.into_iter().take(256) {
+                let key = path.to_lowercase();
+                if !known.contains(&key) {
+                    continue;
+                }
+                if let Some(found) = cache.get(&key) {
+                    out.insert(path, found.clone());
+                } else if !todo.iter().any(|p| p.eq_ignore_ascii_case(&path)) {
+                    todo.push(path);
+                }
+            }
+        }
+        let size = todo.len().div_ceil(4).max(1);
+        let checked: Vec<(String, StartupSignature)> = std::thread::scope(|scope| {
+            let workers: Vec<_> = todo
+                .chunks(size)
+                .map(|chunk| {
+                    scope.spawn(move || {
+                        chunk
+                            .iter()
+                            .map(|p| (p.clone(), startup_signature(p)))
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+            workers
+                .into_iter()
+                .flat_map(|worker| worker.join().unwrap_or_default())
+                .collect()
+        });
+        let mut cache = STARTUP_SIGNATURES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for (path, signature) in checked {
+            if signature.status != "unknown" {
+                cache.insert(path.to_lowercase(), signature.clone());
+            }
+            out.insert(path, signature);
+        }
+        out
+    })
+    .await
 }
 
 // ------------------------------------------------------------------------------------ process inspector

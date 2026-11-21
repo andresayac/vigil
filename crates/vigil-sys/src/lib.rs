@@ -11,11 +11,13 @@ mod nt;
 mod util;
 
 pub mod apps;
+pub mod cpusets;
 pub mod elevation;
 pub mod inspect;
 pub mod metrics;
 pub mod net;
 pub mod process;
 pub mod services;
+pub mod startup;
 
 pub use error::SysError;

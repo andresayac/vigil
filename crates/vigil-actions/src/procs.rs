@@ -1,5 +1,5 @@
 //! Live processes: finding the target again, refusing critical ones, ending, suspending, priorities,
-//! efficiency mode and working sets.
+//! efficiency mode, processor sets and working sets.
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
@@ -17,9 +17,9 @@ use windows::Win32::System::Threading::{
     GetExitCodeProcess, GetPriorityClass, GetProcessTimes, IsProcessCritical, OpenProcess, PROCESS_ACCESS_RIGHTS,
     PROCESS_CREATION_FLAGS, PROCESS_NAME_WIN32, PROCESS_POWER_THROTTLING_CURRENT_VERSION,
     PROCESS_POWER_THROTTLING_EXECUTION_SPEED, PROCESS_POWER_THROTTLING_STATE, PROCESS_QUERY_LIMITED_INFORMATION,
-    PROCESS_SET_INFORMATION, PROCESS_SET_QUOTA, PROCESS_SUSPEND_RESUME, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
-    ProcessPowerThrottling, QueryFullProcessImageNameW, SetPriorityClass, SetProcessInformation, TerminateProcess,
-    WaitForSingleObject,
+    PROCESS_SET_INFORMATION, PROCESS_SET_LIMITED_INFORMATION, PROCESS_SET_QUOTA, PROCESS_SUSPEND_RESUME,
+    PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, ProcessPowerThrottling, QueryFullProcessImageNameW, SetPriorityClass,
+    SetProcessDefaultCpuSets, SetProcessInformation, TerminateProcess, WaitForSingleObject,
 };
 use windows::core::PWSTR;
 
@@ -599,6 +599,22 @@ pub fn set_io_memory_priority(pid: u32, io: u32, memory: u32) -> Result<()> {
     let handle = open_for_info(pid)?;
     set_u32(handle.0, PROCESS_IO_PRIORITY, io.min(2))?;
     set_u32(handle.0, PROCESS_PAGE_PRIORITY, memory.clamp(1, 5))
+}
+
+/// Limits a process to these CPU Set ids by default (its threads without their own sets follow it);
+/// an empty list lets it use every processor again.
+pub fn set_cpu_sets(pid: u32, ids: &[u32]) -> Result<()> {
+    let handle =
+        open(pid, PROCESS_SET_LIMITED_INFORMATION | PROCESS_QUERY_LIMITED_INFORMATION).map_err(|e| match e {
+            OpenError::Gone => ActionError::new(tr!("the process is no longer running")),
+            OpenError::Denied => ActionError::new(tr!("access denied")),
+            OpenError::Other(message) => ActionError::new(message),
+        })?;
+    let ids = (!ids.is_empty()).then_some(ids);
+    // SAFETY: the handle has PROCESS_SET_LIMITED_INFORMATION; `ids` is read for its length.
+    unsafe { SetProcessDefaultCpuSets(handle.0, ids) }
+        .ok()
+        .map_err(|e| ActionError::new(tr!("Windows refused the change (error {0})", e.code().0 & 0xFFFF)))
 }
 
 /// Empties a working set; false when Windows refused.

@@ -8,9 +8,9 @@
   import { verdictColor, verdictLabel } from "../lib/labels";
   import { acquire, live, release } from "../lib/live.svelte";
   import { act, report } from "../lib/report.svelte";
-  import type { Hardware, Item, TuningState } from "../lib/types";
+  import type { Hardware, Item, StartupEntry, TuningState } from "../lib/types";
 
-  let { elevated, onscan }: { elevated: boolean; onscan: () => void } = $props();
+  let { elevated, onscan, onpage }: { elevated: boolean; onscan: () => void; onpage?: (key: string) => void } = $props();
 
   const NOTES: Record<string, Key> = {
     "381b4222-f694-41f0-9685-ff5bb260df2e": "optimize.planBalanced",
@@ -26,7 +26,8 @@
   let tuning = $state<TuningState | null>(null);
   let hw = $state<Hardware | null>(null);
   let plan = $state("");
-  let startupSel = $state<string | null>(null);
+  let startup = $state<StartupEntry[] | null>(null);
+  let taskSel = $state<string | null>(null);
   let serviceSel = $state<string | null>(null);
   let gpuExe = $state<string | null>(null);
 
@@ -39,19 +40,23 @@
     void acquire();
     void reload();
     void api.hardware().then((h) => (hw = h));
+    void api.startupList().then((list) => (startup = list)).catch(() => (startup = []));
     return () => void release();
   });
 
   const windir = "c:\\windows";
   interface RoleRow { key: string; item: Item; role: number; op: "startup.disable" | "task.disable" | "service.manual"; where: string; name: string }
 
-  const startupRows: RoleRow[] = $derived.by(() => {
+  // Startup entries are read live (the Startup apps page); scheduled tasks still come from the last scan.
+  const startupOn = $derived((startup ?? []).filter((e) => e.canToggle && e.enabled)
+    .sort((a, b) => (a.description || a.name).localeCompare(b.description || b.name)));
+  const startupOff = $derived((startup ?? []).filter((e) => e.canToggle && !e.enabled).length);
+  const taskRows: RoleRow[] = $derived.by(() => {
     const out: RoleRow[] = [];
     for (const item of report.analysis?.items ?? []) {
-      if ((item.path ?? "").toLowerCase().startsWith(windir) || item.title.toLowerCase().includes("securityhealth")) continue;
+      if ((item.path ?? "").toLowerCase().startsWith(windir)) continue;
       item.roles.forEach((role, index) => {
-        if (role.kind === "startup" && role.active) out.push({ key: `${item.id}:${index}`, item, role: index, op: "startup.disable", where: role.label, name: item.title });
-        else if (role.kind === "task" && role.active && role.persistent) out.push({ key: `${item.id}:${index}`, item, role: index, op: "task.disable", where: role.label, name: item.title });
+        if (role.kind === "task" && role.active && role.persistent) out.push({ key: `${item.id}:${index}`, item, role: index, op: "task.disable", where: role.label, name: item.title });
       });
     }
     return out;
@@ -110,20 +115,39 @@
   <div class="cards">
     <section class="panel card">
       <h2>{t("optimize.startup")}</h2>
+      {#if startup}
+        <p class="muted">
+          {t("optimize.startupLive", { count: startupOn.length })}{startupOff ? ` ${t("optimize.startupOff", { count: startupOff })}` : ""}
+          {t("optimize.startupTip")}
+        </p>
+        {#if startupOn.length}
+          <Readouts nameWidth={220} rows={startupOn.slice(0, 6).map((e) => ({
+            name: e.description || e.name, value: e.host ? t("startup.viaHost", { host: e.executable.split("\\").pop() ?? "" }) : e.publisher || "—",
+            tip: e.command }))} />
+          {#if startupOn.length > 6}<p class="faint">{t("optimize.startupMore", { count: startupOn.length - 6 })}</p>{/if}
+        {/if}
+      {:else}
+        <p class="muted">{t("common.reading")}</p>
+      {/if}
+      <div><button class="primary" onclick={() => onpage?.("startup")}>{t("optimize.openStartup")}</button></div>
+
+      <h3>{t("optimize.tasks")}</h3>
       {#if !report.analysis}
-        <p class="muted">{t("optimize.runScanToList")}</p>
+        <p class="faint">{t("optimize.tasksNoScan")}</p>
         <div><button onclick={onscan}>{t("optimize.runScan")}</button></div>
       {:else}
-        <p class="muted">{t("optimize.startupCount", { count: startupRows.length })}</p>
-        <div class="table">
-          {#each startupRows as row (row.key)}
-            <button class="trow" class:sel={startupSel === row.key} onclick={() => (startupSel = row.key)} title={row.item.path ?? row.name}>
-              <span class="ellipsis">{row.name}</span><span class="ellipsis faint" title={row.where}>{row.where}</span>
-              <span style:color={["remove", "disable", "review"].includes(row.item.verdict) ? verdictColor(row.item.verdict) : "var(--ink3)"}>{verdictLabel(row.item.verdict)}</span>
-            </button>
-          {/each}
-        </div>
-        <div><button disabled={!startupSel || !elevated || report.busy} onclick={() => runRole(startupRows, startupSel)}>{t("optimize.turnOff")}</button></div>
+        <p class="faint">{t("optimize.tasksCount", { count: taskRows.length })}</p>
+        {#if taskRows.length}
+          <div class="table">
+            {#each taskRows as row (row.key)}
+              <button class="trow" class:sel={taskSel === row.key} onclick={() => (taskSel = row.key)} title={row.item.path ?? row.name}>
+                <span class="ellipsis">{row.name}</span><span class="ellipsis faint" title={row.where}>{row.where}</span>
+                <span style:color={["remove", "disable", "review"].includes(row.item.verdict) ? verdictColor(row.item.verdict) : "var(--ink3)"}>{verdictLabel(row.item.verdict)}</span>
+              </button>
+            {/each}
+          </div>
+          <div><button disabled={!taskSel || !elevated || report.busy} onclick={() => runRole(taskRows, taskSel)}>{t("optimize.turnOff")}</button></div>
+        {/if}
       {/if}
     </section>
 

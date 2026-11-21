@@ -223,6 +223,7 @@ pub(crate) fn analyze(raw: &mut Value, live: Option<&Live>) -> Analysis {
         stats,
         summary: None,
         ai: Map::new(),
+        changes: None,
     }
 }
 

@@ -1,8 +1,8 @@
 // Fictitious data for previewing the security and maintenance pages in a browser.
 // Nothing here describes a real computer.
 import type {
-  ActionSpec, AiProvider, AiStatus, Analysis, CleanupTarget, Hardware, Insight, Item, JournalRecord, ProcessDetails, ReviewOffer,
-  Service, Settings, SpaceNode, SpaceScan, TuningState, Volume,
+  ActionSpec, Affinity, AiProvider, AiStatus, Analysis, CleanupTarget, Hardware, Insight, Item, JournalRecord, LogicalProcessor, ProcessDetails, ReviewOffer,
+  Service, Settings, SpaceNode, SpaceScan, StartupEntry, StartupSignature, TuningState, Volume,
 } from "./types";
 
 function item(id: string, kind: string, title: string, verdict: string, score: number, extra: Partial<Item> = {}): Item {
@@ -67,6 +67,79 @@ export function services(): Service[] {
   ].sort((a, b) => a.displayName.localeCompare(b.displayName));
 }
 
+const RUN = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+const STARTUP_SIGNATURES: Record<string, StartupSignature> = {
+  "C:\\Users\\jdoe\\AppData\\Local\\Microsoft\\OneDrive\\OneDrive.exe": { status: "valid", signer: "Microsoft Corporation" },
+  "C:\\Windows\\System32\\SecurityHealthSystray.exe": { status: "valid", signer: "Microsoft Windows" },
+  "C:\\Program Files (x86)\\Steam\\steam.exe": { status: "valid", signer: "Valve Corp." },
+  "C:\\Users\\jdoe\\AppData\\Local\\Discord\\Update.exe": { status: "valid", signer: "Discord Inc." },
+  "C:\\Program Files\\Realtek\\Audio\\RtkAudUService64.exe": { status: "valid", signer: "Realtek Semiconductor Corp." },
+  "C:\\Program Files (x86)\\Contoso\\Sync\\ContosoTray.exe": { status: "valid", signer: "Contoso Ltd." },
+  "C:\\Users\\jdoe\\AppData\\Roaming\\OddHelper\\helper.exe": { status: "unsigned", signer: "" },
+  "C:\\Program Files\\Example Notes\\notes.exe": { status: "valid", signer: "Example Software LLC" },
+  "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\StartUp\\cleanup.bat": { status: "unsigned", signer: "" },
+};
+
+export function startupList(): StartupEntry[] {
+  const reg = (hive: "HKCU" | "HKLM", key: string, value: string, command: string, executable: string, publisher: string,
+               description: string, enabled = true, extra: Partial<StartupEntry> = {}): StartupEntry => {
+    const once = key.endsWith("RunOnce");
+    const location = `${hive}\\${key}`;
+    return {
+      id: `reg:${location}\\${value}`, name: value, command, executable, location, kind: once ? "run_once" : "run",
+      scope: hive === "HKCU" ? "user" : "machine", enabled, disabledAtMs: enabled ? null : Date.now() - 12 * 86_400_000,
+      canToggle: !once, approvedKey: once ? "" : `${hive}\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run`,
+      value, file: "", publisher, description, exists: true, host: false, ...extra,
+    };
+  };
+  const folder = (user: boolean, fileName: string, command: string, executable: string, publisher: string, description: string,
+                  enabled = true): StartupEntry => {
+    const location = user
+      ? "C:\\Users\\jdoe\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Startup"
+      : "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\StartUp";
+    const file = `${location}\\${fileName}`;
+    return {
+      id: `file:${file}`, name: fileName.replace(/\.[^.]+$/, ""), command, executable, location, kind: "folder",
+      scope: user ? "user" : "machine", enabled, disabledAtMs: null, canToggle: true,
+      approvedKey: `${user ? "HKCU" : "HKLM"}\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\StartupFolder`,
+      value: fileName, file, publisher, description, exists: true, host: false,
+    };
+  };
+  return [
+    reg("HKCU", RUN, "OneDrive", "\"C:\\Users\\jdoe\\AppData\\Local\\Microsoft\\OneDrive\\OneDrive.exe\" /background",
+        "C:\\Users\\jdoe\\AppData\\Local\\Microsoft\\OneDrive\\OneDrive.exe", "Microsoft Corporation", "Microsoft OneDrive"),
+    reg("HKLM", RUN, "SecurityHealth", "%windir%\\system32\\SecurityHealthSystray.exe", "C:\\Windows\\System32\\SecurityHealthSystray.exe",
+        "Microsoft Corporation", "Windows Security notification icon"),
+    reg("HKCU", RUN, "Steam", "\"C:\\Program Files (x86)\\Steam\\steam.exe\" -silent", "C:\\Program Files (x86)\\Steam\\steam.exe",
+        "Valve Corporation", "Steam", false),
+    reg("HKCU", RUN, "Discord", "C:\\Users\\jdoe\\AppData\\Local\\Discord\\Update.exe --processStart Discord.exe",
+        "C:\\Users\\jdoe\\AppData\\Local\\Discord\\Update.exe", "Discord Inc.", "Discord"),
+    reg("HKLM", RUN, "RtkAudUService", "\"C:\\Program Files\\Realtek\\Audio\\RtkAudUService64.exe\" -background",
+        "C:\\Program Files\\Realtek\\Audio\\RtkAudUService64.exe", "Realtek Semiconductor", "Realtek HD Audio Universal Service"),
+    reg("HKLM", "Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Run", "ContosoTray",
+        "\"C:\\Program Files (x86)\\Contoso\\Sync\\ContosoTray.exe\" /tray", "C:\\Program Files (x86)\\Contoso\\Sync\\ContosoTray.exe",
+        "Contoso Ltd.", "Contoso Sync", false,
+        { approvedKey: "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run32" }),
+    reg("HKCU", RUN, "OddHelper", "C:\\Users\\jdoe\\AppData\\Roaming\\OddHelper\\helper.exe --hidden",
+        "C:\\Users\\jdoe\\AppData\\Roaming\\OddHelper\\helper.exe", "", ""),
+    reg("HKCU", RUN, "PrintAgent", "rundll32.exe \"C:\\Users\\jdoe\\AppData\\Local\\PrintAgent\\agent.dll\",Start",
+        "C:\\Windows\\System32\\rundll32.exe", "", "", true, { host: true }),
+    reg("HKCU", "Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce", "FinishSetup",
+        "C:\\Users\\jdoe\\AppData\\Local\\Temp\\setup-finish.exe /resume", "C:\\Users\\jdoe\\AppData\\Local\\Temp\\setup-finish.exe",
+        "", "", true, { exists: false }),
+    folder(true, "Example Notes.lnk", "\"C:\\Program Files\\Example Notes\\notes.exe\" --minimized",
+           "C:\\Program Files\\Example Notes\\notes.exe", "Example Software", "Example Notes"),
+    folder(false, "cleanup.bat", "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\StartUp\\cleanup.bat",
+           "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\StartUp\\cleanup.bat", "", ""),
+  ];
+}
+
+export function startupSignatures(paths: string[]): Record<string, StartupSignature> {
+  const out: Record<string, StartupSignature> = {};
+  for (const path of paths) out[path] = STARTUP_SIGNATURES[path] ?? { status: "unknown", signer: "" };
+  return out;
+}
+
 export function processDetails(pid: number): ProcessDetails {
   const system = "C:\\Windows\\System32\\";
   const modules = ["ntdll.dll", "kernel32.dll", "KernelBase.dll", "user32.dll", "win32u.dll", "gdi32.dll", "combase.dll", "rpcrt4.dll"]
@@ -110,6 +183,16 @@ export function analysis(): Analysis {
     },
     notes: [{ area: "tasks", message: "8 Microsoft tasks use COM objects whose file could not be resolved." }],
     items,
+    changes: {
+      previous: { started: "2025-12-28T09:30:00", path: "C:\\ProgramData\\Vigil\\scans\\scan-20251228-093000-report.json" },
+      new: ["B1", "X1", "E1", "B4"],
+      gone: [{ title: "OldToolbar.exe", kind: "executable", path: "C:\\Users\\jdoe\\AppData\\Local\\OldToolbar\\OldToolbar.exe", verdict: "review" }],
+      changed: [
+        { id: "B2", what: ["Verdict: Review → Remove", "Signature: Valid → Not signed", "New: Starts with Windows (Run key)"] },
+        { id: "C1", what: ["It is running now."] },
+      ],
+      posture: ["Remote Desktop: off → on", "New Microsoft Defender exclusion: C:\\Users\\jdoe\\AppData\\Roaming"],
+    },
   };
 }
 
@@ -262,4 +345,17 @@ export function aiStatus(): AiStatus {
   const endpoint = current.ai.endpoint || provider.defaultEndpoint || "";
   const local = provider.kind === "api" && isLocalhost(endpoint);
   return { provider: id, destination: `${provider.name}${model ? ` (${model})` : ""}${endpoint ? ` · ${endpoint}` : ""}`, local, problem: null };
+}
+
+/** A hybrid processor: 6 performance cores with two threads each, then 8 efficiency cores. */
+export function processAffinity(): Affinity {
+  const processors: LogicalProcessor[] = [];
+  for (let core = 0; core < 14; core++) {
+    const threads = core < 6 ? 2 : 1;
+    for (let thread = 0; thread < threads; thread++) {
+      const index = processors.length;
+      processors.push({ index, id: 256 + index, group: 0, number: index, core, efficiencyClass: core < 6 ? 1 : 0, numaNode: 0 });
+    }
+  }
+  return { processors, allowed: processors.map((p) => p.index) };
 }

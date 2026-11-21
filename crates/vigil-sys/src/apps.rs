@@ -4,9 +4,14 @@
 //!
 //! Descriptions and icons are cached per executable path for the life of the process: they are read
 //! once, when a program is first seen, never on every sample.
+//!
+//! Store (packaged) apps: their window frame belongs to ApplicationFrameHost.exe and the app itself
+//! draws in a child `Windows.UI.Core.CoreWindow`; the window is credited to the process that owns that
+//! child. Their friendly name and logo come from the package's AppxManifest.xml.
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
+use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex, PoisonError};
 
 use windows::Win32::Foundation::{HWND, LPARAM};
@@ -16,10 +21,10 @@ use windows::Win32::Graphics::Gdi::{
     GetDIBits, GetObjectW, HBITMAP, HGDIOBJ,
 };
 use windows::Win32::Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW};
-use windows::Win32::UI::Shell::ExtractIconExW;
+use windows::Win32::UI::Shell::{ExtractIconExW, SHLoadIndirectString};
 use windows::Win32::UI::WindowsAndMessaging::{
-    DestroyIcon, EnumWindows, GW_OWNER, GWL_EXSTYLE, GetIconInfo, GetWindow, GetWindowLongW, GetWindowTextLengthW,
-    GetWindowThreadProcessId, HICON, ICONINFO, IsWindowVisible, WS_EX_TOOLWINDOW,
+    DestroyIcon, EnumChildWindows, EnumWindows, GW_OWNER, GWL_EXSTYLE, GetClassNameW, GetIconInfo, GetWindow,
+    GetWindowLongW, GetWindowTextLengthW, GetWindowThreadProcessId, HICON, ICONINFO, IsWindowVisible, WS_EX_TOOLWINDOW,
 };
 use windows::core::{BOOL, PCWSTR};
 
@@ -27,16 +32,56 @@ use crate::util::{from_wide, wide};
 
 static DESCRIPTIONS: LazyLock<Mutex<HashMap<String, String>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 static ICONS: LazyLock<Mutex<HashMap<String, Option<String>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+/// Package folder (lower case) -> what its manifest says, read once per package.
+static PACKAGES: LazyLock<Mutex<HashMap<String, Option<Package>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 // --------------------------------------------------------------------------- windows
+
+fn class_name(hwnd: HWND) -> String {
+    let mut buffer = [0u16; 128];
+    // SAFETY: `buffer` is writable for its length.
+    let length = unsafe { GetClassNameW(hwnd, &mut buffer) };
+    from_wide(&buffer[..length.max(0) as usize])
+}
+
+fn window_pid(hwnd: HWND) -> u32 {
+    let mut pid = 0u32;
+    // SAFETY: `pid` is a valid out pointer.
+    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+    pid
+}
+
+/// (frame owner pid, app pid found so far) while looking through the children of a Store app frame.
+unsafe extern "system" fn find_core_window(hwnd: HWND, data: LPARAM) -> BOOL {
+    // SAFETY: `data` is the address of the tuple passed by `frame_app_pid`, alive during EnumChildWindows.
+    let found = unsafe { &mut *(data.0 as *mut (u32, u32)) };
+    if class_name(hwnd) == "Windows.UI.Core.CoreWindow" {
+        let pid = window_pid(hwnd);
+        if pid != 0 && pid != found.0 {
+            found.1 = pid;
+            return BOOL(0);
+        }
+    }
+    BOOL(1)
+}
+
+/// The process of the Store app shown in an ApplicationFrameHost frame (None when the app is
+/// suspended or minimized and its CoreWindow is not attached to the frame).
+fn frame_app_pid(frame: HWND, frame_pid: u32) -> Option<u32> {
+    let mut found = (frame_pid, 0u32);
+    // SAFETY: the callback only uses `found` through the pointer for the duration of the call.
+    let _ = unsafe { EnumChildWindows(Some(frame), Some(find_core_window), LPARAM((&raw mut found) as isize)) };
+    (found.1 != 0).then_some(found.1)
+}
 
 unsafe extern "system" fn collect_window(hwnd: HWND, data: LPARAM) -> BOOL {
     // SAFETY: `data` is the address of the HashSet passed by `window_pids`, alive during EnumWindows.
     let pids = unsafe { &mut *(data.0 as *mut HashSet<u32>) };
     if is_app_window(hwnd) {
-        let mut pid = 0u32;
-        // SAFETY: `pid` is a valid out pointer.
-        unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+        let mut pid = window_pid(hwnd);
+        if pid != 0 && class_name(hwnd) == "ApplicationFrameWindow" {
+            pid = frame_app_pid(hwnd, pid).unwrap_or(pid);
+        }
         if pid != 0 {
             pids.insert(pid);
         }
@@ -137,7 +182,7 @@ fn read_description(path: &str) -> Option<String> {
 }
 
 /// The file description of an executable ("Google Chrome", "Visual Studio Code"), cached per path.
-/// None when the file has no version resource or cannot be read.
+/// For a Store app, the name its package shows ("Calculator"). None when nothing is known.
 pub fn file_description(path: &str) -> Option<String> {
     if path.is_empty() {
         return None;
@@ -146,7 +191,10 @@ pub fn file_description(path: &str) -> Option<String> {
     if let Some(known) = DESCRIPTIONS.lock().unwrap_or_else(PoisonError::into_inner).get(&key) {
         return (!known.is_empty()).then(|| known.clone());
     }
-    let found = read_description(path).unwrap_or_default();
+    let found = package_of(path)
+        .and_then(|package| package.display_name)
+        .or_else(|| read_description(path))
+        .unwrap_or_default();
     DESCRIPTIONS
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
@@ -360,7 +408,10 @@ pub fn icon_data_url(path: &str) -> Option<String> {
     if let Some(known) = ICONS.lock().unwrap_or_else(PoisonError::into_inner).get(&key) {
         return known.clone();
     }
-    let found = read_icon(path);
+    let found = package_of(path)
+        .and_then(|package| package.logo)
+        .and_then(|logo| logo_data_url(&logo))
+        .or_else(|| read_icon(path));
     ICONS
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
@@ -368,9 +419,254 @@ pub fn icon_data_url(path: &str) -> Option<String> {
     found
 }
 
+// --------------------------------------------------------------------------- Store packages
+
+/// What an app's package manifest says about it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Package {
+    display_name: Option<String>,
+    /// The best existing variant of the app's small logo (Square44x44Logo).
+    logo: Option<PathBuf>,
+}
+
+/// The value of `name="..."` inside an XML start tag (entities decoded).
+fn attribute(tag: &str, name: &str) -> Option<String> {
+    let mut rest = tag;
+    while let Some(at) = rest.find(name) {
+        let before = rest[..at].chars().last();
+        let after = &rest[at + name.len()..];
+        rest = after;
+        if before.is_some_and(|c| !c.is_whitespace()) {
+            continue;
+        }
+        let after = after.trim_start();
+        let Some(after) = after.strip_prefix('=') else { continue };
+        let after = after.trim_start();
+        let quote = after.chars().next().filter(|c| *c == '"' || *c == '\'')?;
+        let value = &after[1..];
+        let end = value.find(quote)?;
+        return Some(
+            value[..end]
+                .replace("&quot;", "\"")
+                .replace("&apos;", "'")
+                .replace("&lt;", "<")
+                .replace("&gt;", ">")
+                .replace("&amp;", "&"),
+        );
+    }
+    None
+}
+
+/// The start tag beginning at `<name` (namespace prefixes allowed, e.g. `uap:VisualElements`).
+fn start_tag<'a>(xml: &'a str, local_name: &str) -> Option<&'a str> {
+    let mut search = xml;
+    while let Some(open) = search.find('<') {
+        let tail = &search[open + 1..];
+        let end = tail.find('>')?;
+        let tag = &tail[..end];
+        let element = tag.split_whitespace().next().unwrap_or("");
+        let local = element.rsplit(':').next().unwrap_or(element);
+        if local == local_name {
+            return Some(tag);
+        }
+        search = &tail[end..];
+    }
+    None
+}
+
+/// The manifest's display name, resolved when it points into the package's resources.
+fn resolve_name(value: &str, identity: &str, full_name: &str) -> Option<String> {
+    let Some(key) = value.strip_prefix("ms-resource:") else {
+        return Some(value.to_string()).filter(|v| !v.trim().is_empty());
+    };
+    let uri = if let Some(absolute) = key.strip_prefix("//") {
+        format!("ms-resource://{absolute}")
+    } else if key.starts_with('/') {
+        format!("ms-resource://{identity}{key}")
+    } else if key.contains('/') {
+        format!("ms-resource://{identity}/{key}")
+    } else {
+        format!("ms-resource://{identity}/Resources/{key}")
+    };
+    let source = wide(&format!("@{{{full_name}? {uri}}}"));
+    let mut buffer = [0u16; 512];
+    // SAFETY: `source` is NUL-terminated and `buffer` is writable for its length.
+    unsafe { SHLoadIndirectString(PCWSTR(source.as_ptr()), &mut buffer, None) }.ok()?;
+    let length = buffer.iter().position(|c| *c == 0).unwrap_or(buffer.len());
+    let text = from_wide(&buffer[..length]).trim().to_string();
+    (!text.is_empty() && !text.starts_with("ms-resource:")).then_some(text)
+}
+
+/// The smallest good variant of a manifest logo: `Logo.targetsize-32_altform-unplated.png`,
+/// `Logo.targetsize-32.png`, ..., `Logo.scale-100.png`, or the file itself.
+fn best_logo(package: &Path, relative: &str) -> Option<PathBuf> {
+    let declared = package.join(relative.replace('/', "\\"));
+    let folder = declared.parent()?;
+    let stem = declared.file_stem()?.to_string_lossy().to_lowercase();
+    let extension = declared
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    let preferences = [
+        "targetsize-32_altform-unplated",
+        "targetsize-32_altform-lightunplated",
+        "targetsize-32",
+        "targetsize-48_altform-unplated",
+        "targetsize-48",
+        "targetsize-24_altform-unplated",
+        "targetsize-24",
+        "scale-100",
+        "scale-200",
+    ];
+    let mut variants: Vec<(usize, PathBuf)> = Vec::new();
+    for entry in std::fs::read_dir(folder).ok()?.flatten() {
+        let name = entry.file_name().to_string_lossy().to_lowercase();
+        let Some(qualifiers) = name
+            .strip_prefix(&format!("{stem}."))
+            .and_then(|rest| rest.strip_suffix(&format!(".{extension}")))
+        else {
+            continue;
+        };
+        if let Some(rank) = preferences.iter().position(|p| *p == qualifiers) {
+            variants.push((rank, entry.path()));
+        }
+    }
+    variants.sort_by_key(|(rank, _)| *rank);
+    variants
+        .into_iter()
+        .map(|(_, path)| path)
+        .next()
+        .or_else(|| declared.is_file().then_some(declared))
+}
+
+fn read_package(folder: &Path, exe: &Path) -> Option<Package> {
+    let xml = std::fs::read_to_string(folder.join("AppxManifest.xml")).ok()?;
+    let identity = start_tag(&xml, "Identity")
+        .and_then(|tag| attribute(tag, "Name"))
+        .unwrap_or_default();
+    // The folder name of an installed package is its full name.
+    let full_name = folder
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let relative = exe
+        .strip_prefix(folder)
+        .map(|r| r.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    // The <Application> whose Executable is this file, else the first one.
+    let mut chosen: Option<&str> = None;
+    let mut rest = xml.as_str();
+    while let Some(at) = rest.find("<Application ") {
+        let block_end = rest[at..].find("</Application>").map_or(rest.len(), |end| at + end);
+        let block = &rest[at..block_end];
+        let executable = start_tag(block, "Application")
+            .and_then(|tag| attribute(tag, "Executable"))
+            .map(|e| e.replace('/', "\\").to_lowercase());
+        if chosen.is_none() || executable.as_deref() == Some(relative.as_str()) {
+            chosen = Some(block);
+            if executable.as_deref() == Some(relative.as_str()) {
+                break;
+            }
+        }
+        rest = &rest[block_end..];
+    }
+    let visual = chosen.and_then(|block| start_tag(block, "VisualElements"));
+    let display_name = visual
+        .and_then(|tag| attribute(tag, "DisplayName"))
+        .or_else(|| {
+            let start = xml.find("<DisplayName>")? + "<DisplayName>".len();
+            let end = xml[start..].find("</DisplayName>")? + start;
+            Some(xml[start..end].trim().to_string())
+        })
+        .and_then(|name| resolve_name(&name, &identity, &full_name));
+    let logo = visual
+        .and_then(|tag| attribute(tag, "Square44x44Logo"))
+        .and_then(|relative| best_logo(folder, &relative));
+    Some(Package { display_name, logo })
+}
+
+/// The package an executable belongs to (an AppxManifest.xml in its folder or up to three levels
+/// above), read once per package.
+fn package_of(path: &str) -> Option<Package> {
+    let exe = Path::new(path);
+    let folder = exe
+        .ancestors()
+        .skip(1)
+        .take(4)
+        .find(|dir| dir.join("AppxManifest.xml").is_file())?
+        .to_path_buf();
+    let key = folder.to_string_lossy().to_lowercase();
+    if let Some(known) = PACKAGES.lock().unwrap_or_else(PoisonError::into_inner).get(&key) {
+        return known.clone();
+    }
+    let found = read_package(&folder, exe);
+    PACKAGES
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert(key, found.clone());
+    found
+}
+
+/// A logo file as a data URL (PNG only, small files only: these are 24-48 px images).
+fn logo_data_url(path: &Path) -> Option<String> {
+    let is_png = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("png"));
+    let bytes = std::fs::read(path).ok()?;
+    if !is_png || bytes.len() > 64 * 1024 || !bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+        return None;
+    }
+    Some(format!("data:image/png;base64,{}", base64(&bytes)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn manifest_attributes_and_tags_are_read() {
+        let xml = r#"<Package><Identity Name="Contoso.Notes" Version="1.0.0.0"/>
+            <Applications><Application Id="App" Executable="Notes.exe"><uap:VisualElements
+            DisplayName="Contoso &amp; Notes" Square44x44Logo="Assets\Small.png"/></Application></Applications></Package>"#;
+        let identity = start_tag(xml, "Identity").and_then(|t| attribute(t, "Name"));
+        assert_eq!(identity.as_deref(), Some("Contoso.Notes"));
+        let visual = start_tag(xml, "VisualElements").expect("visual elements");
+        assert_eq!(attribute(visual, "DisplayName").as_deref(), Some("Contoso & Notes"));
+        assert_eq!(
+            attribute(visual, "Square44x44Logo").as_deref(),
+            Some(r"Assets\Small.png")
+        );
+        assert_eq!(attribute(visual, "Name"), None, "DisplayName is not Name");
+        assert_eq!(resolve_name("Plain name", "x", "y").as_deref(), Some("Plain name"));
+    }
+
+    #[test]
+    fn package_folders_give_their_name_and_logo() {
+        let dir = std::env::temp_dir().join(format!("vigil-pkg-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let assets = dir.join("Assets");
+        std::fs::create_dir_all(&assets).ok();
+        std::fs::write(
+            dir.join("AppxManifest.xml"),
+            r#"<Package><Identity Name="Contoso.Notes"/><Applications><Application Id="App" Executable="bin\Notes.exe">
+               <uap:VisualElements DisplayName="Contoso Notes" Square44x44Logo="Assets\Small.png"/></Application></Applications></Package>"#,
+        )
+        .ok();
+        let png = encode_png(1, 1, &[0, 0, 0, 255]);
+        std::fs::write(assets.join("Small.scale-200.png"), &png).ok();
+        std::fs::write(assets.join("Small.targetsize-32.png"), &png).ok();
+        let exe = dir.join("bin").join("Notes.exe");
+        let package = package_of(&exe.to_string_lossy()).expect("package");
+        assert_eq!(package.display_name.as_deref(), Some("Contoso Notes"));
+        assert!(
+            package
+                .logo
+                .as_ref()
+                .is_some_and(|l| l.ends_with("Small.targetsize-32.png")),
+            "{:?}",
+            package.logo
+        );
+        assert!(logo_data_url(package.logo.as_deref().unwrap_or(Path::new(""))).is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn png_is_well_formed() {

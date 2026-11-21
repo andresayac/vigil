@@ -29,6 +29,8 @@ export interface Picked {
   label: string;
   /** Processes in the selected entry: more than one for a group. */
   count: number;
+  /** Every process of the entry (End task on a group ends them all). */
+  members: ProcessRow[];
 }
 
 export const processKey = (r: ProcessRow): string => `${r.pid}:${r.createdMs}`;

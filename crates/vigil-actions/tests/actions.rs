@@ -266,6 +266,49 @@ fn disable_startup_entry_and_undo() {
 }
 
 #[test]
+fn enable_startup_entry_and_undo() {
+    let fx = Fixture::new();
+    let scratch = ScratchKey::new("enable");
+    let (run_key, approved) = scratch_run_keys(&scratch);
+    vigil_actions::reg_write(
+        &run_key,
+        "Updater",
+        &json!({"type": "REG_SZ", "data": "C:\\x\\updater.exe"}),
+    )
+    .expect("w");
+    let enable = spec("startup.enable", json!({"key": run_key, "value": "Updater"}));
+    let first = execute(&enable, &fx.store, None, "");
+    assert!(
+        first.ok() && first.message().contains("already"),
+        "no switch value means on: {}",
+        first.message()
+    );
+    let off = json!({"type": "REG_BINARY", "data": {"hex": "030000000080e2c0f87adc01"}});
+    vigil_actions::reg_write(&approved, "Updater", &off).expect("w");
+    let record = execute(&enable, &fx.store, None, "");
+    assert!(record.ok(), "{}", record.message());
+    let blob = vigil_actions::reg_read(&approved, "Updater")
+        .expect("read")
+        .expect("blob");
+    assert_eq!(blob["data"]["hex"], "020000000000000000000000");
+    let again = execute(&enable, &fx.store, None, "");
+    assert!(again.message().contains("already"), "{}", again.message());
+    vigil_actions::undo(record.id(), &fx.store).expect("undo");
+    assert_eq!(
+        vigil_actions::reg_read(&approved, "Updater").expect("read"),
+        Some(off),
+        "undo restores the previous bytes"
+    );
+    let gone = execute(
+        &spec("startup.enable", json!({"key": run_key, "value": "Missing"})),
+        &fx.store,
+        None,
+        "",
+    );
+    assert!(!gone.ok(), "an entry that is gone is refused");
+}
+
+#[test]
 fn delete_startup_entry_and_undo() {
     let fx = Fixture::new();
     let scratch = ScratchKey::new("delete");
@@ -644,6 +687,40 @@ fn terminate_child_process() {
     assert!(record.ok(), "{}", record.message());
     assert!(record.message().starts_with("ended PING.EXE"), "{}", record.message());
     assert!(child.wait_exit(10));
+}
+
+#[test]
+fn terminate_a_group_only_ends_the_confirmed_instances() {
+    let fx = Fixture::new();
+    testing::set_admin(Some(false));
+    let mut first = ChildProcess::start();
+    let second = ChildProcess::start();
+    let started = |pid: u32| {
+        vigil_actions::Proc::get(i64::from(pid))
+            .ok()
+            .and_then(|p| p.create_time())
+    };
+    let mut terminate = spec(
+        "process.terminate",
+        json!({
+            "pids": [first.pid(), second.pid()],
+            "names": ["PING.EXE"],
+            "instances": [
+                {"pid": first.pid(), "create_time": started(first.pid())},
+                // Recorded before the PID was reused: left alone.
+                {"pid": second.pid(), "create_time": started(second.pid()).unwrap_or(0.0) - 100.0},
+            ],
+        }),
+    );
+    terminate.admin = false;
+    let record = execute(&terminate, &fx.store, None, "");
+    assert!(record.ok(), "{}", record.message());
+    assert_eq!(record.message(), format!("ended PING.EXE (PID {})", first.pid()));
+    assert!(first.wait_exit(10));
+    assert!(
+        vigil_actions::Proc::get(i64::from(second.pid())).is_ok(),
+        "the other instance still runs"
+    );
 }
 
 #[test]

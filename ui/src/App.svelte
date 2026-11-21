@@ -20,6 +20,7 @@
   import Processes from "./pages/Processes.svelte";
   import Quarantine from "./pages/Quarantine.svelte";
   import Services from "./pages/Services.svelte";
+  import Startup from "./pages/Startup.svelte";
   import Storage from "./pages/Storage.svelte";
   import System from "./pages/System.svelte";
 
@@ -72,6 +73,7 @@
     { key: "network", title: t("page.network"), icon: "", section: t("nav.live") },
     { key: "services", title: t("page.services"), icon: "", section: t("nav.live") },
     { key: "optimize", title: t("page.optimize"), icon: "", section: t("nav.maintenance") },
+    { key: "startup", title: t("page.startup"), icon: "", section: t("nav.maintenance") },
     { key: "storage", title: t("page.storage"), icon: "", section: t("nav.maintenance") },
     { key: "system", title: t("page.system"), icon: "", section: t("nav.maintenance") },
   ]);
@@ -144,7 +146,9 @@
       {:else if page === "services"}
         <Services {elevated} />
       {:else if page === "optimize"}
-        <Optimize {elevated} onscan={() => (scanOpen = true)} />
+        <Optimize {elevated} onscan={() => (scanOpen = true)} onpage={go} />
+      {:else if page === "startup"}
+        <Startup {elevated} />
       {:else if page === "storage"}
         <Storage {elevated} />
       {:else if page === "system"}

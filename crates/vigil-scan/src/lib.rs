@@ -15,6 +15,7 @@ use serde_json::Value;
 
 pub mod ai;
 pub mod cmdline;
+pub mod diff;
 pub mod model;
 pub mod pipeline;
 pub mod privacy;

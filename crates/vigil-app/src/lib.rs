@@ -126,6 +126,8 @@ pub fn run() {
             commands::space_cancel,
             commands::choose_folder,
             commands::choose_exe,
+            commands::choose_program,
+            commands::process_affinity,
             commands::hardware,
             commands::insights,
             commands::tuning_state,
@@ -136,6 +138,8 @@ pub fn run() {
             commands::process_details,
             commands::process_icons,
             commands::services_list,
+            commands::startup_list,
+            commands::startup_signatures,
             commands::ai_providers,
             commands::ai_models,
         ])

@@ -12,7 +12,7 @@ publish = false
 [dependencies]
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 regex = "1"
-serde = "1"
+serde = { version = "1", features = ["derive"] }
 # preserve_order: reports keep a stable key order, so saved files and payloads read the same.
 serde_json = { version = "1", features = ["preserve_order"] }
 sha2 = "0.10"

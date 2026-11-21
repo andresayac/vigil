@@ -161,6 +161,17 @@ export interface Analysis {
   meta: Record<string, unknown>; stats: Record<string, unknown>; summary: Summary | null;
   ai: Record<string, unknown>; posture: Record<string, unknown>; notes: { area?: string; message?: string }[];
   items: Item[];
+  /** What changed since the previous scan in the same folder; absent for a first scan. */
+  changes?: ScanChanges;
+}
+
+/** Comparison with the previous scan. `new` and `changed[].id` are ids of this scan's items; texts are already localized. */
+export interface ScanChanges {
+  previous: { started: string; path: string };
+  new: string[];
+  gone: { title: string; kind: string; path: string | null; verdict: string }[];
+  changed: { id: string; what: string[] }[];
+  posture: string[];
 }
 
 // ---------------------------------------------------------------- actions, journal, quarantine
@@ -214,17 +225,77 @@ export interface Service {
 
 export type ServiceOp = "start" | "stop" | "restart" | "start_type";
 
+/** A program Windows starts at sign-in (Startup apps page), read live. */
+export interface StartupEntry {
+  /** `reg:<key>\<value>` or `file:<path>`; what an enable/disable request names. */
+  id: string;
+  /** The registry value name, or the file name without its extension. */
+  name: string;
+  /** What Windows runs. */
+  command: string;
+  /** The program the command starts ("" when it cannot be told). */
+  executable: string;
+  /** The registry key (HKCU\…\Run) or the Startup folder. */
+  location: string;
+  /** "run", "run_once" or "folder". */
+  kind: string;
+  /** "user" (this account) or "machine" (every user). */
+  scope: string;
+  enabled: boolean;
+  /** When it was turned off, if Windows recorded it. */
+  disabledAtMs: number | null;
+  /** RunOnce entries have no on/off switch. */
+  canToggle: boolean;
+  approvedKey: string;
+  value: string;
+  /** The file in the Startup folder (folder entries only). */
+  file: string;
+  /** CompanyName and FileDescription of the program. */
+  publisher: string;
+  description: string;
+  /** The program file exists. */
+  exists: boolean;
+  /** A Windows host (rundll32, wscript, powershell…) runs what the command names: its publisher and
+   *  signature would be the host's, so they are not shown. */
+  host: boolean;
+}
+
+export interface StartupSignature {
+  status: "valid" | "unsigned" | "broken" | "untrusted" | "missing" | "unknown";
+  signer: string;
+}
+
+/** One logical processor (a Windows CPU Set). `index` is what affinity requests use. */
+export interface LogicalProcessor {
+  index: number; id: number; group: number; number: number;
+  /** Physical core: processors that share it are SMT siblings. */
+  core: number;
+  /** Higher is faster: on hybrid CPUs the performance cores have the highest class. */
+  efficiencyClass: number;
+  numaNode: number;
+}
+
+export interface Affinity { processors: LogicalProcessor[]; allowed: number[] }
+
 /** What the UI may ask Rust to do. Rust builds the real action from this and confirms it natively. */
 export type ActionRequest =
   | { kind: "finding"; itemId: string; index: number }
-  | { kind: "process"; op: string; pid: number; createdMs: number; priority?: string }
+  | {
+      kind: "process"; op: string; pid: number; createdMs: number; priority?: string;
+      /** End task on a group: every process of the group (Rust checks each one again). */
+      pids?: { pid: number; createdMs: number }[];
+      /** Processor affinity: logical-processor indexes. */
+      cores?: number[];
+    }
+  | { kind: "run"; path: string; args: string; admin: boolean }
   | { kind: "role"; op: "startup.disable" | "task.disable" | "service.manual"; itemId: string; role: number }
   | { kind: "journal"; op: "undo" | "undo_batch" | "restore" | "delete"; id: string }
   | { kind: "tuning"; op: string; params: Record<string, unknown> }
   | { kind: "cleanup"; keys: string[] }
   | { kind: "recycle"; paths: string[] }
   | { kind: "shell"; op: string; path?: string; url?: string; name?: string }
-  | { kind: "service"; op: ServiceOp; name: string; startType?: string };
+  | { kind: "service"; op: ServiceOp; name: string; startType?: string }
+  | { kind: "startup"; op: "enable" | "disable"; id: string };
 
 export interface ActionOutcome { cancelled: boolean; records: JournalRecord[]; message: string; error?: boolean }
 

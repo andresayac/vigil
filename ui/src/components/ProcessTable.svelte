@@ -259,10 +259,10 @@
     if (selected?.startsWith("g:")) {
       const entry = grouping.byKey.get(selected);
       const row = entry?.main ?? rowByKey.get(selected.slice(2));
-      if (row) next = { row, label: entry?.label ?? displayName(row), count: entry?.members.length ?? 1 };
+      if (row) next = { row, label: entry?.label ?? displayName(row), count: entry?.members.length ?? 1, members: entry?.members ?? [row] };
     } else if (selected) {
       const row = rowByKey.get(selected);
-      if (row) next = { row, label: view === "grouped" ? displayName(row) : row.name, count: 1 };
+      if (row) next = { row, label: view === "grouped" ? displayName(row) : row.name, count: 1, members: [row] };
     }
     picked = next;
   });

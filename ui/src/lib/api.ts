@@ -2,9 +2,9 @@
 // back to fictitious data from mock.ts.
 import * as mock from "./mock";
 import type {
-  ActionOutcome, ActionRequest, ActionSpec, AiProvider, AiStatus, Analysis, AppInfo, CleanupTarget, Connection, Hardware,
+  ActionOutcome, ActionRequest, ActionSpec, Affinity, AiProvider, AiStatus, Analysis, AppInfo, CleanupTarget, Connection, Hardware,
   Insight, JournalRecord, LivePayload, ProcessDetails, QuarantineEntry, ReviewOffer, ScanProgress, SecretChanges, Service, Settings,
-  SpaceScan, TuningState, Volume,
+  SpaceScan, StartupEntry, StartupSignature, TuningState, Volume,
 } from "./types";
 
 export const inApp = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -134,6 +134,14 @@ export async function processIcons(paths: string[]): Promise<Record<string, stri
 export async function services(): Promise<Service[]> {
   return inApp ? call<Service[]>("services_list") : mock.services();
 }
+/** The programs Windows starts at sign-in (read-only); changes go through runAction ({ kind: "startup" }). */
+export async function startupList(): Promise<StartupEntry[]> {
+  return inApp ? call<StartupEntry[]>("startup_list") : mock.startupList();
+}
+/** Signatures of startup programs by path (slow; cached by Rust for the session). */
+export async function startupSignatures(paths: string[]): Promise<Record<string, StartupSignature>> {
+  return inApp ? call<Record<string, StartupSignature>>("startup_signatures", { paths }) : mock.startupSignatures(paths);
+}
 export async function quarantine(): Promise<QuarantineEntry[]> {
   return inApp ? call<QuarantineEntry[]>("quarantine_list") : [];
 }
@@ -156,6 +164,14 @@ export async function chooseFolder(): Promise<string | null> {
 }
 export async function chooseExe(): Promise<string | null> {
   return inApp ? call<string | null>("choose_exe") : null;
+}
+/** Run new task's Browse button: only fills the text box (running is a separate, confirmed request). */
+export async function chooseProgram(): Promise<string | null> {
+  return inApp ? call<string | null>("choose_program") : null;
+}
+/** The logical processors and the ones a process may use now (read-only). */
+export async function processAffinity(pid: number, createdMs: number): Promise<Affinity> {
+  return inApp ? call<Affinity>("process_affinity", { pid, createdMs }) : mock.processAffinity();
 }
 export async function hardware(force = false): Promise<Hardware> {
   return inApp ? call<Hardware>("hardware", { force }) : mock.hardware();

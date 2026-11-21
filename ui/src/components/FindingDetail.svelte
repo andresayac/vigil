@@ -1,5 +1,6 @@
 <script lang="ts">
   import * as api from "../lib/api";
+  import { changesOf, sinceLast } from "../lib/changes";
   import { num, when } from "../lib/format";
   import { t, type Key } from "../lib/i18n/index.svelte";
   import { kindLabel, verdictColor, verdictLabel } from "../lib/labels";
@@ -32,6 +33,7 @@
     .filter(([k, v]) => !["topic", "uninstall", "registry_key", "folder"].includes(k) && v !== null && v !== "" &&
             !(Array.isArray(v) && !v.length) && !(typeof v === "object" && v && !Object.keys(v).length))
     .slice(0, 24));
+  const since = $derived(sinceLast(changesOf(report.analysis), item.id));
   const manual = $derived((item.remediation ?? []).filter((s: any) => s.note || s.command).slice(0, 10) as any[]);
 
   function signature(): string {
@@ -91,6 +93,12 @@
   {#if item.what}<p class="selectable">{item.what}</p>{/if}
   {#if item.reason}<h4>{t("detail.why")}</h4><p class="selectable">{item.reason}</p>{/if}
   {#if item.action}<h4>{t("detail.recommendation")}</h4><p class="selectable">{item.action}</p>{/if}
+
+  {#if since}
+    <h4>{t("detail.since")}</h4>
+    {#if since.isNew}<p class="muted">{t("detail.sinceNew")}</p>{/if}
+    {#if since.what.length}<ul>{#each since.what as line, index (index)}<li class="selectable">{line}</li>{/each}</ul>{/if}
+  {/if}
 
   {#if specs.length || !item.trusted}
     <h4>{t("detail.actions")}</h4>

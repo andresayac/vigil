@@ -38,6 +38,26 @@ fn op_process_terminate(p: Params<'_>, _store: &Store, _id: &str) -> Result<Outc
         &names,
         Some(scan_started.as_str()).filter(|s| !s.is_empty()),
     );
+    // A group ended from the process list names each instance (PID + start time): a PID reused since
+    // the confirmation is left alone.
+    let instances: Vec<(i64, f64)> = p
+        .list("instances")
+        .into_iter()
+        .filter_map(|v| Some((as_int(v.get("pid")?)?, v.get("create_time")?.as_f64()?)))
+        .collect();
+    let found: Vec<Proc> = if instances.is_empty() {
+        found
+    } else {
+        found
+            .into_iter()
+            .filter(|proc| {
+                instances.iter().any(|(pid, started)| {
+                    *pid == i64::from(proc.pid)
+                        && procs::create_time(proc.pid).is_some_and(|now| (now - started).abs() <= 1.0)
+                })
+            })
+            .collect()
+    };
     if found.is_empty() {
         return Ok(Outcome::done(tr!("no matching process is running now")));
     }
@@ -655,8 +675,10 @@ fn disabled_blob() -> Vec<u8> {
     out
 }
 
-fn op_startup_disable(p: Params<'_>, _store: &Store, _id: &str) -> Result<Outcome> {
-    let (approved, value, label) = if p.flag("file") {
+/// The switch of a startup entry: (StartupApproved key, value name, label for messages). The same
+/// checks guard turning it off and on.
+fn startup_switch(p: &Params<'_>) -> Result<(String, String, String)> {
+    Ok(if p.flag("file") {
         let file_path = p.req_str("file")?;
         if !Path::new(&file_path).exists() {
             return fail(tr!("the file is no longer in the Startup folder"));
@@ -681,14 +703,44 @@ fn op_startup_disable(p: Params<'_>, _store: &Store, _id: &str) -> Result<Outcom
         };
         let label = format!("\"{value}\"");
         (approved, value, label)
-    };
-    let previous = reg_read(&approved, &value)?;
-    let state = previous
-        .as_ref()
+    })
+}
+
+/// Whether a StartupApproved value (as `reg_read` returns it) turns the entry off: an odd first
+/// byte. No value means on.
+fn switch_is_off(previous: Option<&Value>) -> bool {
+    previous
         .and_then(|s| s.get("data"))
         .and_then(|d| d.get("hex"))
-        .and_then(Value::as_str);
-    if state.is_some_and(|hex| hex.starts_with("03") || hex.starts_with("07")) {
+        .and_then(Value::as_str)
+        .and_then(|hex| hex.get(..2))
+        .and_then(|byte| u8::from_str_radix(byte, 16).ok())
+        .is_some_and(|byte| byte % 2 == 1)
+}
+
+fn op_startup_enable(p: Params<'_>, _store: &Store, _id: &str) -> Result<Outcome> {
+    let (approved, value, label) = startup_switch(&p)?;
+    let previous = reg_read(&approved, &value)?;
+    if !switch_is_off(previous.as_ref()) {
+        return Ok(Outcome::done(tr!("{0} was already enabled", label)));
+    }
+    // What Task Manager writes when an entry is turned back on.
+    let enabled = [2u8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    reg_write(
+        &approved,
+        &value,
+        &json!({ "type": "REG_BINARY", "data": { "hex": registry::hex(&enabled) } }),
+    )?;
+    Ok(Outcome::new(
+        tr!("enabled the startup entry {0} (same switch as Task Manager)", label),
+        Some(json!({ "key": approved, "value": value, "previous": previous })),
+    ))
+}
+
+fn op_startup_disable(p: Params<'_>, _store: &Store, _id: &str) -> Result<Outcome> {
+    let (approved, value, label) = startup_switch(&p)?;
+    let previous = reg_read(&approved, &value)?;
+    if switch_is_off(previous.as_ref()) {
         return Ok(Outcome::done(tr!("{0} was already disabled", label)));
     }
     reg_write(
@@ -1262,6 +1314,12 @@ pub(crate) fn builtin() -> Vec<Builtin> {
         (
             "startup.disable",
             run_fn(op_startup_disable),
+            Some(undo_fn(undo_registry_value)),
+            false,
+        ),
+        (
+            "startup.enable",
+            run_fn(op_startup_enable),
             Some(undo_fn(undo_registry_value)),
             false,
         ),

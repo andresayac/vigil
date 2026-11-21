@@ -2,7 +2,7 @@
 
 use vigil_i18n::{tl, tr};
 
-const OP_LABELS: [(&str, &str); 48] = [
+const OP_LABELS: &[(&str, &str)] = &[
     ("process.terminate", tl!("End process")),
     ("process.suspend", tl!("Suspend process")),
     ("process.resume", tl!("Resume process")),
@@ -16,6 +16,7 @@ const OP_LABELS: [(&str, &str); 48] = [
     ("task.disable", tl!("Disable task")),
     ("task.delete", tl!("Delete task")),
     ("startup.disable", tl!("Disable startup entry")),
+    ("startup.enable", tl!("Enable startup entry")),
     ("registry.delete", tl!("Delete registry value")),
     ("winlogon.restore", tl!("Restore Winlogon value")),
     ("appinit.off", tl!("Turn off AppInit DLLs")),
@@ -36,7 +37,9 @@ const OP_LABELS: [(&str, &str); 48] = [
     ("process.priority", tl!("Change priority")),
     ("process.efficiency", tl!("Efficiency mode")),
     ("process.background", tl!("Low disk and memory priority")),
+    ("process.affinity", tl!("Processor affinity")),
     ("process.trim", tl!("Trim memory")),
+    ("process.run", tl!("Run new task")),
     ("memory.trim_all", tl!("Trim all programs")),
     ("memory.purge_standby", tl!("Free standby memory")),
     ("power.plan", tl!("Switch power plan")),

@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import AffinityDialog from "../components/AffinityDialog.svelte";
   import ProcessTable, { type Totals, type View } from "../components/ProcessTable.svelte";
+  import RunTaskDialog from "../components/RunTaskDialog.svelte";
   import { age, num, pct, size } from "../lib/format";
   import { t, type Key } from "../lib/i18n/index.svelte";
   import { PRIORITIES, priorityLabel } from "../lib/labels";
@@ -14,6 +16,8 @@
     focusPid?: number | null; elevated: boolean; autoRefresh?: boolean; onshowfinding?: (id: string) => void;
   } = $props();
   let menu = $state<"" | "priority" | "file" | "more">("");
+  let runOpen = $state(false);
+  let affinityFor = $state<{ pid: number; createdMs: number; name: string } | null>(null);
 
   let filter = $state("");
   let selected = $state<string | null>(null);
@@ -118,6 +122,20 @@
     menu = "";
     if (row) void act({ kind: "process", op, pid: row.pid, createdMs: row.createdMs, priority });
   }
+  /** End task: a group row ends every process of the group (Rust checks each one again and leaves out protected ones). */
+  function endTask(): void {
+    menu = "";
+    if (!row || !picked) return;
+    if (!group) return run("terminate");
+    void act({
+      kind: "process", op: "terminate", pid: row.pid, createdMs: row.createdMs,
+      pids: picked.members.map((m) => ({ pid: m.pid, createdMs: m.createdMs })),
+    });
+  }
+  function openAffinity(): void {
+    menu = "";
+    if (row) affinityFor = { pid: row.pid, createdMs: row.createdMs, name: `${row.name} (PID ${row.pid})` };
+  }
   const toggleMenu = (name: typeof menu) => (menu = menu === name ? "" : name);
   const canEnd = $derived(!!row && row.pid > 4 && !report.busy);
 </script>
@@ -134,8 +152,10 @@
     <h2>{t("page.processes")}</h2>
     <span class="grow"></span>
     <div class="commandbar">
-      <button class="command" disabled={!canEnd} title={group ? t("proc.endGroupTip") : ""}
-              onclick={() => run(group ? "terminate_tree" : "terminate")}><i class="icon">{""}</i>{t("proc.endTask")}</button>
+      <button class="command" disabled={report.busy} onclick={() => { menu = ""; runOpen = true; }}>
+        <i class="icon">{""}</i>{t("proc.runTask")}</button>
+      <button class="command" disabled={!canEnd} title={group ? t("proc.endGroupTip", { count: picked?.count ?? 0 }) : ""}
+              onclick={endTask}><i class="icon">{""}</i>{t("proc.endTask")}</button>
       <button class="command" disabled={!row || report.busy} onclick={() => run("efficiency")}>
         <i class="icon">{""}</i>{t("proc.efficiency")}</button>
       <div class="anchor">
@@ -148,6 +168,8 @@
             {/each}
             <hr />
             <button role="menuitem" onclick={() => run("background")} title={t("proc.backgroundTip")}>{t("proc.background")}</button>
+            <hr />
+            <button role="menuitem" onclick={openAffinity}>{t("proc.affinity")}</button>
           </div>
         {/if}
       </div>
@@ -256,6 +278,9 @@
       {/if}
     </section>
   {/if}
+
+  <RunTaskDialog open={runOpen} {elevated} onclose={() => (runOpen = false)} />
+  <AffinityDialog open={affinityFor !== null} target={affinityFor} onclose={() => (affinityFor = null)} />
 
   <div class="faint footer">
     {[

@@ -29,6 +29,21 @@ pub enum Request {
         pid: u32,
         created_ms: i64,
         priority: Option<String>,
+        /// End task on a group: every process of the group (at most `MAX_GROUP`).
+        #[serde(default)]
+        pids: Vec<ProcessRef>,
+        /// Processor affinity: the logical-processor indexes the process may use.
+        #[serde(default)]
+        cores: Vec<u32>,
+    },
+    /// Run new task: a program (full path or bare name), its arguments, and whether to ask for
+    /// administrator rights.
+    Run {
+        path: String,
+        #[serde(default)]
+        args: String,
+        #[serde(default)]
+        admin: bool,
     },
     #[serde(rename_all = "camelCase")]
     Role {
@@ -63,7 +78,23 @@ pub enum Request {
         name: String,
         start_type: Option<String>,
     },
+    /// Turn a startup app on or off (`id` from `startup_list`).
+    Startup {
+        op: String,
+        id: String,
+    },
 }
+
+/// One process instance as the page saw it.
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessRef {
+    pub pid: u32,
+    pub created_ms: i64,
+}
+
+/// The most processes one End task may name.
+pub const MAX_GROUP: usize = 256;
 
 /// What to do with a request once it is understood.
 #[derive(Debug, Clone)]
@@ -97,6 +128,8 @@ pub struct Context<'a> {
     pub drive_media: &'a [(String, String)],
     /// The live Windows services (read for service requests only).
     pub services: &'a [vigil_sys::services::Service],
+    /// The live startup apps (read for startup requests only).
+    pub startup: &'a [vigil_sys::startup::StartupEntry],
 }
 
 pub const PRIORITY_LABEL: [(&str, &str); 5] = [
@@ -218,7 +251,18 @@ pub fn build(request: &Request, ctx: &Context<'_>) -> Result<Plan, String> {
             pid,
             created_ms,
             priority,
-        } => process_plan(op, *pid, *created_ms, priority.as_deref(), ctx),
+            pids,
+            cores,
+        } => {
+            if !pids.is_empty() && matches!(op.as_str(), "terminate" | "terminate_tree") {
+                return group_terminate_plan(*pid, *created_ms, pids, op == "terminate_tree", ctx);
+            }
+            if op == "affinity" {
+                return affinity_plan(*pid, *created_ms, cores, ctx);
+            }
+            process_plan(op, *pid, *created_ms, priority.as_deref(), ctx)
+        }
+        Request::Run { path, args, admin } => run_plan(path, args, *admin),
         Request::Journal { op, id } => {
             let id = id.trim();
             if id.is_empty() || id.len() > 80 || !id.chars().all(|c| c.is_ascii_alphanumeric() || "-_.:".contains(c)) {
@@ -237,7 +281,68 @@ pub fn build(request: &Request, ctx: &Context<'_>) -> Result<Plan, String> {
         Request::Recycle { paths } => recycle_plan(paths, ctx),
         Request::Shell { op, path, url, name } => shell_plan(op, path.as_deref(), url.as_deref(), name.as_deref()),
         Request::Service { op, name, start_type } => service_plan(op, name, start_type.as_deref(), ctx),
+        Request::Startup { op, id } => startup_plan(op, id, ctx),
     }
+}
+
+/// Turning a startup app on or off. The entry must be in the live list; its key, value or file
+/// come from that list, never from the page.
+fn startup_plan(op: &str, id: &str, ctx: &Context<'_>) -> Result<Plan, String> {
+    let entry = ctx
+        .startup
+        .iter()
+        .find(|e| e.id == id)
+        .ok_or(tr!("The startup app is no longer there. Refresh the list."))?;
+    if !entry.can_toggle {
+        return Err(tr!("This entry runs only once and has no on/off switch."));
+    }
+    let (params, target) = if entry.kind == "folder" {
+        (json!({ "file": entry.file }), entry.file.clone())
+    } else {
+        (
+            json!({ "key": entry.location, "value": entry.value }),
+            format!("{}\\{}", entry.location, entry.value),
+        )
+    };
+    let shown = if entry.description.is_empty() {
+        &entry.name
+    } else {
+        &entry.description
+    };
+    let quoted = format!("\"{shown}\"");
+    let built = match op {
+        "disable" => spec(
+            "startup.disable",
+            tr!("Disable startup app {0}", quoted),
+            target,
+            tr!(
+                "Windows will not start it the next time you sign in. Nothing is closed or deleted: the entry stays where it is, with the same switch Task Manager uses, and you can turn it back on here or in Task Manager."
+            ),
+        )
+        .group("disable"),
+        "enable" => {
+            let built = spec(
+                "startup.enable",
+                tr!("Enable startup app {0}", quoted),
+                target,
+                tr!("Windows starts it again the next time you sign in. It is not started now."),
+            )
+            .group("fix");
+            if entry.exists {
+                built
+            } else {
+                built.warning(&tr!("The program this entry starts was not found, so Windows cannot start it."))
+            }
+        }
+        _ => return Err(tr!("Unknown request: {0}", op)),
+    };
+    let built = built.params(params);
+    // The user's own entries live in their part of the registry: no administrator rights needed.
+    let built = if entry.scope == "user" { built.no_admin() } else { built };
+    Ok(Plan::Run {
+        spec: built,
+        item: None,
+    })
 }
 
 /// A service the action engine refuses to change: an essential Windows service, or a Windows
@@ -521,6 +626,198 @@ fn process_plan(
     Ok(classify(spec, None))
 }
 
+fn live_row<'r>(ctx: &'r Context<'_>, pid: u32, created_ms: i64) -> Option<&'r vigil_sys::process::ProcessRow> {
+    ctx.processes
+        .iter()
+        .find(|r| r.pid == pid && (created_ms == 0 || r.created_ms == created_ms))
+}
+
+/// End task on a group row: one `process.terminate` for every process of the group that still runs
+/// (same PID and start time). Protected processes are left out, and the confirmation says so.
+fn group_terminate_plan(
+    pid: u32,
+    created_ms: i64,
+    refs: &[ProcessRef],
+    tree: bool,
+    ctx: &Context<'_>,
+) -> Result<Plan, String> {
+    if refs.len() > MAX_GROUP {
+        return Err(tr!("Too many processes at once (at most {0}).", MAX_GROUP));
+    }
+    let mut live: Vec<&vigil_sys::process::ProcessRow> = Vec::new();
+    let mut protected: Vec<String> = Vec::new();
+    for r in refs {
+        let Some(row) = ctx
+            .processes
+            .iter()
+            .find(|row| row.pid == r.pid && row.created_ms == r.created_ms)
+        else {
+            continue;
+        };
+        if live.iter().any(|l| l.pid == row.pid) {
+            continue;
+        }
+        let proc = vigil_actions::Proc {
+            pid: row.pid,
+            name: row.name.clone(),
+        };
+        if let Some(reason) = vigil_actions::process_protection(&proc) {
+            protected.push(format!("{} (PID {}): {reason}", row.name, row.pid));
+        } else {
+            live.push(row);
+        }
+    }
+    if live.is_empty() {
+        return Err(if protected.is_empty() {
+            tr!("These processes have exited.")
+        } else {
+            tr!("Every process here is protected: {0}", protected.join("; "))
+        });
+    }
+    let main = live_row(ctx, pid, created_ms).unwrap_or(live[0]);
+    let program = if main.description.trim().is_empty() {
+        main.name.clone()
+    } else {
+        main.description.trim().to_string()
+    };
+    let count = live.len();
+    let mut names: Vec<&str> = live.iter().map(|r| r.name.as_str()).collect();
+    names.sort_unstable_by_key(|n| n.to_lowercase());
+    names.dedup_by_key(|n| n.to_lowercase());
+    let explain = match (count, tree) {
+        (1, false) => tr!("Ends {0}. Unsaved work in it is lost.", program),
+        (1, true) => tr!(
+            "Ends {0} and every process it started. Unsaved work in them is lost.",
+            program
+        ),
+        (_, false) => tr!(
+            "Ends the {0} processes of {1}. Unsaved work in them is lost.",
+            count,
+            program
+        ),
+        (_, true) => tr!(
+            "Ends the {0} processes of {1} and every process they started. Unsaved work in them is lost.",
+            count,
+            program
+        ),
+    };
+    let target = if count == 1 {
+        format!("{} (PID {})", main.name, live[0].pid)
+    } else {
+        tr!("{0} ({1} processes)", program, count)
+    };
+    let warning = if protected.is_empty() {
+        String::new()
+    } else {
+        tr!("Left out because they are protected: {0}", protected.join("; "))
+    };
+    let instances: Vec<Value> = live
+        .iter()
+        .map(|r| json!({"pid": r.pid, "create_time": r.created_ms as f64 / 1000.0}))
+        .collect();
+    let spec = spec("process.terminate", tr!("End task"), target, explain)
+        .params(json!({
+            "pids": live.iter().map(|r| r.pid).collect::<Vec<_>>(),
+            "names": names,
+            "tree": tree,
+            "scan_started": null,
+            "instances": instances,
+        }))
+        .group("contain")
+        .destructive()
+        .irreversible()
+        .no_admin()
+        .warning(&warning);
+    Ok(classify(spec, None))
+}
+
+/// "0-3, 8, 10-11": processor indexes for people.
+fn index_ranges(indexes: &[u32]) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < indexes.len() {
+        let start = indexes[i];
+        let mut end = start;
+        while i + 1 < indexes.len() && indexes[i + 1] == end + 1 {
+            i += 1;
+            end = indexes[i];
+        }
+        parts.push(if start == end {
+            start.to_string()
+        } else {
+            format!("{start}-{end}")
+        });
+        i += 1;
+    }
+    parts.join(", ")
+}
+
+/// Processor affinity: the logical processors (Vigil's indexes, as `cpu_topology` lists them) a
+/// process may use.
+fn affinity_plan(pid: u32, created_ms: i64, cores: &[u32], ctx: &Context<'_>) -> Result<Plan, String> {
+    let row = live_row(ctx, pid, created_ms).ok_or(tr!("The process has exited."))?;
+    let total = vigil_sys::cpusets::logical_processors().len() as u32;
+    if total == 0 {
+        return Err(tr!("Windows did not report the processors of this computer."));
+    }
+    let mut chosen: Vec<u32> = cores.to_vec();
+    chosen.sort_unstable();
+    chosen.dedup();
+    if chosen.is_empty() {
+        return Err(tr!("Choose at least one processor."));
+    }
+    if chosen.iter().any(|c| *c >= total) {
+        return Err(tr!("Unknown processor."));
+    }
+    let name = format!("{} (PID {})", row.name, row.pid);
+    let count = chosen.len() as u32;
+    let explain = if count == total {
+        tr!("Lets the process use every logical processor, as Windows does by default.")
+    } else {
+        tr!(
+            "Limits the process to {0} of the {1} logical processors (CPU {2}) until it exits. Undo restores the previous choice.",
+            count,
+            total,
+            index_ranges(&chosen)
+        )
+    };
+    let warning = if count < total && count <= total / 4 {
+        tr!("With few processors, the program can become much slower.")
+    } else {
+        String::new()
+    };
+    let spec = spec("process.affinity", tr!("Processor affinity"), &name, explain)
+        .params(json!({"pid": row.pid, "create_time": row.created_ms as f64 / 1000.0, "cores": chosen}))
+        .group("fix")
+        .no_admin()
+        .warning(&warning);
+    Ok(classify(spec, None))
+}
+
+/// Run new task: the program is resolved to one existing file and the confirmation shows the exact
+/// command line that will start.
+fn run_plan(path: &str, args: &str, admin: bool) -> Result<Plan, String> {
+    let program = vigil_actions::run::resolve_program(path).map_err(|e| e.to_string())?;
+    vigil_actions::run::check_args(args).map_err(|e| e.to_string())?;
+    let args = args.trim();
+    let line = vigil_actions::run::command_line(&program, args);
+    let elevated = vigil_actions::is_admin();
+    let mut explain = format!("{}\n{line}\n\n", tr!("Starts this command:"));
+    explain.push_str(&if admin && !elevated {
+        tr!("Windows asks for administrator permission first.")
+    } else if elevated {
+        tr!("Vigil runs as administrator, so the program also gets administrator rights.")
+    } else {
+        tr!("It runs with your normal rights.")
+    });
+    let spec = spec("process.run", tr!("Run new task"), "", explain)
+        .params(json!({"path": program, "args": args, "admin": admin}))
+        .group("fix")
+        .irreversible()
+        .no_admin();
+    Ok(Plan::Run { spec, item: None })
+}
+
 fn flag(params: &Value, key: &str) -> Result<bool, String> {
     params
         .get(key)
@@ -801,6 +1098,12 @@ fn shell_plan(op: &str, path: Option<&str>, url: Option<&str>, name: Option<&str
                 .ok_or(tr!("Unknown file."))?;
             spec("shell.location", tr!("Open file location"), path, "").params(json!({"path": path}))
         }
+        "properties" => {
+            let path = path
+                .filter(|p| Path::new(p).is_absolute())
+                .ok_or(tr!("Unknown file."))?;
+            spec("shell.properties", tr!("Properties"), path, "").params(json!({"path": path}))
+        }
         "url" => {
             let url = url
                 .filter(|u| allowed_url(u))
@@ -872,6 +1175,174 @@ mod tests {
         assert!(serde_json::from_value::<Request>(json!({"kind": "exec", "cmd": "calc"})).is_err());
     }
 
+    fn row(pid: u32, name: &str, created_ms: i64) -> vigil_sys::process::ProcessRow {
+        vigil_sys::process::ProcessRow {
+            pid,
+            ppid: 0,
+            name: name.into(),
+            exe: format!(r"C:\Program Files\Contoso\{name}"),
+            user: String::new(),
+            cmdline: String::new(),
+            cpu: 0.0,
+            private_bytes: 0,
+            working_set: 0,
+            threads: 1,
+            handles: 1,
+            session: 1,
+            created_ms,
+            io_bps: 0.0,
+            status: vigil_sys::process::ProcessStatus::Running,
+            window: false,
+            description: "Contoso Notes".into(),
+        }
+    }
+
+    fn context(processes: &[vigil_sys::process::ProcessRow]) -> Context<'_> {
+        Context {
+            analysis: None,
+            processes,
+            cleanup: &[],
+            space_files: &[],
+            power_plans: &[],
+            drive_media: &[],
+            services: &[],
+            startup: &[],
+        }
+    }
+
+    fn spec_of(plan: Result<Plan, String>) -> ActionSpec {
+        match plan {
+            Ok(Plan::Run { spec, .. }) => spec,
+            other => panic!("not a confirmed action: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn group_end_task_names_the_program_and_drops_what_is_gone_or_protected() {
+        let processes = [
+            row(5001, "notes.exe", 1_000),
+            row(5002, "notes.exe", 2_000),
+            row(5003, "notes.exe", 3_000),
+            row(std::process::id(), "vigil.exe", 500),
+        ];
+        let ctx = context(&processes);
+        let request: Request = serde_json::from_value(json!({
+            "kind": "process", "op": "terminate", "pid": 5001, "createdMs": 1000,
+            "pids": [
+                {"pid": 5001, "createdMs": 1000},
+                {"pid": 5002, "createdMs": 2000},
+                {"pid": 5003, "createdMs": 9999},
+                {"pid": std::process::id(), "createdMs": 500},
+            ],
+        }))
+        .expect("request");
+        let spec = spec_of(build(&request, &ctx));
+        assert_eq!(spec.op, "process.terminate");
+        assert_eq!(spec.target, "Contoso Notes (2 processes)");
+        assert_eq!(
+            spec.explain,
+            "Ends the 2 processes of Contoso Notes. Unsaved work in them is lost."
+        );
+        assert_eq!(
+            spec.params["pids"],
+            json!([5001, 5002]),
+            "5003 started at another time: its PID was reused"
+        );
+        assert_eq!(spec.params["instances"][1], json!({"pid": 5002, "create_time": 2.0}));
+        assert_eq!(spec.params["tree"], json!(false));
+        assert!(
+            spec.warning
+                .starts_with("Left out because they are protected: vigil.exe"),
+            "{}",
+            spec.warning
+        );
+        assert!(spec.destructive && !spec.reversible);
+
+        let only_protected: Request = serde_json::from_value(json!({
+            "kind": "process", "op": "terminate", "pid": 1, "createdMs": 0,
+            "pids": [{"pid": std::process::id(), "createdMs": 500}],
+        }))
+        .expect("request");
+        assert!(build(&only_protected, &ctx).is_err_and(|e| e.starts_with("Every process here is protected")));
+        let too_many = Request::Process {
+            op: "terminate".into(),
+            pid: 5001,
+            created_ms: 1000,
+            priority: None,
+            pids: vec![
+                ProcessRef {
+                    pid: 5001,
+                    created_ms: 1000
+                };
+                MAX_GROUP + 1
+            ],
+            cores: vec![],
+        };
+        assert!(build(&too_many, &ctx).is_err());
+    }
+
+    #[test]
+    fn affinity_requests_are_checked_against_the_processors() {
+        let processes = [row(5001, "notes.exe", 1_000)];
+        let ctx = context(&processes);
+        let total = vigil_sys::cpusets::logical_processors().len() as u32;
+        let ask = |cores: Vec<u32>| {
+            build(
+                &Request::Process {
+                    op: "affinity".into(),
+                    pid: 5001,
+                    created_ms: 1000,
+                    priority: None,
+                    pids: vec![],
+                    cores,
+                },
+                &ctx,
+            )
+        };
+        assert_eq!(ask(vec![]).err().as_deref(), Some("Choose at least one processor."));
+        assert_eq!(ask(vec![total]).err().as_deref(), Some("Unknown processor."));
+        let spec = spec_of(ask(vec![0, 0]));
+        assert_eq!(spec.op, "process.affinity");
+        assert_eq!(spec.params["cores"], json!([0]));
+        assert_eq!(spec.params["create_time"], json!(1.0));
+        assert!(spec.reversible);
+        if total > 1 {
+            assert!(spec.explain.starts_with(&format!(
+                "Limits the process to 1 of the {total} logical processors (CPU 0)"
+            )));
+        }
+        let all = spec_of(ask((0..total).rev().collect()));
+        assert!(all.explain.starts_with("Lets the process use every logical processor"));
+        assert_eq!(index_ranges(&[0, 1, 2, 3, 8, 10, 11]), "0-3, 8, 10-11");
+    }
+
+    #[test]
+    fn run_requests_resolve_one_program_and_show_its_command_line() {
+        let request: Request =
+            serde_json::from_value(json!({"kind": "run", "path": "notepad", "args": "  C:\\notes.txt  "}))
+                .expect("request");
+        let spec = spec_of(build(&request, &context(&[])));
+        assert_eq!(spec.op, "process.run");
+        let path = spec.params["path"].as_str().unwrap_or("").to_string();
+        assert!(path.to_lowercase().ends_with(r"\notepad.exe"), "{path}");
+        assert_eq!(spec.params["args"], json!(r"C:\notes.txt"));
+        assert!(
+            spec.explain.contains(&format!("\"{path}\" C:\\notes.txt")),
+            "{}",
+            spec.explain
+        );
+        assert!(!spec.reversible);
+        for bad in [
+            json!({"kind": "run", "path": ""}),
+            json!({"kind": "run", "path": r"\\203.0.113.5\share\tool.exe"}),
+            json!({"kind": "run", "path": "notepad", "args": "a\nb"}),
+            json!({"kind": "run", "path": "readme.txt"}),
+        ] {
+            let request: Request = serde_json::from_value(bad.clone()).expect("request");
+            assert!(build(&request, &context(&[])).is_err(), "{bad}");
+        }
+    }
+
     #[test]
     fn unknown_or_stale_requests_are_refused() {
         let ctx = Context {
@@ -882,12 +1353,15 @@ mod tests {
             power_plans: &[],
             drive_media: &[],
             services: &[],
+            startup: &[],
         };
         let stale = Request::Process {
             op: "terminate".into(),
             pid: 1234,
             created_ms: 1,
             priority: None,
+            pids: vec![],
+            cores: vec![],
         };
         assert!(build(&stale, &ctx).is_err());
         let recycle = Request::Recycle {
@@ -941,6 +1415,7 @@ mod tests {
             power_plans: &[],
             drive_media: &[],
             services: &services,
+            startup: &[],
         };
         let ask = |op: &str, name: &str, start: Option<&str>| {
             build(
@@ -978,6 +1453,99 @@ mod tests {
         )
         .expect("request");
         assert!(matches!(parsed, Request::Service { ref start_type, .. } if start_type.as_deref() == Some("demand")));
+    }
+
+    fn startup_entry(id: &str, kind: &str, scope: &str) -> vigil_sys::startup::StartupEntry {
+        let folder = kind == "folder";
+        vigil_sys::startup::StartupEntry {
+            id: id.into(),
+            name: "Updater".into(),
+            command: r#""C:\Program Files\Example\updater.exe" --tray"#.into(),
+            executable: r"C:\Program Files\Example\updater.exe".into(),
+            location: if folder {
+                r"C:\Users\jdoe\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup".into()
+            } else {
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run".into()
+            },
+            kind: kind.into(),
+            scope: scope.into(),
+            enabled: true,
+            disabled_at_ms: None,
+            can_toggle: kind != "run_once",
+            approved_key: String::new(),
+            value: if folder { "Updater.lnk".into() } else { "Updater".into() },
+            file: if folder {
+                r"C:\Users\jdoe\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\Updater.lnk".into()
+            } else {
+                String::new()
+            },
+            publisher: "Example Corp".into(),
+            description: "Example Updater".into(),
+            exists: true,
+            host: false,
+        }
+    }
+
+    #[test]
+    fn startup_requests_are_checked_against_the_live_list() {
+        let mut missing = startup_entry("reg:machine", "run", "machine");
+        missing.exists = false;
+        let entries = [
+            startup_entry("reg:user", "run", "user"),
+            startup_entry("file:user", "folder", "user"),
+            startup_entry("reg:once", "run_once", "user"),
+            missing,
+        ];
+        let ctx = Context {
+            analysis: None,
+            processes: &[],
+            cleanup: &[],
+            space_files: &[],
+            power_plans: &[],
+            drive_media: &[],
+            services: &[],
+            startup: &entries,
+        };
+        let ask = |op: &str, id: &str| {
+            build(
+                &Request::Startup {
+                    op: op.into(),
+                    id: id.into(),
+                },
+                &ctx,
+            )
+        };
+        let Ok(Plan::Run { spec, .. }) = ask("disable", "reg:user") else {
+            panic!("disable is offered")
+        };
+        assert_eq!(spec.op, "startup.disable");
+        assert_eq!(
+            spec.params["key"],
+            r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run"
+        );
+        assert_eq!(spec.params["value"], "Updater");
+        assert!(
+            spec.reversible && !spec.admin,
+            "the user's own entry needs no administrator"
+        );
+        assert!(spec.label.contains("Example Updater"));
+        let Ok(Plan::Run { spec, .. }) = ask("enable", "file:user") else {
+            panic!("enable is offered")
+        };
+        assert_eq!(spec.op, "startup.enable");
+        assert!(spec.params["file"].as_str().is_some_and(|f| f.ends_with("Updater.lnk")));
+        assert!(spec.params.get("key").is_none());
+        let Ok(Plan::Run { spec, .. }) = ask("enable", "reg:machine") else {
+            panic!("machine entry")
+        };
+        assert!(spec.admin, "an entry for every user needs administrator rights");
+        assert!(!spec.warning.is_empty(), "a missing program is pointed out");
+        assert!(ask("disable", "reg:once").is_err(), "RunOnce has no switch");
+        assert!(ask("disable", "reg:ghost").is_err(), "unknown ids are refused");
+        assert!(ask("delete", "reg:user").is_err(), "only enable and disable");
+        let parsed: Request =
+            serde_json::from_value(json!({"kind": "startup", "op": "enable", "id": "reg:user"})).expect("request");
+        assert!(matches!(parsed, Request::Startup { ref op, .. } if op == "enable"));
     }
 
     #[test]

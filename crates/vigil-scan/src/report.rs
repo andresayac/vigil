@@ -757,7 +757,7 @@ pub fn render_html(analysis: &Analysis) -> String {
 <div class="panel"><div class="kv">{facts_html}</div></div>
 {summary}
 <div class="panel small">{t_before}</div>
-{notes_block}
+{notes_block}{changes_block}
 <div class="toolbar">
 <div class="chips">{chips}</div>
 <input id="q" type="search" placeholder="{t_search}" aria-label="{t_search_label}">
@@ -824,6 +824,72 @@ pub fn render_html(analysis: &Analysis) -> String {
             )
         },
         posture = value_html(&posture, 0),
+        changes_block = changes_panel(analysis),
+    )
+}
+
+/// "Changes since the last scan": new, gone and changed items and settings (empty for a first scan).
+fn changes_panel(analysis: &Analysis) -> String {
+    let Some(changes) = analysis.changes.as_ref().filter(|c| c.is_object()) else {
+        return String::new();
+    };
+    let title_of = |id: &str| {
+        analysis
+            .items
+            .iter()
+            .find(|i| i.id == id)
+            .map(|i| i.title.clone())
+            .unwrap_or_else(|| id.to_string())
+    };
+    let mut lines = String::new();
+    for id in list(changes.at("new")) {
+        let id = str_of(id);
+        let verdict = analysis
+            .items
+            .iter()
+            .find(|i| i.id == id)
+            .map(|i| i.verdict.clone())
+            .unwrap_or_default();
+        let badge = verdict_label(&verdict)
+            .map(|l| format!(" <span class=\"muted\">· {}</span>", esc(&tr!(l))))
+            .unwrap_or_default();
+        lines.push_str(&format!(
+            "<li><b>{}</b> {}{badge}</li>",
+            esc(&tr!("New:")),
+            esc(&title_of(&id))
+        ));
+    }
+    for item in list(changes.at("changed")) {
+        let what: Vec<String> = list(item.at("what")).iter().map(|w| esc(&str_of(w))).collect();
+        lines.push_str(&format!(
+            "<li><b>{}</b> {}<br><span class=\"muted small\">{}</span></li>",
+            esc(&tr!("Changed:")),
+            esc(&title_of(&str_of(item.at("id")))),
+            what.join(" · ")
+        ));
+    }
+    for item in list(changes.at("gone")) {
+        lines.push_str(&format!(
+            "<li><b>{}</b> {}</li>",
+            esc(&tr!("Gone:")),
+            esc(&str_of(item.at("title")))
+        ));
+    }
+    for line in list(changes.at("posture")) {
+        lines.push_str(&format!(
+            "<li><b>{}</b> {}</li>",
+            esc(&tr!("Setting:")),
+            esc(&str_of(line))
+        ));
+    }
+    if lines.is_empty() {
+        lines = format!("<li>{}</li>", esc(&tr!("Nothing changed.")));
+    }
+    let started = str_of(changes.at("previous").at("started")).replace('T', " ");
+    format!(
+        "<h2>{}</h2><div class=\"panel\"><p class=\"muted small\">{}</p><ul>{lines}</ul></div>",
+        esc(&tr!("Changes since the last scan")),
+        esc(&tr!("Compared with the scan of {0}.", take(&started, 16)))
     )
 }
 

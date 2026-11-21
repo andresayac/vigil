@@ -164,6 +164,70 @@ fn undo_background(u: Params<'_>, _store: &Store) -> Result<String> {
     ))
 }
 
+/// Which logical processors a process may use, as Windows CPU Sets (they work across processor
+/// groups). `cores` are Vigil's processor indexes; choosing all of them removes the limit.
+fn op_affinity(p: Params<'_>, _store: &Store, _id: &str) -> Result<Outcome> {
+    let proc = live_process(p, true)?;
+    let all = vigil_sys::cpusets::logical_processors();
+    if all.is_empty() {
+        return fail(tr!("Windows did not report the processors of this computer"));
+    }
+    let mut cores = Vec::new();
+    for value in p.list("cores") {
+        let index = crate::params::as_int(value)
+            .and_then(|i| usize::try_from(i).ok())
+            .filter(|i| *i < all.len());
+        let Some(index) = index else {
+            return fail(tr!("unknown processor: {0}", text_of(value)));
+        };
+        if !cores.contains(&index) {
+            cores.push(index);
+        }
+    }
+    if cores.is_empty() {
+        return fail(tr!("choose at least one processor"));
+    }
+    let before = vigil_sys::cpusets::process_cpu_sets(proc.pid).map_err(|e| ActionError::new(e.to_string()))?;
+    let ids: Vec<u32> = if cores.len() == all.len() {
+        Vec::new()
+    } else {
+        all.iter()
+            .filter(|c| cores.contains(&(c.index as usize)))
+            .map(|c| c.id)
+            .collect()
+    };
+    procs::set_cpu_sets(proc.pid, &ids)?;
+    let created = proc.create_time().map_or(Value::Null, |t| json!(t));
+    let message = if ids.is_empty() {
+        tr!("{0} may use every logical processor", proc.describe())
+    } else {
+        tr!(
+            "{0} may now use {1} of the {2} logical processors",
+            proc.describe(),
+            ids.len(),
+            all.len()
+        )
+    };
+    Ok(Outcome::new(
+        message,
+        Some(json!({ "pid": proc.pid, "create_time": created, "cpu_sets": before })),
+    ))
+}
+
+fn undo_affinity(u: Params<'_>, _store: &Store) -> Result<String> {
+    let proc = live_process(u, true)?;
+    let known: Vec<u32> = vigil_sys::cpusets::logical_processors().iter().map(|c| c.id).collect();
+    let recorded: Vec<u32> = u
+        .list("cpu_sets")
+        .into_iter()
+        .filter_map(|v| crate::params::as_int(v).and_then(|i| u32::try_from(i).ok()))
+        .collect();
+    // Processors that no longer exist are left out; if none is left, the limit is removed.
+    let ids: Vec<u32> = recorded.into_iter().filter(|id| known.contains(id)).collect();
+    procs::set_cpu_sets(proc.pid, &ids)?;
+    Ok(tr!("{0} uses the processors it had before again", proc.describe()))
+}
+
 fn op_trim(p: Params<'_>, _store: &Store, _id: &str) -> Result<Outcome> {
     let proc = live_process(p, false)?;
     if proc.pid <= 4 {
@@ -620,7 +684,14 @@ pub(crate) fn builtin() -> Vec<Builtin> {
             Some(undo_fn(undo_background)),
             true,
         ),
+        (
+            "process.affinity",
+            run_fn(op_affinity),
+            Some(undo_fn(undo_affinity)),
+            true,
+        ),
         ("process.trim", run_fn(op_trim), None, true),
+        ("process.run", run_fn(crate::run::op_run), None, true),
         ("memory.trim_all", run_fn(op_trim_all), None, false),
         ("memory.purge_standby", run_fn(op_purge_standby), None, false),
         (

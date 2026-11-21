@@ -32,6 +32,7 @@ mod signature;
 mod store;
 mod tuning;
 
+pub mod run;
 pub mod shell;
 #[doc(hidden)]
 pub mod testing;

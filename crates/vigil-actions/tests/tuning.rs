@@ -110,6 +110,82 @@ fn background_lowers_disk_and_memory_priority_and_is_undone() {
 }
 
 #[test]
+fn affinity_limits_the_processors_and_is_undone() {
+    let fx = Fixture::new();
+    testing::set_admin(Some(false));
+    let all = vigil_sys::cpusets::logical_processors();
+    let child = ChildProcess::start();
+    assert_eq!(
+        vigil_sys::cpusets::process_processors(child.pid()).expect("read"),
+        (0..all.len() as u32).collect::<Vec<_>>()
+    );
+    let record = run_spec(
+        &fx,
+        "process.affinity",
+        child_params(&child, json!({"cores": [0]})),
+        false,
+    );
+    assert!(record.ok(), "{}", record.message());
+    assert_eq!(
+        vigil_sys::cpusets::process_processors(child.pid()).expect("read"),
+        vec![0]
+    );
+    if all.len() > 1 {
+        assert_eq!(
+            record.message(),
+            format!(
+                "PING.EXE (PID {}) may now use 1 of the {} logical processors",
+                child.pid(),
+                all.len()
+            )
+        );
+    }
+    assert!(can_undo(&record));
+    vigil_actions::undo(record.id(), &fx.store).expect("undo");
+    assert!(
+        vigil_sys::cpusets::process_cpu_sets(child.pid())
+            .expect("read")
+            .is_empty(),
+        "the limit is removed again"
+    );
+}
+
+#[test]
+fn affinity_refuses_bad_choices_and_protected_processes() {
+    let fx = Fixture::new();
+    testing::set_admin(Some(false));
+    let child = ChildProcess::start();
+    let count = vigil_sys::cpusets::logical_processors().len();
+    for (cores, expected) in [
+        (json!([]), "choose at least one processor".to_string()),
+        (json!([count]), format!("unknown processor: {count}")),
+        (json!([-1]), "unknown processor: -1".to_string()),
+    ] {
+        let record = run_spec(
+            &fx,
+            "process.affinity",
+            child_params(&child, json!({"cores": cores})),
+            false,
+        );
+        assert!(!record.ok());
+        assert_eq!(record.message(), expected);
+    }
+    assert!(
+        vigil_sys::cpusets::process_cpu_sets(child.pid())
+            .expect("read")
+            .is_empty()
+    );
+    let record = run_spec(
+        &fx,
+        "process.affinity",
+        json!({"pid": std::process::id(), "cores": [0]}),
+        false,
+    );
+    assert!(!record.ok());
+    assert!(record.message().contains("Vigil itself"), "{}", record.message());
+}
+
+#[test]
 fn trim_reports_memory() {
     let fx = Fixture::new();
     let child = ChildProcess::start();

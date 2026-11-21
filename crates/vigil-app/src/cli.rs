@@ -409,6 +409,18 @@ pub fn run(args: &[String]) -> i32 {
         )
     ));
     run_ai(&mut analysis, &options, &base);
+    if let Some(changes) = vigil_scan::pipeline::attach_changes(&mut analysis, &base) {
+        say(&format!(
+            "  {}",
+            tr!(
+                "Since the last scan: {0} new, {1} gone, {2} changed, {3} settings changed",
+                changes.new.len(),
+                changes.gone.len(),
+                changes.changed.len(),
+                changes.posture.len()
+            )
+        ));
+    }
     let (json_path, html_path) = match vigil_scan::pipeline::save_report(&analysis, &base, true) {
         Ok(paths) => paths,
         Err(error) => {

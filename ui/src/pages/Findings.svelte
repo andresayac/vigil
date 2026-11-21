@@ -1,5 +1,6 @@
 <script lang="ts">
   import FindingDetail from "../components/FindingDetail.svelte";
+  import { changesOf } from "../lib/changes";
   import { t } from "../lib/i18n/index.svelte";
   import { KINDS, VERDICT_ORDER, kindLabel, verdictColor, verdictLabel } from "../lib/labels";
   import { isIgnored, report } from "../lib/report.svelte";
@@ -12,6 +13,7 @@
   let text = $state("");
   let kind = $state("");
   let showIgnored = $state(false);
+  let onlyNew = $state(false);
   let ids = $state<string[] | null>(null);
   let caption = $state("");
   let selected = $state<string | null>(null);
@@ -20,6 +22,7 @@
 
   $effect(() => {
     if (!focus) return;
+    onlyNew = false;
     if (focus.ids) { ids = focus.ids; caption = focus.caption ?? ""; selected = focus.ids[0] ?? null; }
     if (focus.id) { ids = null; selected = focus.id; text = ""; const it = report.analysis?.items.find((i) => i.id === focus?.id); if (it) verdicts[it.verdict] = true; }
     if (focus.verdict) { ids = null; for (const v of VERDICT_ORDER) verdicts[v] = v === focus.verdict; }
@@ -32,13 +35,17 @@
   };
 
   const items = $derived(report.analysis?.items ?? []);
+  const changes = $derived(changesOf(report.analysis));
+  const newIds = $derived(new Set(changes?.new ?? []));
+  const changedIds = $derived(new Set((changes?.changed ?? []).map((c) => c.id)));
+  const newCount = $derived(items.filter((i) => newIds.has(i.id) && (showIgnored || !isIgnored(i.id))).length);
   const counts = $derived(Object.fromEntries(VERDICT_ORDER.map((v) => [v, items.filter((i) => i.verdict === v && (showIgnored || !isIgnored(i.id))).length])));
 
   const rows: Item[] = $derived.by(() => {
     const words = text.toLowerCase().split(/\s+/).filter(Boolean);
     const list = items.filter((item) => {
       if (ids) return ids.includes(item.id);
-      if (!verdicts[item.verdict]) return false;
+      if (onlyNew ? !newIds.has(item.id) : !verdicts[item.verdict]) return false;
       if (kind && item.kind !== kind) return false;
       if (!showIgnored && isIgnored(item.id)) return false;
       if (!words.length) return true;
@@ -66,6 +73,12 @@
   function clearIds(): void {
     ids = null;
     caption = "";
+  }
+
+  function pickVerdict(verdict: string): void {
+    clearIds();
+    onlyNew = false;
+    verdicts[verdict] = !verdicts[verdict];
   }
 
   // virtual list
@@ -98,10 +111,15 @@
   </div>
   <div class="filters">
     {#each VERDICT_ORDER as verdict (verdict)}
-      <button class="chip" class:on={verdicts[verdict] && !ids} onclick={() => { clearIds(); verdicts[verdict] = !verdicts[verdict]; }}>
+      <button class="chip" class:on={verdicts[verdict] && !ids && !onlyNew} onclick={() => pickVerdict(verdict)}>
         {verdictLabel(verdict)} <span class="num">{counts[verdict]}</span>
       </button>
     {/each}
+    {#if newIds.size}
+      <button class="chip" class:on={onlyNew && !ids} onclick={() => { clearIds(); onlyNew = !onlyNew; }}>
+        {t("findings.newSince")} <span class="num">{newCount}</span>
+      </button>
+    {/if}
     <span class="grow"></span>
     {#if ids}<span class="faint">{caption}</span><button class="link" onclick={clearIds}>{t("findings.showAll")}</button>{/if}
     <select bind:value={kind} aria-label={t("findings.type")}>
@@ -129,7 +147,7 @@
                 {verdictLabel(item.verdict)}{handled ? ` · ${t("findings.handled")}` : ""}{isIgnored(item.id) ? ` · ${t("findings.ignored")}` : ""}
               </span>
               <span class="score"><span class="meter"><span style:width="{item.score}%" style:background={item.score >= 70 ? "var(--remove)" : item.score >= 40 ? "var(--disable)" : item.score >= 15 ? "var(--review)" : "var(--no-signals)"}></span></span><span class="num faint">{item.score}</span></span>
-              <span class="name" title={item.what || item.title}>{item.title}</span>
+              <span class="name" title={item.what || item.title}><span class="title">{item.title}</span>{#if newIds.has(item.id)}<span class="badge">{t("findings.badgeNew")}</span>{:else if changedIds.has(item.id)}<span class="badge">{t("findings.badgeChanged")}</span>{/if}</span>
               <span class="muted">{kindLabel(item.kind)}</span>
               <span class="muted">{presence(item)}</span>
             </div>
@@ -168,7 +186,9 @@
   .score { display: flex; align-items: center; gap: 6px; }
   .meter { width: 54px; height: 5px; border-radius: 3px; background: var(--rule); overflow: hidden; display: inline-block; }
   .meter span { display: block; height: 100%; }
-  .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .name { display: flex; align-items: center; gap: 6px; min-width: 0; }
+  .name .title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .badge { flex: none; font-size: 11px; font-weight: 600; line-height: 16px; padding: 0 6px; border: 1px solid var(--rule-strong); border-radius: 8px; color: var(--ink2); }
   .row .muted { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .foot { padding: 6px 10px; border-top: 1px solid var(--rule); }
   .side { padding: 0; overflow-y: auto; }

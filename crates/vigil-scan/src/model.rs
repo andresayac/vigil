@@ -290,6 +290,8 @@ pub struct Analysis {
     /// Executive summary written by the AI.
     pub summary: Option<Value>,
     pub ai: Map<String, Value>,
+    /// What changed since the previous scan ([`crate::diff::ScanDiff`] as JSON); absent for a first scan.
+    pub changes: Option<Value>,
 }
 
 impl Analysis {
@@ -305,6 +307,9 @@ impl Analysis {
             "items".into(),
             Value::Array(self.items.iter().map(Item::to_value).collect()),
         );
+        if let Some(changes) = &self.changes {
+            map.insert("changes".into(), changes.clone());
+        }
         Value::Object(map)
     }
 
@@ -321,6 +326,10 @@ impl Analysis {
                 other => Some(other.clone()),
             },
             ai: obj(data.at("ai")).clone(),
+            changes: match data.at("changes") {
+                Value::Null => None,
+                other => Some(other.clone()),
+            },
         }
     }
 }

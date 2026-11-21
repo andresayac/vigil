@@ -4,6 +4,7 @@
   import Tile from "../components/Tile.svelte";
   import VerdictStrip from "../components/VerdictStrip.svelte";
   import * as api from "../lib/api";
+  import { changesOf } from "../lib/changes";
   import { pct, size, when as whenText } from "../lib/format";
   import { t } from "../lib/i18n/index.svelte";
   import { VERDICT_ORDER, riskColor, riskLabel, verdictColor, verdictLabel } from "../lib/labels";
@@ -50,6 +51,23 @@
   }
 
   const top = $derived(visible.filter((i) => ["remove", "disable", "review"].includes(i.verdict) && !i.trusted).slice(0, 8));
+  // Since the last scan: new findings first by verdict (remove, disable, review…), then by score.
+  const changes = $derived(changesOf(a));
+  const RANK: Record<string, number> = Object.fromEntries(VERDICT_ORDER.map((v, i) => [v, i]));
+  const byId = $derived(new Map((a?.items ?? []).map((i) => [i.id, i])));
+  const fresh = $derived((changes?.new ?? []).map((id) => byId.get(id)).filter((i): i is Item => !!i && !isIgnored(i.id))
+    .sort((x, y) => (RANK[x.verdict] ?? 9) - (RANK[y.verdict] ?? 9) || y.score - x.score));
+  const altered = $derived((changes?.changed ?? []).map((c) => ({ item: byId.get(c.id), what: c.what }))
+    .filter((c): c is { item: Item; what: string[] } => !!c.item && !isIgnored(c.item.id))
+    .sort((x, y) => (RANK[x.item.verdict] ?? 9) - (RANK[y.item.verdict] ?? 9) || y.item.score - x.item.score));
+  const sinceWhen = $derived(whenText(changes?.previous.started ?? ""));
+  const tally = $derived(changes ? [
+    changes.new.length ? t("overview.sinceNew", { count: changes.new.length }) : "",
+    changes.gone.length ? t("overview.sinceGone", { count: changes.gone.length }) : "",
+    changes.changed.length ? t("overview.sinceChanged", { count: changes.changed.length }) : "",
+    changes.posture.length ? t("overview.sinceSettings", { count: changes.posture.length }) : "",
+  ].filter(Boolean).join(" · ") : "");
+
   const snap = $derived(live.snapshot);
   const gpu = $derived(snap ? [...snap.gpus].sort((x, y) => y.dedicatedTotal - x.dedicatedTotal)[0] : undefined);
 </script>
@@ -134,6 +152,48 @@
       </section>
 
       <div class="side">
+        {#if changes}
+          <section class="panel since">
+            <h2>{sinceWhen ? t("overview.since", { when: sinceWhen }) : t("overview.sinceUndated")}</h2>
+            {#if !tally}
+              <p class="muted">{t("overview.sinceNothing")}</p>
+            {:else}
+              <p class="muted">{tally}</p>
+              {#if fresh.length}
+                <h3>{t("overview.sinceNewTitle")}</h3>
+                <div class="list">
+                  {#each fresh.slice(0, 5) as item (item.id)}
+                    <button class="link" onclick={() => onopenitem(item.id)}>{verdictLabel(item.verdict)} · {item.title}</button>
+                  {/each}
+                  {#if fresh.length > 1}
+                    <button class="link more" onclick={() => onopenids(fresh.map((i) => i.id), t("findings.newSince"))}>{t("overview.sinceShowNew", { count: fresh.length })}</button>
+                  {/if}
+                </div>
+              {/if}
+              {#if altered.length}
+                <h3>{t("overview.sinceChangedTitle")}</h3>
+                <div class="list">
+                  {#each altered.slice(0, 4) as change (change.item.id)}
+                    <button class="link" onclick={() => onopenitem(change.item.id)}>{change.item.title}</button>
+                    {#if change.what.length}<p class="faint selectable">{change.what.join(" · ")}</p>{/if}
+                  {/each}
+                </div>
+                {#if altered.length > 4}<p class="faint">{t("overview.sinceMore", { count: altered.length - 4 })}</p>{/if}
+              {/if}
+              {#if changes.posture.length}
+                <h3>{t("overview.sinceSettingsTitle")}</h3>
+                <ul>{#each changes.posture.slice(0, 8) as line, index (index)}<li class="muted selectable">{line}</li>{/each}</ul>
+              {/if}
+              {#if changes.gone.length}
+                <h3>{t("overview.sinceGoneTitle")}</h3>
+                {#each changes.gone.slice(0, 4) as gone, index (index)}
+                  <p class="muted selectable">{gone.title}{gone.path && gone.path !== gone.title ? ` · ${gone.path}` : ""}</p>
+                {/each}
+                {#if changes.gone.length > 4}<p class="faint">{t("overview.sinceMore", { count: changes.gone.length - 4 })}</p>{/if}
+              {/if}
+            {/if}
+          </section>
+        {/if}
         <section class="panel">
           <h2>{t("overview.security")}</h2>
           <Readouts rows={readouts(a.posture ?? {})} nameWidth={200} />
@@ -166,6 +226,11 @@
   .side { display: flex; flex-direction: column; gap: 16px; }
   .panel p { margin: 0; }
   .habits { margin-top: 8px; }
+  .since h3 { margin-top: 6px; }
+  .since p { overflow-wrap: anywhere; }
+  .since .list { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
+  .since .link { min-height: 24px; padding: 2px 0; }
+  .since .more { margin-top: 4px; }
   ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
   .link { border: 0; background: transparent; padding: 0; color: var(--accent); text-align: left; }
   .link:hover:not(:disabled) { background: transparent; text-decoration: underline; }

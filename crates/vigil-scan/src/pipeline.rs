@@ -46,6 +46,37 @@ pub fn save_report(analysis: &Analysis, base: &Path, html: bool) -> Result<(Path
     Ok((json_path, html_path))
 }
 
+/// The newest report in `base`'s folder that is older than `base` and opens, with its path.
+pub fn previous_report(base: &Path) -> Option<(Analysis, PathBuf)> {
+    let folder = base.parent()?;
+    let current = base.file_name()?.to_string_lossy().to_string();
+    let mut candidates: Vec<PathBuf> = fs::read_dir(folder)
+        .ok()?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| {
+            let name = p
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            name.starts_with("scan-") && name.ends_with("-report.json") && name < current
+        })
+        .collect();
+    candidates.sort();
+    candidates
+        .into_iter()
+        .rev()
+        .find_map(|path| load_report(&path).ok().map(|analysis| (analysis, path)))
+}
+
+/// Compares the analysis with the previous scan in the same folder and keeps the differences in
+/// `analysis.changes` (left empty for a first scan). Returns the differences.
+pub fn attach_changes(analysis: &mut Analysis, base: &Path) -> Option<crate::diff::ScanDiff> {
+    let (previous, path) = previous_report(base)?;
+    let diff = crate::diff::diff(&previous, &path.display().to_string(), analysis);
+    analysis.changes = Some(diff.to_value());
+    Some(diff)
+}
+
 /// Opens a saved `-report.json`.
 pub fn load_report(path: &Path) -> Result<Analysis, ScanError> {
     let text = read_text(path).map_err(|e| ScanError::io(path, e))?;
