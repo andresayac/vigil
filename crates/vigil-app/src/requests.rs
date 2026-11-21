@@ -57,6 +57,12 @@ pub enum Request {
         url: Option<String>,
         name: Option<String>,
     },
+    #[serde(rename_all = "camelCase")]
+    Service {
+        op: String,
+        name: String,
+        start_type: Option<String>,
+    },
 }
 
 /// What to do with a request once it is understood.
@@ -89,6 +95,8 @@ pub struct Context<'a> {
     pub power_plans: &'a [(String, String, bool)],
     /// Drive letter (upper case, no colon) -> media ("SSD", "HDD").
     pub drive_media: &'a [(String, String)],
+    /// The live Windows services (read for service requests only).
+    pub services: &'a [vigil_sys::services::Service],
 }
 
 pub const PRIORITY_LABEL: [(&str, &str); 5] = [
@@ -228,7 +236,110 @@ pub fn build(request: &Request, ctx: &Context<'_>) -> Result<Plan, String> {
         Request::Cleanup { keys } => cleanup_plan(keys, ctx),
         Request::Recycle { paths } => recycle_plan(paths, ctx),
         Request::Shell { op, path, url, name } => shell_plan(op, path.as_deref(), url.as_deref(), name.as_deref()),
+        Request::Service { op, name, start_type } => service_plan(op, name, start_type.as_deref(), ctx),
     }
+}
+
+/// A service the action engine refuses to change: an essential Windows service, or a Windows
+/// component (its binary, or the DLL svchost loads for it, lives in the Windows folder). The page
+/// uses it to lock its buttons; the engine's own guard stays the authority.
+pub fn protected_service(service: &vigil_sys::services::Service) -> bool {
+    let windir = std::env::var("SystemRoot")
+        .unwrap_or_else(|_| r"C:\Windows".into())
+        .trim_end_matches('\\')
+        .to_lowercase();
+    let target = if service.dll.is_empty() {
+        &service.executable
+    } else {
+        &service.dll
+    };
+    vigil_actions::ESSENTIAL_SERVICES.contains(&service.name.to_lowercase().as_str())
+        || target.to_lowercase().starts_with(&format!("{windir}\\"))
+}
+
+/// The startup types the Services page offers, with their display names.
+pub const START_TYPES: [(&str, &str); 4] = [
+    ("auto", tl!("Automatic")),
+    ("delayed-auto", tl!("Automatic (delayed start)")),
+    ("demand", tl!("Manual")),
+    ("disabled", tl!("Disabled")),
+];
+
+fn service_plan(op: &str, name: &str, start_type: Option<&str>, ctx: &Context<'_>) -> Result<Plan, String> {
+    // The service must exist right now; its canonical name is used from here on.
+    let service = ctx
+        .services
+        .iter()
+        .find(|s| s.name.eq_ignore_ascii_case(name))
+        .ok_or(tr!("The service no longer exists."))?;
+    let name = service.name.as_str();
+    let target = if service.display_name.is_empty() || service.display_name == name {
+        name.to_string()
+    } else {
+        format!("{} ({name})", service.display_name)
+    };
+    let quoted = format!("\"{}\"", service.display_name);
+    let spec = match op {
+        "start" => spec(
+            "service.start",
+            tr!("Start service {0}", quoted),
+            target,
+            tr!("Starts the service now. Its startup type does not change."),
+        )
+        .params(json!({"name": name}))
+        .group("fix")
+        .irreversible(),
+        "stop" => spec(
+            "service.stop",
+            tr!("Stop service {0}", quoted),
+            target,
+            tr!(
+                "Stops the service now. Programs that depend on it may stop working until it runs again; with an automatic startup type it starts again at the next restart."
+            ),
+        )
+        .params(json!({"name": name}))
+        .group("contain"),
+        "restart" => spec(
+            "service.restart",
+            tr!("Restart service {0}", quoted),
+            target,
+            tr!("Stops the service and starts it again. Programs that use it may lose their connection for a moment."),
+        )
+        .params(json!({"name": name}))
+        .group("fix")
+        .irreversible(),
+        "start_type" => {
+            let wanted = start_type.unwrap_or("");
+            let (value, text) = START_TYPES
+                .iter()
+                .find(|(value, _)| *value == wanted)
+                .copied()
+                .ok_or(tr!("Unknown startup type."))?;
+            let explain = match value {
+                "auto" => tr!("Windows starts the service at every boot."),
+                "delayed-auto" => tr!("Windows starts the service shortly after boot, once the desktop is ready."),
+                "demand" => tr!("Windows starts the service only when a program asks for it."),
+                _ => tr!("The service no longer starts, not even when a program asks for it."),
+            };
+            let built = spec(
+                "service.start_type",
+                tr!("Startup type of {0}: {1}", quoted, tr!(text)),
+                target,
+                format!("{explain} {}", tr!("You can undo it from History.")),
+            )
+            .params(json!({"name": name, "start_type": value}))
+            .group("disable");
+            if value == "disabled" {
+                built.warning(&tr!(
+                    "Programs that need this service fail while it is disabled. Disable only services you know you do not use."
+                ))
+            } else {
+                built
+            }
+        }
+        _ => return Err(tr!("Unknown request: {0}", op)),
+    };
+    Ok(Plan::Run { spec, item: None })
 }
 
 fn role_plan(op: &str, item_id: &str, index: usize, ctx: &Context<'_>) -> Result<Plan, String> {
@@ -770,6 +881,7 @@ mod tests {
             space_files: &[],
             power_plans: &[],
             drive_media: &[],
+            services: &[],
         };
         let stale = Request::Process {
             op: "terminate".into(),
@@ -794,5 +906,111 @@ mod tests {
             name: Some("cmd.exe".into()),
         };
         assert!(build(&console, &ctx).is_err());
+    }
+
+    fn service(name: &str, display: &str, executable: &str, dll: &str) -> vigil_sys::services::Service {
+        vigil_sys::services::Service {
+            name: name.into(),
+            display_name: display.into(),
+            description: String::new(),
+            state: "running".into(),
+            start_type: "auto".into(),
+            pid: 4242,
+            service_type: if dll.is_empty() { "own".into() } else { "share".into() },
+            path: executable.into(),
+            executable: executable.into(),
+            dll: dll.into(),
+            account: "LocalSystem".into(),
+            group: String::new(),
+        }
+    }
+
+    #[test]
+    fn service_requests_are_checked_against_the_live_list() {
+        let services = [service(
+            "UpdaterSvc",
+            "Example Updater",
+            r"C:\Program Files\Example\updater.exe",
+            "",
+        )];
+        let ctx = Context {
+            analysis: None,
+            processes: &[],
+            cleanup: &[],
+            space_files: &[],
+            power_plans: &[],
+            drive_media: &[],
+            services: &services,
+        };
+        let ask = |op: &str, name: &str, start: Option<&str>| {
+            build(
+                &Request::Service {
+                    op: op.into(),
+                    name: name.into(),
+                    start_type: start.map(str::to_string),
+                },
+                &ctx,
+            )
+        };
+        let Ok(Plan::Run { spec, .. }) = ask("stop", "updatersvc", None) else {
+            panic!("stop is offered")
+        };
+        assert_eq!(spec.op, "service.stop");
+        assert_eq!(spec.params["name"], "UpdaterSvc", "the canonical name is used");
+        let Ok(Plan::Run { spec, .. }) = ask("start_type", "UpdaterSvc", Some("disabled")) else {
+            panic!("start type is offered")
+        };
+        assert_eq!(spec.params["start_type"], "disabled");
+        assert!(spec.reversible && !spec.warning.is_empty());
+        let Ok(Plan::Run { spec, .. }) = ask("restart", "UpdaterSvc", None) else {
+            panic!("restart")
+        };
+        assert!(!spec.reversible);
+        assert!(ask("start", "GhostSvc", None).is_err(), "unknown services are refused");
+        assert!(
+            ask("start_type", "UpdaterSvc", Some("boot")).is_err(),
+            "only the four startup types"
+        );
+        assert!(ask("start_type", "UpdaterSvc", None).is_err());
+        assert!(ask("delete", "UpdaterSvc", None).is_err(), "only the page's operations");
+        let parsed: Request = serde_json::from_value(
+            json!({"kind": "service", "op": "start_type", "name": "UpdaterSvc", "startType": "demand"}),
+        )
+        .expect("request");
+        assert!(matches!(parsed, Request::Service { ref start_type, .. } if start_type.as_deref() == Some("demand")));
+    }
+
+    #[test]
+    fn windows_components_and_essential_services_are_locked() {
+        let windir = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+        let hosted = service(
+            "Dnscache",
+            "DNS Client",
+            &format!(r"{windir}\system32\svchost.exe"),
+            &format!(r"{windir}\System32\dnsrslvr.dll"),
+        );
+        assert!(protected_service(&hosted));
+        let foreign_dll = service(
+            "OddSvc",
+            "Odd",
+            &format!(r"{windir}\system32\svchost.exe"),
+            r"C:\ProgramData\odd\odd.dll",
+        );
+        assert!(
+            !protected_service(&foreign_dll),
+            "a third-party DLL in svchost is not a Windows component"
+        );
+        assert!(protected_service(&service(
+            "WinDefend",
+            "Microsoft Defender",
+            r"C:\ProgramData\x\MsMpEng.exe",
+            ""
+        )));
+        assert!(!protected_service(&service(
+            "UpdaterSvc",
+            "Example Updater",
+            r"C:\Program Files\Example\updater.exe",
+            ""
+        )));
     }
 }

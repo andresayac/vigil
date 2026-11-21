@@ -19,14 +19,15 @@ Cargo.toml              workspace
 crates/
   vigil-i18n/           translations of the core's texts (English source in the code, catalogs in locales/)
   vigil-sys/            live data: processes (NtQuerySystemInformation), PDH metrics, DXGI GPUs, connections,
-                        elevation, the process inspector (modules, hosted services)
+                        elevation, the process inspector (modules, hosted services), Windows services
   vigil-scan/           read-only scan: PowerShell collectors (embedded), rules, analysis, posture, reports,
                         the AI agent (the OpenAI- and Anthropic-compatible API standards, local CLI
                         agents), anonymization, VirusTotal
   vigil-actions/        action engine: guards, journal, quarantine, undo, tool runner, tuning actions
   vigil-maint/          volumes, junk cleanup, space analyzer, Recycle Bin, hardware, tuning state, insights
   vigil-app/            Tauri app (binary: vigil.exe): commands, live sampler, planner, request validation,
-                        native confirmation, settings and secrets, the `vigil scan` command line
+                        native confirmation, settings and secrets, the read-only command lines
+                        (`vigil scan`, `list`, `ports`, `services`)
 ui/                     Svelte 5 + TypeScript, built by Vite into ui/dist and embedded in vigil.exe
 package.json            UI toolchain (npm)
 ```

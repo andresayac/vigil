@@ -32,7 +32,7 @@ automation: debug builds start without elevation unless `--elevate` is passed.
 crates/
   vigil-i18n/     translations of the core's texts: `tr!` with English templates, catalogs in locales/
   vigil-sys/      Windows access for live data: processes (NtQuerySystemInformation), PDH metrics, DXGI GPUs,
-                  connections, elevation, process inspector
+                  connections, elevation, process inspector, services
   vigil-scan/     the read-only scan: PowerShell collectors (embedded ps1), rules, analysis, posture, report
                   (JSON + HTML), the AI agent (providers), anonymization, VirusTotal
   vigil-actions/  the action engine: every change to the system goes through execute() / undo(); guards,

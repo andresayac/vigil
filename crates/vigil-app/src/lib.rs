@@ -14,6 +14,7 @@ mod requests;
 mod secrets;
 mod settings;
 mod storage_ops;
+mod tools;
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
@@ -80,6 +81,12 @@ pub fn scan_cli(args: &[String]) -> i32 {
     cli::run(args)
 }
 
+/// The read-only commands `vigil list`, `vigil ports`, `vigil services` and `vigil --help`;
+/// `None` when `command` is not one of them.
+pub fn tool_cli(command: &str, args: &[String]) -> Option<i32> {
+    tools::COMMANDS.contains(&command).then(|| tools::run(command, args))
+}
+
 pub fn run() {
     let state = match commands::AppState::new() {
         Ok(state) => state,
@@ -127,6 +134,8 @@ pub fn run() {
             commands::ai_status,
             commands::run_action,
             commands::process_details,
+            commands::process_icons,
+            commands::services_list,
             commands::ai_providers,
             commands::ai_models,
         ])

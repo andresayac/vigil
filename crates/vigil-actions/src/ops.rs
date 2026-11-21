@@ -385,6 +385,95 @@ fn undo_service_delete(u: Params<'_>, _store: &Store) -> Result<String> {
     ))
 }
 
+/// Starts a stopped service and waits until it runs (30 s).
+fn start_service(name: &str) -> Result<()> {
+    let result = run(sc_args(&["start", name]), 60)?;
+    // 1056: the service is already running.
+    if result.code != 0 && result.code != 1056 {
+        let text = if result.out.is_empty() {
+            &result.err
+        } else {
+            &result.out
+        };
+        return fail(tr!("could not start \"{0}\": {1}", name, first_line(text)));
+    }
+    if !wait_status(name, "running", Duration::from_secs(30)) {
+        return fail(tr!("\"{0}\" did not start within 30 seconds", name));
+    }
+    Ok(())
+}
+
+/// The live service, re-read and checked against the guards before any change.
+fn guarded_service(p: Params<'_>) -> Result<(String, Map<String, Value>)> {
+    let name = p.req_str("name")?;
+    let values = service_reg(&name)?;
+    guard_service(&name, &values)?;
+    Ok((name, values))
+}
+
+fn op_service_start(p: Params<'_>, _store: &Store, _id: &str) -> Result<Outcome> {
+    let (name, values) = guarded_service(p)?;
+    if service_start(&values)?.0 == 4 {
+        return fail(tr!("\"{0}\" is disabled; change its startup type first", name));
+    }
+    if service_status(&name).as_deref() == Some("running") {
+        return Ok(Outcome::done(tr!("\"{0}\" was already running", name)));
+    }
+    start_service(&name)?;
+    Ok(Outcome::done(tr!("started \"{0}\"", name)))
+}
+
+fn op_service_restart(p: Params<'_>, _store: &Store, _id: &str) -> Result<Outcome> {
+    let (name, values) = guarded_service(p)?;
+    if service_start(&values)?.0 == 4 {
+        return fail(tr!("\"{0}\" is disabled; change its startup type first", name));
+    }
+    let was_running = stop_service(&name)?;
+    start_service(&name)?;
+    Ok(Outcome::done(if was_running {
+        tr!("restarted \"{0}\"", name)
+    } else {
+        tr!("\"{0}\" was not running; started it", name)
+    }))
+}
+
+/// The `sc config start=` value for a startup type the app offers.
+fn start_type_arg(value: &str) -> Option<&'static str> {
+    match value {
+        "auto" => Some("auto"),
+        "delayed-auto" => Some("delayed-auto"),
+        "demand" => Some("demand"),
+        "disabled" => Some("disabled"),
+        _ => None,
+    }
+}
+
+fn op_service_start_type(p: Params<'_>, _store: &Store, _id: &str) -> Result<Outcome> {
+    let (name, values) = guarded_service(p)?;
+    let wanted = p.req_str("start_type")?;
+    let arg = start_type_arg(&wanted).ok_or_else(|| ActionError::new(tr!("unknown startup type \"{0}\"", wanted)))?;
+    let (start, delayed) = service_start(&values)?;
+    if start == 0 || start == 1 {
+        return fail(tr!("drivers that load during boot are not changed"));
+    }
+    if start_arg(start, delayed) == arg {
+        return Ok(Outcome::done(tr!("\"{0}\" already has that startup type", name)));
+    }
+    sc(
+        &["config", &name, "start=", arg],
+        &tr!("changing the start type of \"{0}\"", name),
+    )?;
+    Ok(Outcome::new(
+        tr!(
+            "\"{0}\" now has {1} start (it was set to {2} start)",
+            name,
+            arg,
+            start_arg(start, delayed)
+        ),
+        Some(json!({ "name": name, "start": start, "delayed": delayed, "was_running": false })),
+    ))
+}
+
 // --------------------------------------------------------------------------- scheduled tasks
 
 fn task_full(p: Params<'_>) -> Result<String> {
@@ -1142,6 +1231,14 @@ pub(crate) fn builtin() -> Vec<Builtin> {
             "service.delete",
             run_fn(op_service_delete),
             Some(undo_fn(undo_service_delete)),
+            false,
+        ),
+        ("service.start", run_fn(op_service_start), None, false),
+        ("service.restart", run_fn(op_service_restart), None, false),
+        (
+            "service.start_type",
+            run_fn(op_service_start_type),
+            Some(undo_fn(undo_service_disable)),
             false,
         ),
         (

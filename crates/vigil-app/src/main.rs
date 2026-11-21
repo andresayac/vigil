@@ -11,6 +11,12 @@ fn main() {
     if args.first().map(String::as_str) == Some("scan") {
         std::process::exit(vigil_app::scan_cli(&args[1..]));
     }
+    // `vigil list | ports | services | --help`: read-only views for a terminal or a script.
+    if let Some(command) = args.first()
+        && let Some(code) = vigil_app::tool_cli(command, &args[1..])
+    {
+        std::process::exit(code);
+    }
 
     // Vigil asks for administrator rights when it starts (UAC). If the user declines, it keeps
     // running in read-only mode. Debug builds only ask with --elevate, so `cargo run` stays simple.

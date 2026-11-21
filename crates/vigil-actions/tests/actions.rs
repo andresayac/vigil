@@ -371,6 +371,111 @@ fn disable_service_stops_it_and_undo_restores() {
 }
 
 #[test]
+fn start_restart_and_start_type_go_through_sc_and_the_guards() {
+    let fx = Fixture::new();
+    let runner = FakeRunner::install(&[]);
+    fake_service(
+        json!({"Start": 3, "ImagePath": "C:\\x\\svc.exe"}),
+        &["stopped", "running"],
+    );
+    let started = execute(&spec("service.start", json!({"name": "Evil Svc"})), &fx.store, None, "");
+    assert!(started.ok(), "{}", started.message());
+    assert!(runner.lines().contains(&"sc.exe start Evil Svc".to_string()));
+    assert!(!can_undo(&started), "starting is not undone");
+
+    fake_service(
+        json!({"Start": 3, "ImagePath": "C:\\x\\svc.exe"}),
+        &["running", "stopped", "running"],
+    );
+    let restarted = execute(
+        &spec("service.restart", json!({"name": "Evil Svc"})),
+        &fx.store,
+        None,
+        "",
+    );
+    assert!(restarted.ok(), "{}", restarted.message());
+    let lines = runner.lines();
+    let stop = lines
+        .iter()
+        .rposition(|l| l == "sc.exe stop Evil Svc")
+        .expect("stopped");
+    let start = lines
+        .iter()
+        .rposition(|l| l == "sc.exe start Evil Svc")
+        .expect("started");
+    assert!(stop < start, "stop before start: {lines:?}");
+
+    fake_service(
+        json!({"Start": 2, "DelayedAutostart": 1, "ImagePath": "C:\\x\\svc.exe"}),
+        &["running"],
+    );
+    let changed = execute(
+        &spec(
+            "service.start_type",
+            json!({"name": "Evil Svc", "start_type": "demand"}),
+        ),
+        &fx.store,
+        None,
+        "",
+    );
+    assert!(changed.ok(), "{}", changed.message());
+    assert!(
+        runner
+            .lines()
+            .contains(&"sc.exe config Evil Svc start= demand".to_string())
+    );
+    assert_eq!(
+        changed.undo_data(),
+        Some(&json!({"name": "Evil Svc", "start": 2, "delayed": true, "was_running": false}))
+    );
+    vigil_actions::undo(changed.id(), &fx.store).expect("undo");
+    assert!(
+        runner
+            .lines()
+            .contains(&"sc.exe config Evil Svc start= delayed-auto".to_string()),
+        "undo restores the previous startup type"
+    );
+}
+
+#[test]
+fn start_type_refuses_unknown_values_disabled_services_and_essential_ones() {
+    let fx = Fixture::new();
+    let runner = FakeRunner::install(&[]);
+    fake_service(json!({"Start": 3, "ImagePath": "C:\\x\\svc.exe"}), &["stopped"]);
+    let odd = execute(
+        &spec("service.start_type", json!({"name": "Evil Svc", "start_type": "boot"})),
+        &fx.store,
+        None,
+        "",
+    );
+    assert!(
+        !odd.ok() && odd.message().contains("unknown startup type"),
+        "{}",
+        odd.message()
+    );
+    fake_service(json!({"Start": 4, "ImagePath": "C:\\x\\svc.exe"}), &["stopped"]);
+    let disabled = execute(&spec("service.start", json!({"name": "Evil Svc"})), &fx.store, None, "");
+    assert!(
+        !disabled.ok() && disabled.message().contains("disabled"),
+        "{}",
+        disabled.message()
+    );
+    fake_service(json!({"Start": 2}), &["running"]);
+    let essential = execute(
+        &spec("service.restart", json!({"name": "WinDefend"})),
+        &fx.store,
+        None,
+        "",
+    );
+    assert!(!essential.ok(), "essential services are refused");
+    assert!(
+        runner.lines().iter().all(|l| !l.starts_with("sc.exe")),
+        "{:?}",
+        runner.lines()
+    );
+}
+
+#[test]
 fn failed_tool_is_reported_not_raised() {
     let fx = Fixture::new();
     FakeRunner::install(&[(

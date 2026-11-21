@@ -18,6 +18,10 @@ export interface ProcessRow {
   createdMs: number;
   ioBps: number;
   status: ProcessStatus;
+  /** Owns a window on the desktop (Task Manager lists it under Apps). */
+  window: boolean;
+  /** File description of the program ("Google Chrome"); empty when the file has none. */
+  description: string;
 }
 
 export interface GpuAdapter {
@@ -183,6 +187,33 @@ export interface QuarantineEntry {
   sha256: string; reason: string; state?: string; present: boolean;
 }
 
+/** A Windows service, as the Services page shows it. */
+export interface Service {
+  name: string;
+  displayName: string;
+  description: string;
+  /** running, stopped, start_pending, stop_pending, continue_pending, pause_pending or paused. */
+  state: string;
+  /** auto, delayed-auto, demand, disabled (boot and system are drivers). */
+  startType: string;
+  /** 0 while stopped. */
+  pid: number;
+  /** "own" (its own process) or "share" (a service host shared with other services). */
+  serviceType: string;
+  /** The command line, environment variables expanded. */
+  path: string;
+  executable: string;
+  /** For services hosted by svchost: the DLL that really runs. */
+  dll: string;
+  account: string;
+  /** The svchost group ("netsvcs"), when there is one. */
+  group: string;
+  /** An essential Windows service or a Windows component: Vigil refuses to change it. */
+  protected: boolean;
+}
+
+export type ServiceOp = "start" | "stop" | "restart" | "start_type";
+
 /** What the UI may ask Rust to do. Rust builds the real action from this and confirms it natively. */
 export type ActionRequest =
   | { kind: "finding"; itemId: string; index: number }
@@ -192,7 +223,8 @@ export type ActionRequest =
   | { kind: "tuning"; op: string; params: Record<string, unknown> }
   | { kind: "cleanup"; keys: string[] }
   | { kind: "recycle"; paths: string[] }
-  | { kind: "shell"; op: string; path?: string; url?: string; name?: string };
+  | { kind: "shell"; op: string; path?: string; url?: string; name?: string }
+  | { kind: "service"; op: ServiceOp; name: string; startType?: string };
 
 export interface ActionOutcome { cancelled: boolean; records: JournalRecord[]; message: string; error?: boolean }
 

@@ -1,14 +1,17 @@
 /* Windows 11 Fluent design tokens (WinUI 3 theme resources, light and dark).
    Colour carries meaning: verdict colours only for verdicts, --chart / --chart2 and the --chart-* resource hues
-   only for live measurements, --ok / --warn / --bad only for state. Everything else is ink, greys and the
-   accent (interactive: primary buttons, selection indicator, focus, checkboxes). */
+   only for live measurements, --ok / --warn / --bad only for state. --heat-0 … --heat-4 only tint the resource
+   cells of the process table by how much of the computer a process uses (Task Manager's heat map: 0 is the
+   resting tint, 4 a heavy user). Everything else is ink, greys and the accent (interactive: primary buttons,
+   selection indicator, focus, checkboxes). */
 :root {
   /* Window and layers: the solid fallback (browser preview, Windows 10). With Mica the base becomes transparent. */
-  --canvas: #f3f3f3; --layer: #f9f9f9; --layer-stroke: rgba(0, 0, 0, 0.0578);
-  --surface: #ffffff; --surface2: #fafafa; --sunken: #fbfbfb; --flyout: #f9f9f9;
+  --canvas: #eef2f6; --layer: #fbfbfb; --layer-stroke: rgba(0, 0, 0, 0.0578);
+  --surface: #ffffff; --surface2: #fafafa; --sunken: #fbfbfb; --flyout: #fcfcfc;
   --ink: #1b1b1b; --ink2: #5d5d5d; --ink3: #8b8b8b; --ink-disabled: #a8a8a8;
   --rule: #e5e5e5; --rule-strong: #d1d1d1;
   --hover: rgba(0, 0, 0, 0.0373); --pressed: rgba(0, 0, 0, 0.0241); --select: #ebebeb;
+  --table-select: color-mix(in srgb, var(--accent) 12%, transparent);
   --control: #fbfbfb; --control-hover: #f6f6f6; --control-pressed: #f5f5f5;
   --control-stroke: #e5e5e5; --control-stroke-bottom: #cccccc; --input-bg: #ffffff;
   --accent: #005fb8; --accent-hover: #1a6fc1; --accent-pressed: #3381ca; --on-accent: #ffffff;
@@ -21,6 +24,9 @@
   /* Live measurements: one hue per resource, as Task Manager does. --chart is set per chart from these. */
   --chart-cpu: #0f6cbd; --chart-memory: #8a3fb8; --chart-disk: #3d8b0f; --chart-net: #b35c00; --chart-gpu: #0e7a8a;
   --chart: var(--chart-cpu); --chart2: #0e7a8a; --on-chart: #ffffff;
+  /* Heat map of the process table. */
+  --heat-0: #f8eefb; --heat-1: #f2ddf8; --heat-2: #ecd0f4; --heat-3: #e5c2f0; --heat-4: #d9a9ea;
+  --heat-rule: rgba(255, 255, 255, 0.8);
   --font-body: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
   --font-display: "Segoe UI Variable Display", "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
   --font-mono: "Cascadia Mono", Consolas, monospace;
@@ -44,6 +50,8 @@
     --ok: #6ccb5f; --warn: #f6c343; --bad: #ff99a4;
     --chart-cpu: #4aa3ff; --chart-memory: #c38cf2; --chart-disk: #7cc35a; --chart-net: #f0a34a; --chart-gpu: #4cc9d6;
     --chart2: #4cc9d6; --on-chart: #000000;
+    --heat-0: #2b2433; --heat-1: #382a45; --heat-2: #44305a; --heat-3: #523671; --heat-4: #653d8c;
+    --heat-rule: rgba(0, 0, 0, 0.35); --table-select: color-mix(in srgb, var(--accent) 16%, transparent);
     color-scheme: dark;
   }
 }
@@ -62,6 +70,8 @@
   --ok: #6ccb5f; --warn: #f6c343; --bad: #ff99a4;
   --chart-cpu: #4aa3ff; --chart-memory: #c38cf2; --chart-disk: #7cc35a; --chart-net: #f0a34a; --chart-gpu: #4cc9d6;
   --chart2: #4cc9d6; --on-chart: #000000;
+  --heat-0: #2b2433; --heat-1: #382a45; --heat-2: #44305a; --heat-3: #523671; --heat-4: #653d8c;
+  --heat-rule: rgba(0, 0, 0, 0.35); --table-select: color-mix(in srgb, var(--accent) 16%, transparent);
   color-scheme: dark;
 }
 
@@ -71,8 +81,8 @@
 }
 
 /* Mica: on Windows 11 the window draws the Mica material and the page lets it show through the base and
-   the navigation pane; the content layer stays slightly opaque, as in WinUI's NavigationView. */
-:root[data-backdrop="mica"] { --canvas: transparent; --layer: rgba(255, 255, 255, 0.5); }
+   the navigation pane; the content layer is a near-white sheet over it, as in Task Manager. */
+:root[data-backdrop="mica"] { --canvas: transparent; --layer: rgba(255, 255, 255, 0.72); }
 @media (prefers-color-scheme: dark) {
   :root[data-backdrop="mica"]:not([data-theme="light"]) { --layer: rgba(58, 58, 58, 0.3); }
 }
@@ -129,6 +139,20 @@ button.chip.on {
   background: color-mix(in srgb, var(--accent) 20%, var(--control)); color: var(--ink);
   border-color: color-mix(in srgb, var(--accent) 55%, transparent);
 }
+
+/* CommandBar: flat buttons with an icon and a label (Task Manager, File Explorer). */
+.commandbar { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; }
+.commandbar .sep { width: 1px; height: 20px; margin: 0 6px; background: var(--rule-strong); }
+button.command {
+  display: inline-flex; align-items: center; gap: 8px; padding: 5px 10px 6px; background: transparent;
+  border-color: transparent; color: var(--ink);
+}
+button.command .icon { font-size: 16px; }
+button.command .chev { font-family: var(--font-icons); font-style: normal; font-size: 8px; color: var(--ink2); margin-left: -2px; }
+button.command:hover:not(:disabled) { background: var(--hover); }
+button.command:active:not(:disabled) { background: var(--pressed); border-color: transparent; }
+button.command:disabled { background: transparent; border-color: transparent; color: var(--ink-disabled); }
+button.command:disabled .chev { color: var(--ink-disabled); }
 
 /* Text boxes and selects: control fill, accent underline when focused. */
 input[type="search"], input[type="text"], input[type="password"], input[type="number"], select {

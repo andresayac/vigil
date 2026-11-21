@@ -2,13 +2,16 @@
 
 use vigil_i18n::{tl, tr};
 
-const OP_LABELS: [(&str, &str); 45] = [
+const OP_LABELS: [(&str, &str); 48] = [
     ("process.terminate", tl!("End process")),
     ("process.suspend", tl!("Suspend process")),
     ("process.resume", tl!("Resume process")),
     ("service.stop", tl!("Stop service")),
     ("service.disable", tl!("Disable service")),
     ("service.delete", tl!("Delete service")),
+    ("service.start", tl!("Start service")),
+    ("service.restart", tl!("Restart service")),
+    ("service.start_type", tl!("Change service startup type")),
     ("driver.disable", tl!("Disable driver")),
     ("task.disable", tl!("Disable task")),
     ("task.delete", tl!("Delete task")),

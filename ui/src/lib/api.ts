@@ -3,7 +3,7 @@
 import * as mock from "./mock";
 import type {
   ActionOutcome, ActionRequest, ActionSpec, AiProvider, AiStatus, Analysis, AppInfo, CleanupTarget, Connection, Hardware,
-  Insight, JournalRecord, LivePayload, ProcessDetails, QuarantineEntry, ReviewOffer, ScanProgress, SecretChanges, Settings,
+  Insight, JournalRecord, LivePayload, ProcessDetails, QuarantineEntry, ReviewOffer, ScanProgress, SecretChanges, Service, Settings,
   SpaceScan, TuningState, Volume,
 } from "./types";
 
@@ -125,6 +125,14 @@ export async function journal(): Promise<JournalRecord[]> {
 /** Modules (DLLs) loaded by a process and the services it hosts. */
 export async function processDetails(pid: number): Promise<ProcessDetails> {
   return inApp ? call<ProcessDetails>("process_details", { pid }) : mock.processDetails(pid);
+}
+/** Program icons (PNG data URLs) by executable path; paths without an icon are left out. */
+export async function processIcons(paths: string[]): Promise<Record<string, string>> {
+  return inApp ? call<Record<string, string>>("process_icons", { paths }) : mock.processIcons(paths);
+}
+/** Every Windows service (read-only); changes go through runAction ({ kind: "service" }). */
+export async function services(): Promise<Service[]> {
+  return inApp ? call<Service[]>("services_list") : mock.services();
 }
 export async function quarantine(): Promise<QuarantineEntry[]> {
   return inApp ? call<QuarantineEntry[]>("quarantine_list") : [];

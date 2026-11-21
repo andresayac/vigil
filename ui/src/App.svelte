@@ -19,6 +19,7 @@
   import Performance from "./pages/Performance.svelte";
   import Processes from "./pages/Processes.svelte";
   import Quarantine from "./pages/Quarantine.svelte";
+  import Services from "./pages/Services.svelte";
   import Storage from "./pages/Storage.svelte";
   import System from "./pages/System.svelte";
 
@@ -69,6 +70,7 @@
     { key: "performance", title: t("page.performance"), icon: "", section: t("nav.live") },
     { key: "processes", title: t("page.processes"), icon: "", section: t("nav.live") },
     { key: "network", title: t("page.network"), icon: "", section: t("nav.live") },
+    { key: "services", title: t("page.services"), icon: "", section: t("nav.live") },
     { key: "optimize", title: t("page.optimize"), icon: "", section: t("nav.maintenance") },
     { key: "storage", title: t("page.storage"), icon: "", section: t("nav.maintenance") },
     { key: "system", title: t("page.system"), icon: "", section: t("nav.maintenance") },
@@ -139,6 +141,8 @@
                    onshowfinding={(id) => { findingsFocus = { id }; page = "findings"; }} />
       {:else if page === "network"}
         <Network {elevated} />
+      {:else if page === "services"}
+        <Services {elevated} />
       {:else if page === "optimize"}
         <Optimize {elevated} onscan={() => (scanOpen = true)} />
       {:else if page === "storage"}

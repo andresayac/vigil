@@ -2,7 +2,7 @@
 // Nothing here describes a real computer.
 import type {
   ActionSpec, AiProvider, AiStatus, Analysis, CleanupTarget, Hardware, Insight, Item, JournalRecord, ProcessDetails, ReviewOffer,
-  Settings, SpaceNode, SpaceScan, TuningState, Volume,
+  Service, Settings, SpaceNode, SpaceScan, TuningState, Volume,
 } from "./types";
 
 function item(id: string, kind: string, title: string, verdict: string, score: number, extra: Partial<Item> = {}): Item {
@@ -18,6 +18,53 @@ function item(id: string, kind: string, title: string, verdict: string, score: n
     level: verdict === "trusted" ? "trusted" : score >= 70 ? "critical" : score >= 40 ? "suspicious" : score >= 15 ? "attention" : "no_signals",
     ...extra,
   };
+}
+
+export function services(): Service[] {
+  const sys = "C:\\Windows\\System32\\";
+  const hosted = (name: string, displayName: string, description: string, state: string, startType: string, pid: number,
+                  group: string, dll: string, account = "LocalSystem"): Service => ({
+    name, displayName, description, state, startType, pid, serviceType: "share", path: `${sys}svchost.exe -k ${group} -p`,
+    executable: `${sys}svchost.exe`, dll: sys + dll, account, group: group.toLowerCase(), protected: true,
+  });
+  const own = (name: string, displayName: string, description: string, state: string, startType: string, pid: number,
+               path: string, account = "LocalSystem", locked = false): Service => ({
+    name, displayName, description, state, startType, pid, serviceType: "own", path,
+    executable: path.startsWith('"') ? path.slice(1, path.indexOf('"', 1)) : path.split(" ")[0], dll: "", account, group: "",
+    protected: locked,
+  });
+  return [
+    hosted("AudioSrv", "Windows Audio", "Manages audio for Windows-based programs.", "running", "auto", 1044,
+           "LocalServiceNetworkRestricted", "Audiosrv.dll", "NT AUTHORITY\\LocalService"),
+    hosted("BITS", "Background Intelligent Transfer Service", "Transfers files in the background using idle network bandwidth.",
+           "stopped", "demand", 0, "netsvcs", "qmgr.dll"),
+    hosted("Dnscache", "DNS Client", "Caches Domain Name System (DNS) names and registers the full computer name.", "running", "auto",
+           1180, "NetworkService", "dnsrslvr.dll", "NT AUTHORITY\\NetworkService"),
+    hosted("EventLog", "Windows Event Log", "Manages events and event logs.", "running", "auto", 1010, "LocalServiceNetworkRestricted",
+           "wevtsvc.dll", "NT AUTHORITY\\LocalService"),
+    own("WinDefend", "Microsoft Defender Antivirus Service", "Helps protect users from malware and other potentially unwanted software.",
+        "running", "auto", 3120, "\"C:\\ProgramData\\Microsoft\\Windows Defender\\Platform\\MsMpEng.exe\"", "LocalSystem", true),
+    own("Spooler", "Print Spooler", "Spools print jobs and handles interaction with the printer.", "running", "auto", 2210,
+        `${sys}spoolsv.exe`, "LocalSystem", true),
+    hosted("TermService", "Remote Desktop Services", "Allows users to connect interactively to a remote computer.", "stopped", "demand",
+           0, "NetworkService", "termsrv.dll", "NT AUTHORITY\\NetworkService"),
+    hosted("Themes", "Themes", "Provides user experience theme management.", "running", "auto", 1010, "netsvcs", "themeservice.dll"),
+    hosted("wuauserv", "Windows Update", "Enables the detection, download and installation of updates for Windows and other programs.",
+           "stopped", "demand", 0, "netsvcs", "wuaueng.dll"),
+    own("WSearch", "Windows Search", "Provides content indexing, property caching and search results.", "running", "delayed-auto", 3900,
+        `${sys}SearchIndexer.exe /Embedding`, "LocalSystem", true),
+    own("NVDisplay.ContainerLocalSystem", "NVIDIA Display Container LS", "Container service for NVIDIA root features.", "running", "auto",
+        2400, "\"C:\\Program Files\\NVIDIA Corporation\\Display.NvContainer\\NVDisplay.Container.exe\" -s NVDisplay.ContainerLocalSystem"),
+    own("Steam Client Service", "Steam Client Service", "Steam Client Service monitors and updates Steam content.", "stopped", "demand", 0,
+        "\"C:\\Program Files (x86)\\Common Files\\Steam\\steamservice.exe\" /RunAsService"),
+    own("gupdate", "Google Update Service (gupdate)", "Keeps your Google software up to date.", "stopped", "delayed-auto", 0,
+        "\"C:\\Program Files (x86)\\Google\\Update\\GoogleUpdate.exe\" /svc"),
+    own("ContosoSync", "Contoso Sync Agent", "", "running", "auto", 4480, "C:\\ProgramData\\Contoso\\syncagent.exe --service"),
+    own("OddHelper", "Odd Helper", "", "stopped", "disabled", 0, "C:\\Users\\jdoe\\AppData\\Roaming\\OddHelper\\helper.exe"),
+    own("MySQL80", "MySQL80", "", "running", "auto", 3300,
+        "\"C:\\Program Files\\MySQL\\MySQL Server 8.0\\bin\\mysqld.exe\" --defaults-file=\"C:\\ProgramData\\MySQL\\my.ini\" MySQL80",
+        "NT AUTHORITY\\NetworkService"),
+  ].sort((a, b) => a.displayName.localeCompare(b.displayName));
 }
 
 export function processDetails(pid: number): ProcessDetails {

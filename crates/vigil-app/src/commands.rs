@@ -841,6 +841,10 @@ async fn build_plan(app: &AppHandle, request: &Request) -> CmdResult<Plan> {
             .collect(),
         _ => Vec::new(),
     };
+    let services = match request {
+        Request::Service { .. } => blocking(|| vigil_sys::services::list().map_err(|e| e.to_string())).await??,
+        _ => Vec::new(),
+    };
     let st = state(app);
     let inner = st.lock();
     let cleanup: Vec<Value> = inner
@@ -852,6 +856,7 @@ async fn build_plan(app: &AppHandle, request: &Request) -> CmdResult<Plan> {
         analysis: inner.analysis_json.as_ref(),
         processes: &processes,
         cleanup: &cleanup,
+        services: &services,
         space_files: &inner.space_files,
         power_plans: &power_plans,
         drive_media: &drive_media,
@@ -1177,6 +1182,32 @@ mod tests {
     }
 }
 
+// ------------------------------------------------------------------------------------ services
+
+/// A service for the Services page: what Windows reports, plus whether Vigil refuses to change it.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceView {
+    #[serde(flatten)]
+    service: vigil_sys::services::Service,
+    /// An essential Windows service, or a Windows component (its binary or service DLL lives in the
+    /// Windows folder): the action engine refuses to change it, so the page does not offer it.
+    protected: bool,
+}
+
+/// Every Win32 service (read-only).
+#[tauri::command]
+pub async fn services_list() -> CmdResult<Vec<ServiceView>> {
+    let services = blocking(|| vigil_sys::services::list().map_err(|e| e.to_string())).await??;
+    Ok(services
+        .into_iter()
+        .map(|service| ServiceView {
+            protected: requests::protected_service(&service),
+            service,
+        })
+        .collect())
+}
+
 // ------------------------------------------------------------------------------------ process inspector
 
 #[derive(Serialize)]
@@ -1214,6 +1245,24 @@ fn user_writable(path: &str) -> bool {
         && !under("SystemRoot")
         && !under("ProgramFiles")
         && !under("ProgramFiles(x86)")
+}
+
+/// Program icons for the process list, as PNG data URLs keyed by the path asked for (paths without
+/// an icon are left out). Read-only; each executable is read once and cached.
+#[tauri::command]
+pub async fn process_icons(paths: Vec<String>) -> CmdResult<std::collections::HashMap<String, String>> {
+    blocking(move || {
+        paths
+            .into_iter()
+            .take(512)
+            .filter(|path| {
+                let file = Path::new(path);
+                file.is_absolute() && file.extension().is_some_and(|e| e.eq_ignore_ascii_case("exe"))
+            })
+            .filter_map(|path| vigil_sys::apps::icon_data_url(&path).map(|url| (path, url)))
+            .collect()
+    })
+    .await
 }
 
 /// Modules and hosted services of one process (read-only).

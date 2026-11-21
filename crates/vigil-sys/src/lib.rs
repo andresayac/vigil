@@ -10,10 +10,12 @@ mod error;
 mod nt;
 mod util;
 
+pub mod apps;
 pub mod elevation;
 pub mod inspect;
 pub mod metrics;
 pub mod net;
 pub mod process;
+pub mod services;
 
 pub use error::SysError;

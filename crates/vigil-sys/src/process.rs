@@ -62,6 +62,10 @@ pub struct ProcessRow {
     /// Bytes read and written per second (disk, network and devices).
     pub io_bps: f64,
     pub status: ProcessStatus,
+    /// Owns a window on the desktop: Task Manager lists it under "Apps".
+    pub window: bool,
+    /// The file description of the image ("Google Chrome"); "" when it has none.
+    pub description: String,
 }
 
 /// A process handle that is closed when dropped.
@@ -130,6 +134,7 @@ struct Details {
     exe: String,
     user: String,
     cmdline: String,
+    description: String,
 }
 
 /// Reads path, user and command line of a process.
@@ -154,17 +159,21 @@ impl DetailsReader {
 
     fn read(&mut self, pid: u32, created_raw: i64) -> Details {
         let exe = self.paths.dos_path(pid);
+        // Cached per executable path: read once per program, not per process.
+        let description = crate::apps::file_description(&exe).unwrap_or_default();
         if pid <= 4 {
             return Details {
                 exe,
                 user: self.system_account.clone(),
                 cmdline: String::new(),
+                description,
             };
         }
         // SAFETY: plain call; the returned handle is owned by OwnedHandle below.
         let Ok(handle) = (unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }) else {
             return Details {
                 exe,
+                description,
                 ..Details::default()
             };
         };
@@ -173,6 +182,7 @@ impl DetailsReader {
         if created != 0 && created_raw != 0 && created != created_raw {
             return Details {
                 exe,
+                description,
                 ..Details::default()
             }; // the PID now belongs to another process
         }
@@ -181,6 +191,7 @@ impl DetailsReader {
             exe,
             user,
             cmdline: command_line(handle.0),
+            description,
         }
     }
 
@@ -358,6 +369,8 @@ impl ProcessSampler {
         let mut times = HashMap::with_capacity(samples.len());
         let mut io = HashMap::with_capacity(samples.len());
         let mut rows = Vec::with_capacity(samples.len());
+        // Which processes own a desktop window: one EnumWindows pass per sample (well under 1 ms).
+        let windows = crate::apps::window_pids();
         for sample in samples {
             let key = (sample.pid, sample.created_raw);
             let info = match self.details.remove(&key) {
@@ -377,7 +390,7 @@ impl ProcessSampler {
             };
             times.insert(key, sample.cpu_time);
             io.insert(key, transferred);
-            rows.push(row(&sample, &info, cpu, io_bps));
+            rows.push(row(&sample, &info, cpu, io_bps, windows.contains(&sample.pid)));
             details.insert(key, info);
         }
         self.details = details;
@@ -388,7 +401,7 @@ impl ProcessSampler {
     }
 }
 
-fn row(sample: &RawProcess, info: &Details, cpu: f64, io_bps: f64) -> ProcessRow {
+fn row(sample: &RawProcess, info: &Details, cpu: f64, io_bps: f64, window: bool) -> ProcessRow {
     ProcessRow {
         pid: sample.pid,
         ppid: sample.ppid,
@@ -409,5 +422,7 @@ fn row(sample: &RawProcess, info: &Details, cpu: f64, io_bps: f64) -> ProcessRow
         } else {
             ProcessStatus::Running
         },
+        window,
+        description: info.description.clone(),
     }
 }

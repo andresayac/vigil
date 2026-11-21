@@ -31,6 +31,32 @@ vigil scan --ai off                :: local rules only
 vigil scan --help                  :: every option
 ```
 
+Three more commands give a quick look at the live system from a terminal or a script. Like the scan they only read;
+changes are made from the app. Each one has `--help`, `--json` for machine-readable output and `--lang CODE`:
+
+```bat
+vigil list                         :: the 25 processes using the most CPU, measured over one second
+vigil list --sort mem -n 10        :: sort by cpu, mem, name or pid; -n 0 shows every process
+vigil ports --listening            :: listening ports with the process and service behind each one
+vigil services --running --json    :: running Windows services, as JSON
+vigil --help                       :: every command
+```
+
+The tables have one line per entry, for example:
+
+```text
+PID      CPU %   Memory       Name                          Path
+4321     12.5    245.3 MB     example.exe                   C:\Program Files\Example\example.exe
+
+Protocol  Local address             Remote address            State         Service           Process
+TCP       0.0.0.0:3389                                        LISTEN        Remote Desktop    svchost.exe (1180)
+
+Name                          State       Startup type                PID      Display name
+ExampleSvc                    Running     Automatic                   2210     Example Service
+```
+
+Exit codes: 0 when it worked, 2 for a wrong option or a read that failed.
+
 ## The AI agent
 
 The local rules decide first; the agent reviews what is left and explains it in plain words. You choose the agent in
@@ -76,6 +102,7 @@ A server on this computer (`localhost`) keeps everything here: nothing leaves th
 | **Performance** | Task Manager style: CPU (per core and clock), memory (in use, modified, standby, free, committed), each GPU (engines, VRAM), each disk and network adapter, with five minutes of history, a cursor shared by every chart, marks where Vigil changed something, and the processes using each resource most. | End a process, efficiency mode, priority, low disk and memory priority, trim its memory, show it in Processes. |
 | **Processes** | Live process tree with CPU, memory, disk, GPU and VRAM, user and path; rows hold still while you point at them. Processes that match a finding carry its verdict colour. An inspector lists the modules (DLLs) a process loaded, flagging those from folders a standard user can write to, and the services it hosts. | End process or tree, suspend/resume, priority, quarantine its file, block its network access, verify its signature, open its location or properties. |
 | **Network** | Live TCP/UDP endpoints with the service behind each port, highlighting internet addresses and remote-access ports open to the network. | End the owning process, block its network access. |
+| **Services** | Every Windows service with its state, startup type, process ID, account and command line; for services that share a host (svchost), the DLL that really runs. Windows components and essential services carry a lock. | Start, stop, restart, change the startup type (undo it from History), open the file location or the Services console. |
 | **Optimize** | Apps that start with Windows and services that start at boot, power plans, memory, Game Mode and GPU scheduling, GPU per app, hibernation file, drives. | Turn startup entries off, start services only when needed, switch or add power plans, free standby memory, choose the GPU for an app, turn hibernation off, TRIM or defragment a drive. |
 | **Storage** | Every drive's free space, junk files by place and a space analyzer (treemap, biggest folders, largest files). | Clean the selected places, clean up the component store, send large files to the Recycle Bin. |
 | **System** | Windows, processor, memory modules, graphics adapters and driver age, disks with health, temperature and wear, board, BIOS, page file, battery, and concrete findings such as memory running below its rated speed. | Copy a plain-text summary. |
@@ -87,7 +114,8 @@ What is offered depends on how the item is present on the system:
 - **Remove completely** (the main action for malware-like items): ends its processes, turns off every way it starts
   (services and drivers set to disabled, scheduled tasks disabled, startup entries switched off or deleted, WMI
   subscriptions removed) and moves its file to quarantine. Every step except ending processes can be undone.
-- Processes: end. Services: stop, disable, delete (the registry key is exported first). Drivers: disable.
+- Processes: end. Services: stop, disable, delete (the registry key is exported first); from the Services page also
+  start, restart and change the startup type. Drivers: disable.
 - Scheduled tasks: disable, delete (the task definition is saved first).
 - Startup entries: switch off with the same switch Task Manager uses, or delete (the value is saved first). Also
   debugger hooks (Image File Execution Options), Winlogon values, AppInit DLLs, logon scripts.

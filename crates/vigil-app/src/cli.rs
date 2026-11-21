@@ -59,14 +59,14 @@ struct Options {
     open: bool,
 }
 
-fn say(text: &str) {
+pub(crate) fn say(text: &str) {
     let mut out = std::io::stdout().lock();
     let _ = writeln!(out, "{text}");
     let _ = out.flush();
 }
 
 /// Release builds have no console of their own: write to the one that started us.
-fn attach_console() {
+pub(crate) fn attach_console() {
     #[cfg(not(debug_assertions))]
     {
         use windows::Win32::System::Console::{ATTACH_PARENT_PROCESS, AllocConsole, AttachConsole};

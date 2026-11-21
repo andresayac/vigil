@@ -10,6 +10,7 @@ const NAMES = [
   ["Code.exe", 7200, 5200], ["Code.exe", 7230, 7200], ["Code.exe", 7260, 7200], ["Discord.exe", 8100, 5200],
   ["Spotify.exe", 8400, 5200], ["steam.exe", 9100, 5200], ["steamwebhelper.exe", 9150, 9100], ["OneDrive.exe", 9500, 5200],
   ["nvcontainer.exe", 2400, 820], ["audiodg.exe", 2600, 1044], ["SearchHost.exe", 4100, 1010], ["Taskmgr.exe", 9900, 5200],
+  ["pwsh.exe", 7300, 7200], ["nvcontainer.exe", 2450, 2400], ["RuntimeBroker.exe", 4300, 1010],
 ] as const;
 
 const PATHS: Record<string, string> = {
@@ -17,7 +18,28 @@ const PATHS: Record<string, string> = {
   "Code.exe": "C:\\Users\\jdoe\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe",
   "svchost.exe": "C:\\Windows\\System32\\svchost.exe", "MsMpEng.exe": "C:\\ProgramData\\Microsoft\\Windows Defender\\Platform\\MsMpEng.exe",
   "Discord.exe": "C:\\Users\\jdoe\\AppData\\Local\\Discord\\app-1.0\\Discord.exe", "steam.exe": "C:\\Program Files (x86)\\Steam\\steam.exe",
+  "steamwebhelper.exe": "C:\\Program Files (x86)\\Steam\\bin\\cef\\steamwebhelper.exe",
+  "Spotify.exe": "C:\\Users\\jdoe\\AppData\\Roaming\\Spotify\\Spotify.exe",
+  "OneDrive.exe": "C:\\Users\\jdoe\\AppData\\Local\\Microsoft\\OneDrive\\OneDrive.exe",
+  "nvcontainer.exe": "C:\\Program Files\\NVIDIA Corporation\\NvContainer\\nvcontainer.exe",
+  "pwsh.exe": "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+  "SearchHost.exe": "C:\\Windows\\SystemApps\\MicrosoftWindows.Client.CBS\\SearchHost.exe",
 };
+
+/** File descriptions, as the version resource of each program states them. */
+const DESCRIPTIONS: Record<string, string> = {
+  "smss.exe": "Windows Session Manager", "csrss.exe": "Client Server Runtime Process", "wininit.exe": "Windows Start-Up Application",
+  "services.exe": "Services and Controller app", "lsass.exe": "Local Security Authority Process",
+  "svchost.exe": "Host Process for Windows Services", "MsMpEng.exe": "Antimalware Service Executable",
+  "dwm.exe": "Desktop Window Manager", "explorer.exe": "Windows Explorer", "chrome.exe": "Google Chrome",
+  "Code.exe": "Visual Studio Code", "Discord.exe": "Discord", "Spotify.exe": "Spotify", "steam.exe": "Steam",
+  "steamwebhelper.exe": "Steam Client WebHelper", "OneDrive.exe": "Microsoft OneDrive", "nvcontainer.exe": "NVIDIA Container",
+  "audiodg.exe": "Windows Audio Device Graph Isolation", "SearchHost.exe": "Search application", "Taskmgr.exe": "Task Manager",
+  "pwsh.exe": "PowerShell 7", "RuntimeBroker.exe": "Runtime Broker",
+};
+
+/** Processes that own a window on the desktop. */
+const WINDOWS = new Set([5200, 6100, 7200, 8100, 8400, 9100, 9900]);
 
 let t = 0;
 const BOOT = Date.now() - 12 * 3600 * 1000;   // stable start times, so selections survive refreshes
@@ -43,6 +65,7 @@ function processes(): ProcessRow[] {
     threads: 4 + (i % 30), handles: 100 + i * 17, session: pid < 2000 ? 0 : 1,
     createdMs: BOOT + i * 600_000, ioBps: i % 5 === 0 ? wave(200_000, 150_000, 0.4, i) : 0,
     status: name === "SearchHost.exe" ? "suspended" : "running",
+    window: WINDOWS.has(pid), description: DESCRIPTIONS[name] ?? "",
   }));
 }
 
@@ -71,6 +94,22 @@ function snapshot(): Snapshot {
 
 export function payload(): LivePayload {
   return { snapshot: snapshot(), processes: processes(), error: null };
+}
+
+/** Plain lettered tiles standing in for program icons; Windows programs get a window outline. */
+export function processIcons(paths: string[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const path of paths) {
+    const name = path.split("\\").pop() ?? "";
+    let hash = 7;
+    for (const c of name.toLowerCase()) hash = (hash * 31 + c.charCodeAt(0)) >>> 0;
+    const svg = /^[a-z]:\\windows\\/i.test(path)
+      ? `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect x="3" y="5" width="26" height="22" rx="3" fill="#e8eef7" stroke="#5b7fae" stroke-width="2"/><rect x="4" y="6" width="24" height="5" fill="#5b7fae"/></svg>`
+      : `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect x="2" y="2" width="28" height="28" rx="7" fill="hsl(${hash % 360} 55% 46%)"/>` +
+        `<text x="16" y="22.5" font-family="Segoe UI, sans-serif" font-size="17" font-weight="700" text-anchor="middle" fill="#fff">${name.charAt(0).toUpperCase()}</text></svg>`;
+    out[path] = `data:image/svg+xml,${encodeURIComponent(svg)}`;
+  }
+  return out;
 }
 
 export function connections(): Connection[] {
