@@ -1,54 +1,48 @@
 [package]
 name = "vigil-app"
-description = "Vigil: security inspection, live performance and maintenance for Windows"
+description = "Vigil for Windows: the native window, the tray and the command lines"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+publish = false
 
 [[bin]]
 name = "vigil"
 path = "src/main.rs"
 
-[lib]
-name = "vigil_app"
-path = "src/lib.rs"
-
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+# The icon and the version resource (GPUI embeds the application manifest).
+embed-resource = "3"
 
 [dependencies]
-vigil-i18n = { path = "../vigil-i18n" }
-tauri = { version = "2", features = ["tray-icon"] }
-tauri-plugin-dialog = "2"
+# Pinned: gpui-kit pins its GPUI snapshot (gpui-pre =0.3.12) exactly.
+gpui-kit = "=0.10.0"
+# Channels between the worker threads and the UI thread.
+futures = "0.3"
+raw-window-handle = "0.6"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-vigil-sys = { path = "../vigil-sys" }
-vigil-actions = { path = "../vigil-actions" }
-vigil-maint = { path = "../vigil-maint" }
-vigil-scan = { path = "../vigil-scan" }
 vigil-core = { path = "../vigil-core" }
+vigil-i18n = { path = "../vigil-i18n" }
+# Read-only hardware facts and maintenance data (no system changes live there).
+vigil-maint = { path = "../vigil-maint" }
+vigil-sys = { path = "../vigil-sys" }
 
 [dependencies.windows]
 version = "0.62"
 features = [
-    "Data_Xml_Dom",
     "Foundation",
-    "UI_Notifications",
-    "Wdk_Foundation",
-    "Wdk_Storage_FileSystem",
+    "UI_ViewManagement",
+    "Wdk_System_SystemServices",
     "Win32_Foundation",
-    "Win32_Security",
-    "Win32_Security_Credentials",
-    "Win32_Storage_FileSystem",
-    "Win32_System_Console",
-    "Win32_System_IO",
+    "Win32_Graphics_Dwm",
     "Win32_System_LibraryLoader",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
-    "Win32_System_WinRT",
-    "Win32_UI_Controls",
+    "Win32_System_Time",
+    "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ]

@@ -1,4 +1,4 @@
-//! Vigil's service layer, shared by every frontend (the Tauri window and the native GPUI window).
+//! Vigil's service layer, shared by the window and the command lines.
 //!
 //! A frontend displays data and asks for things; it never decides. It reads through the plain
 //! functions here and in `vigil-sys` / `vigil-maint`, and asks for a change with a typed
