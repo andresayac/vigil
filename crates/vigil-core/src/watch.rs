@@ -40,7 +40,6 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter};
 use vigil_i18n::tr;
 
 use crate::userdir::Dir;
@@ -1072,6 +1071,31 @@ pub struct Status {
     pub error: Option<String>,
 }
 
+/// What the watch needs from the front end it runs in.
+pub trait WatchHost: Send + Sync {
+    /// This copy took over the watch from one that quit: it gets the tray icon.
+    fn became_owner(&self);
+    /// Shows a notification about `page` (already in the watch's language).
+    fn notify(&self, title: &str, body: &str, page: &str);
+    /// The watch's state changed: refresh the window and the tray menu.
+    fn changed(&self, status: &Status);
+}
+
+/// The tray menu's two changing texts, for the state in `file`: (watching, notifications).
+pub fn tray_texts(file: &WatchFile) -> (String, String) {
+    let watching = if file.settings.watching {
+        tr!("Pause watching")
+    } else {
+        tr!("Resume watching")
+    };
+    let notifications = if file.notifications_paused(now_ms()) {
+        tr!("Resume notifications")
+    } else {
+        tr!("Pause notifications for 1 hour")
+    };
+    (watching, notifications)
+}
+
 pub struct Watcher {
     pub store: Store,
     elevated: bool,
@@ -1150,6 +1174,23 @@ impl Watcher {
         wake.notify_all();
     }
 
+    /// Turns the checks on or off (`None` toggles). Returns whether watching is on now.
+    pub fn set_watching(&self, value: Option<bool>) -> bool {
+        self.store
+            .update(|file| {
+                file.settings.watching = value.unwrap_or(!file.settings.watching);
+                file.settings.watching
+            })
+            .unwrap_or(false)
+    }
+
+    /// Pauses notifications for an hour (true) or resumes them (false).
+    pub fn pause_notifications(&self, pause: bool) {
+        let _ = self.store.update(|file| {
+            file.notify_paused_until = pause.then(|| now_ms() + PAUSE_MS);
+        });
+    }
+
     /// Waits up to `timeout`; true when woken by [`check_soon`](Self::check_soon).
     fn sleep(&self, timeout: Duration) -> bool {
         let (lock, wake) = &self.wake;
@@ -1207,24 +1248,26 @@ impl Watcher {
         limiter.offer(wanted, monotonic_ms())
     }
 
-    /// Starts the background thread (checks only while this copy owns the watch).
-    pub fn start(self: &Arc<Self>, app: AppHandle) {
+    /// Starts the background thread (checks only while this copy owns the watch). `host` is the
+    /// front end: it gets the tray icon when this copy takes the watch over, shows the
+    /// notifications and refreshes what shows the watch's state.
+    pub fn start(self: &Arc<Self>, host: Arc<dyn WatchHost>) {
         let watcher = Arc::clone(self);
         let spawned = thread::Builder::new()
             .name("vigil-watch".into())
-            .spawn(move || watcher.run(&app));
+            .spawn(move || watcher.run(&*host));
         if let Err(error) = spawned {
             eprintln!("could not start the watch: {error}");
         }
     }
 
-    fn run(&self, app: &AppHandle) {
+    fn run(&self, host: &dyn WatchHost) {
         crate::notify::init_thread();
         let mut next_check = Instant::now();
         loop {
             if !self.owner() && claim_watch() {
                 self.owner.store(true, Ordering::Release);
-                crate::tray::became_owner(app);
+                host.became_owner();
                 next_check = Instant::now();
             }
             if self.owner() && Instant::now() >= next_check {
@@ -1236,17 +1279,15 @@ impl Watcher {
                         let batch = self.to_notify(alerts);
                         if !batch.is_empty() {
                             let (title, body, target) = toast_text(&batch);
-                            crate::notify::show(app, &title, &body, &target);
+                            host.notify(&title, &body, &target);
                         }
                     });
                     self.state_changed();
-                    let _ = app.emit("watch", self.status());
-                    crate::tray::refresh(app);
+                    host.changed(&self.status());
                 }
             } else if self.state_changed() {
                 // The other copy (or a window of this one) changed the state: show it.
-                let _ = app.emit("watch", self.status());
-                crate::tray::refresh(app);
+                host.changed(&self.status());
             }
             let until_check = next_check.saturating_duration_since(Instant::now());
             if self.sleep(until_check.min(REFRESH)) {

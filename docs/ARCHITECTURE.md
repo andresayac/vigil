@@ -52,7 +52,7 @@ package.json            UI toolchain (npm)
   is needed to undo.
 - Strict CSP, no remote content, no `{@html}` in Svelte, capabilities limited to events and window control. URLs,
   consoles and tools the UI may open are allowlisted in the core.
-- The background watch (`vigil-app/src/watch.rs`) only reads. Once a minute it compares a fingerprint of startup
+- The background watch (`vigil-core/src/watch.rs`) only reads. Once a minute it compares a fingerprint of startup
   entries, services, scheduled tasks, security switches and remote-access ports with the last one saved in
   `%LOCALAPPDATA%\Vigil\watch\watch.json`, and turns each difference into an alert; a named mutex lets one copy of
   Vigil watch at a time. That folder is the user's, and an elevated Vigil writes there too, so `userdir.rs` opens it

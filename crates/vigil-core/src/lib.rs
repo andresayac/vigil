@@ -13,6 +13,7 @@ pub mod confirm;
 pub mod extensions;
 pub mod firewall;
 pub mod inspect;
+pub mod notify;
 pub mod planner;
 pub mod posture;
 pub mod programs;
@@ -25,6 +26,8 @@ pub mod settings;
 pub mod state;
 pub mod storage_ops;
 pub mod tools;
+pub mod userdir;
+pub mod watch;
 
 /// `vigil scan`: the command-line scan. Returns the exit code.
 pub fn scan_cli(args: &[String]) -> i32 {

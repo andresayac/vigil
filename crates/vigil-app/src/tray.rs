@@ -41,17 +41,7 @@ fn watcher(app: &AppHandle) -> Option<Arc<Watcher>> {
 
 fn texts(app: &AppHandle) -> (String, String) {
     let file = watcher(app).map(|w| w.store.load()).unwrap_or_default();
-    let watching = if file.settings.watching {
-        tr!("Pause watching")
-    } else {
-        tr!("Resume watching")
-    };
-    let notifications = if file.notifications_paused(watch::now_ms()) {
-        tr!("Resume notifications")
-    } else {
-        tr!("Pause notifications for 1 hour")
-    };
-    (watching, notifications)
+    watch::tray_texts(&file)
 }
 
 /// The language the user chose last (in any copy of Vigil; see `WatchFile::language`).
@@ -185,13 +175,7 @@ fn on_menu(app: &AppHandle, event: MenuEvent) {
 /// Turns the checks on or off (`None` toggles). Returns whether watching is on now.
 pub fn set_watching(app: &AppHandle, value: Option<bool>) -> bool {
     let Some(w) = watcher(app) else { return false };
-    let now = w
-        .store
-        .update(|file| {
-            file.settings.watching = value.unwrap_or(!file.settings.watching);
-            file.settings.watching
-        })
-        .unwrap_or(false);
+    let now = w.set_watching(value);
     refresh(app);
     let _ = app.emit("watch", w.status());
     now
@@ -200,9 +184,7 @@ pub fn set_watching(app: &AppHandle, value: Option<bool>) -> bool {
 /// Pauses notifications for an hour (true) or resumes them (false).
 pub fn pause_notifications(app: &AppHandle, pause: bool) {
     let Some(w) = watcher(app) else { return };
-    let _ = w.store.update(|file| {
-        file.notify_paused_until = pause.then(|| watch::now_ms() + watch::PAUSE_MS);
-    });
+    w.pause_notifications(pause);
     refresh(app);
     let _ = app.emit("watch", w.status());
 }
@@ -255,4 +237,22 @@ pub fn close_to_tray(app: &AppHandle) -> bool {
         });
     }
     true
+}
+
+/// The watch's view of the Tauri app: the tray icon, notifications and the `watch` event.
+pub struct Host(pub AppHandle);
+
+impl watch::WatchHost for Host {
+    fn became_owner(&self) {
+        became_owner(&self.0);
+    }
+
+    fn notify(&self, title: &str, body: &str, page: &str) {
+        crate::notify::show(&self.0, title, body, page);
+    }
+
+    fn changed(&self, status: &watch::Status) {
+        let _ = self.0.emit("watch", status.clone());
+        refresh(&self.0);
+    }
 }

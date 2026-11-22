@@ -17,11 +17,9 @@ mod programs;
 mod protection;
 mod reliability;
 mod tray;
-mod userdir;
-mod watch;
 
 // The frontend-independent modules, under the names the rest of the app uses.
-use vigil_core::{autostart, confirm, storage_ops};
+use vigil_core::{autostart, confirm, storage_ops, watch};
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
@@ -135,7 +133,7 @@ pub fn run() {
             if owner {
                 tray::install(app.handle());
             }
-            watcher.start(app.handle().clone());
+            watcher.start(std::sync::Arc::new(tray::Host(app.handle().clone())));
             protection::start_monitor(app.handle().clone());
             Ok(())
         })
