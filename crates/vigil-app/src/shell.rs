@@ -593,6 +593,8 @@ impl Shell {
                 .item(item(t("menu.eventViewer"), |s, w, cx| {
                     s.shell_request("console", None, Some("eventvwr.msc"), w, cx)
                 }))
+                .separator()
+                .item(item(t("menu.about"), |_, w, cx| crate::dialogs::about(w, cx)))
         })
     }
 

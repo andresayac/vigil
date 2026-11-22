@@ -1,6 +1,6 @@
 //! Vigil's service layer, shared by the window and the command lines.
 //!
-//! A frontend displays data and asks for things; it never decides. It reads through the plain
+//! The window displays data and asks for things; it never decides. It reads through the plain
 //! functions here and in `vigil-sys` / `vigil-maint`, and asks for a change with a typed
 //! [`requests::Request`] handed to [`service::run_action`]. That rebuilds the action from Rust's
 //! own state (`requests`), confirms it in a native Windows dialog (`confirm`) and runs it through

@@ -1,9 +1,9 @@
 //! Turns what the UI asks for into an action Rust trusts.
 //!
-//! The web view sends small requests ("end process 1234 started at T", "run action 2 of finding
+//! The window sends small requests ("end process 1234 started at T", "run action 2 of finding
 //! B1"). Nothing in them is used as is: Rust rebuilds the ActionSpec from its own state (the report
 //! it loaded, the live process list, the targets it measured), validates every value, and writes
-//! the texts the confirmation shows. A compromised page can at most ask for an action the user
+//! the texts the confirmation shows. A misbehaving window can at most ask for an action the user
 //! then sees and declines.
 
 use std::path::Path;

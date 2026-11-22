@@ -1,4 +1,4 @@
-//! The state every frontend shares: the data folder and journal, the settings, the loaded report,
+//! The shared state: the data folder and journal, the settings, the loaded report,
 //! the measurements requests are checked against, and the flag that allows one change at a time.
 
 use std::path::PathBuf;

@@ -1,4 +1,4 @@
-//! Native confirmation with a Windows task dialog. The web view never decides that an action
+//! Native confirmation with a Windows task dialog. The window never decides that an action
 //! runs: Rust rebuilds the action, shows exactly what it will do here, and runs it only on "yes".
 //!
 //! The text is plain (hyperlinks are not enabled), so names and paths that come from the system
@@ -47,7 +47,7 @@ fn wide(text: &str) -> Vec<u16> {
 
 fn task_dialog_fn() -> Option<TaskDialogIndirectFn> {
     // SAFETY: plain library load by name; the handle stays loaded for the life of the process
-    // (comctl32 is already loaded by the web view host).
+    // (the process already uses comctl32 version 6, from its manifest).
     let module = unsafe { LoadLibraryW(w!("comctl32.dll")) }.ok()?;
     // SAFETY: the symbol name is a valid NUL-terminated string.
     let proc = unsafe { GetProcAddress(module, s!("TaskDialogIndirect")) }?;

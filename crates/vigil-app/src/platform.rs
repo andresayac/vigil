@@ -1,7 +1,7 @@
 //! The Windows pieces GPUI does not provide: the tray icon and its menu, one window per user
 //! session, and the system accent colour.
 //!
-//! The tray lives on its own thread with a hidden message-only window (class `VigilGpuiTray`):
+//! The tray lives on its own thread with a hidden message-only window (class `VigilTray`):
 //! `Shell_NotifyIconW` reports clicks there, and the menu is a native popup menu, so it looks and
 //! reads (Narrator) like every other tray menu. What the user picks travels to the UI thread as a
 //! [`Command`]. A second copy of the window finds that hidden window and asks it to show the first
@@ -45,7 +45,7 @@ pub enum Command {
     Refresh,
 }
 
-const CLASS: PCWSTR = w!("VigilGpuiTray");
+const CLASS: PCWSTR = w!("VigilTray");
 const WM_TRAY: u32 = WM_APP + 1;
 /// Re-read the watch's state for the tooltip.
 const WM_REFRESH: u32 = WM_APP + 2;
@@ -119,7 +119,7 @@ fn post(message: u32) {
 pub fn claim_window() -> bool {
     // SAFETY: plain Win32 call with a static name; the handle stays open for the life of the
     // process on purpose (it is what marks this copy as the one with the window).
-    let handle = unsafe { CreateMutexW(None, false, w!("Local\\Vigil.GpuiWindow")) };
+    let handle = unsafe { CreateMutexW(None, false, w!("Local\\Vigil.Window")) };
     // SAFETY: reads this thread's last error, set by CreateMutexW just above.
     let exists = unsafe { GetLastError() } == ERROR_ALREADY_EXISTS;
     if handle.is_ok() && !exists {

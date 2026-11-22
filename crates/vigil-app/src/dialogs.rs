@@ -710,3 +710,35 @@ pub fn affinity(ctx: Ctx, pid: u32, created_ms: i64, name: String, window: &mut 
         dialog.title(t("affinity.title")).w(px(620.)).child(view.clone())
     });
 }
+
+// ---------------------------------------------------------------- About
+
+/// About Vigil: the version, what it does and its licence.
+pub fn about(window: &mut Window, cx: &mut gpui_kit::App) {
+    window.open_dialog(cx, move |dialog, _, cx| {
+        let tk = *tokens(cx);
+        dialog
+            .bg(tk.flyout)
+            .title(t("about.title"))
+            .w(px(480.))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(kit::body(format!("Vigil {}", env!("CARGO_PKG_VERSION"))).font_weight(FontWeight::SEMIBOLD))
+                    .child(kit::body(t("about.body")))
+                    .child(kit::muted(
+                        format!("{} · github.com/andresayac/vigil", t("about.licence")),
+                        &tk,
+                    )),
+            )
+            .footer(
+                div().flex().justify_end().child(
+                    ui::accent_button("about-close", t("common.close"))
+                        .min_w(px(120.))
+                        .on_click(|_, window, cx| window.close_dialog(cx)),
+                ),
+            )
+    });
+}

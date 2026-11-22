@@ -1,10 +1,10 @@
-//! The one path by which a frontend changes the system.
+//! The one path by which the window changes the system.
 //!
-//! A frontend sends a typed [`Request`]; [`run_action`] rebuilds the action from Rust's own state
+//! The window sends a typed [`Request`]; [`run_action`] rebuilds the action from Rust's own state
 //! (requests.rs), asks for confirmation in a native Windows dialog (confirm.rs) and runs it through
-//! the action engine (`vigil_actions::execute`), which journals it. Frontends never build an
-//! `ActionSpec` and never call the engine themselves: they only implement [`Ui`], which shows the
-//! dialog on their UI thread and passes progress lines on.
+//! the action engine (`vigil_actions::execute`), which journals it. The window never builds an
+//! `ActionSpec` and never calls the engine itself: it only implements [`Ui`], which shows the
+//! dialog on its own thread and passes progress lines on.
 //!
 //! [`run_action`] blocks (it reads live state, waits for the user and runs the action): call it on
 //! a worker thread, never on the UI thread.
@@ -22,7 +22,7 @@ use crate::planner::spec;
 use crate::requests::{self, Context, Plan, Request};
 use crate::state::AppState;
 
-/// What a frontend provides to the action path.
+/// What the window provides to the action path.
 pub trait Ui {
     /// The window that owns the confirmation dialog (an HWND; 0 for none).
     fn owner(&self) -> isize;
