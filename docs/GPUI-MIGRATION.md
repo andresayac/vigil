@@ -1,6 +1,6 @@
 # Moving Vigil's interface to GPUI (gpui-kit)
 
-This document records phase 1 of the move from Tauri 2 + Svelte 5 to a native Rust interface built with
+This document records phases 1 and 2 of the move from Tauri 2 + Svelte 5 to a native Rust interface built with
 [gpui-kit](https://gpui-kit.com) (Longbridge; one crate that bundles GPUI, `gpui-base` and `gpui-component`).
 It covers what was verified, the prototype in `crates/vigil-gpui`, the measurements, the risks and the plan
 for the remaining pages. The Tauri app keeps working side by side until the plan is done.
@@ -64,7 +64,9 @@ crates/
                  requests (typed Request -> trusted Plan), planner, confirm (native task dialog),
                  service::run_action (the only path to vigil_actions::execute), settings, secrets,
                  inspect (process details, scheduled tasks), firewall / programs / protection /
-                 reliability views and request checks, the command lines
+                 reliability / posture / accounts / extensions views and request checks, the
+                 background watch and its notifications, the AI investigation, the MCP tool
+                 registry and server, the command lines (phase 2 added the last four, see section 10)
   vigil-app/     the Tauri app: Tauri commands are now thin wrappers over vigil-core
   vigil-gpui/    NEW: the native window (binary vigil-gpui.exe for now)
 ```
@@ -310,3 +312,120 @@ Phase 2:
    exercise every pattern the remaining pages need (tables with live data, menus, dialogs, events, undo).
 4. Check: a Narrator and UI Automation pass, the measurements again on the finished pages, and a
    go/no-go for the rest of the port and for retiring Tauri.
+
+## 10. Phase 2: what is done, what is left
+
+Phase 2 followed the plan of section 9, on top of 1.5.0 and then 1.6.0 (both merged into this branch).
+
+### Shared core
+
+`vigil-core` now also holds the background watch (`watch.rs`, with the 1.6.0 alerts), its notifications
+(`notify.rs`, the action to run when a toast is clicked is a parameter), the private-folder helpers
+(`userdir.rs`), the 1.5.0 Security posture, Accounts and Browser extensions modules, the startup signature
+checks, the report open / export helpers, the AI investigation (`investigate.rs`) and the MCP tool registry and
+server (`mcp/`). Each front end reaches the watch through a three-method `WatchHost` trait (tray icon on
+takeover, notifications, state changes) and the investigation through the same `Ui` trait as the action path
+(consent dialog on the owner window, one progress line per tool call). The Tauri commands, the Tauri tray and
+`vigil mcp` are thin wrappers and keep the 1.6.0 behaviour; the tests went from 533 to 560 passed (10 ignored).
+
+### Fluent controls (`vigil-gpui/src/ui`)
+
+Built on gpui-base's unstyled primitives, so focus, Tab traversal, Enter / Space activation, the accessibility
+role and name, and the **disabled state** (exposed to UI Automation as not enabled) come from the framework:
+
+| Control | Built on | Notes |
+|---|---|---|
+| Button (standard, accent, subtle, danger), command bar button, icon button | `gpui_base::Button` | glyph, label, chevron; `dropdown_menu` opens a flyout menu |
+| Toggle switch | `gpui_base::Switch` | WinUI 40 × 20 track, state announced |
+| Check box | `gpui_base::Checkbox` | |
+| Segmented control | `gpui_base::Button` with role radio button | a radio group, the selected one announced |
+| Text box / search | gpui-component `Input` | search glyph, clear button, IME |
+| Combo / menu | gpui-component `PopupMenu` | checked and disabled items, separators; also the table's context menu |
+| Dialog | gpui-component `Dialog` | Settings; changes are still confirmed by the native task dialog |
+| InfoBar | `div` with role status | informational, success, warning, error, dismiss |
+| List and table rows | gpui-component `DataTable` + `ui::grid` | selection by row identity, Up / Down / Home / End / Page Up / Page Down |
+
+### Pages at parity
+
+| Page | What it has |
+|---|---|
+| Processes | as phase 1, plus program icons, the row context menu (Task Manager's order), Priority / File / More menus, the inspector's Details / Modules / Services tabs (modules from user-writable folders flagged), keyboard selection, a process chosen from Performance selected and scrolled into view |
+| Performance | CPU, memory, every disk, the two busiest network adapters, every GPU; 1 / 2 / 5-minute ranges; Pause / Back to live; the logical-processor grid; the memory composition; transfer-rate and dedicated-memory charts; statistics; hardware facts (read once in the background); the processes using each resource with Show in Processes |
+| Services | filter, running only, Start / Stop / Restart, startup type menu, Open file location, Open Services, protected services marked and never offered, details |
+| Startup apps | search, Enable / Disable / Delete (policy entries), Open file location, Properties, signatures checked in the background, program icons, details |
+| Quarantine | Restore, Delete permanently, the "removed at the next restart" note |
+| History | batches of "Remove completely" grouped under a heading, Undo, Undo the whole removal |
+
+Every page has `--demo` data (`demo.rs`, `demo_pages.rs`: jdoe on PC-VICTIM, Contoso, Fabrikam, Woodgrove,
+Tailspin). The three 1.5.0 pages appear in the navigation as placeholders, in main's order.
+
+### Platform pieces
+
+| Piece | How | Checked |
+|---|---|---|
+| Tray icon and menu | `Shell_NotifyIconW` on a thread with a message-only window; native popup menu (Open, Pause / Resume watching, Pause / Resume notifications, New scan, Quit) in the watch's language; the shared watch (`vigil_core::watch`) and its named mutex decide which copy of Vigil (Tauri or native) watches and shows the icon | the window and the watch file in a redirected data folder |
+| One window per session | a named mutex; a second copy posts to the first copy's message window and quits | the second copy quit with code 0; the first came back |
+| Close to the tray | `on_window_should_close` hides the window (the live sampler stops) when this copy watches and the setting says so; the first time, a notification says so | WM_CLOSE hid it, the process stayed, a second copy showed it again |
+| Toast activation | `vigil_core::notify` with an action that sends "open page" to the window | built and wired; no toast was clicked |
+| `--tray` | starts hidden (GPUI `show: false`), quits when another copy already watches | built and wired |
+| Restart as administrator | the button in the navigation pane (not elevated, not the demo) calls `relaunch_elevated` | built and wired only: never run here, so no UAC prompt was triggered |
+| File dialogs | `prompt_for_paths` (Open report) and `prompt_for_new_path` (Export HTML report) in the More menu | built and wired |
+| Accent colour | `UISettings::GetColorValue` (AccentDark1 on light, AccentLight2 on dark); the demo keeps Fluent's default | yes |
+| Title bar | follows Vigil's theme, re-applied when Windows changes its theme | yes |
+| Icon | the 1.6.0 icon as the executable's and the windows' icon (resource 1, no second manifest) | yes |
+
+### Accessibility pass
+
+UI Automation is what Narrator reads. On every ported page of the demo, every button, radio button, check box,
+edit and list item has a name (no unnamed control), disabled command buttons are reported as not enabled, the
+navigation is a list of named buttons, view switches are radio buttons, tables are tables of data items, and
+25 to 30 controls take keyboard focus per page. Two gaps remain: plain `div`s given the roles list box, list box
+option or image (the Performance resource list and charts) do not reach UI Automation, and plain text is not
+selectable. A spoken pass with Narrator itself is still to do.
+
+### Left, with revised estimates
+
+| Area | Days |
+|---|---|
+| Overview, Findings (with the 1.6.0 investigation panel), Alerts | 9 |
+| Protection, Security posture, Firewall rules, Accounts, Browser extensions | 17 |
+| Network, Optimize, Scheduled tasks, Installed programs, Storage, System, Reliability | 22 |
+| Dialogs: Scan, AI consent, full Settings (AI providers, API keys, watch notifications, start with Windows), Results, About, Run new task, Processor affinity | 6 |
+| Remaining platform: start with Windows from Settings, window placement, About, the More flyout's last entries | 2 |
+| Accessibility: roles for custom lists and charts, selectable text, a Narrator pass | 3 |
+| Demo data for the remaining pages, screenshot command, gpui-kit UI tests | 4 |
+| Strings: convert the rest of the TS catalogs, generated keys | 1 |
+| Packaging and CI | 2 |
+| **Total left** | **about 66 days**, plus 20% contingency |
+
+Phase 2 took less than its share of the original 74-day estimate because the control set, the table and the
+action path are now reusable: a table page (Services, Startup, Quarantine, History) is 300 to 450 lines.
+
+### Measurements after phase 2
+
+Same method as section 4, release builds of this branch (Tauri: 1.6.0), the data folder redirected to a scratch
+folder. Both copies now run the background watch (each was the copy that watches, with its tray icon), so its
+first check falls inside the idle window for both.
+
+| | Tauri + Svelte (`vigil.exe` 1.6.0) | Native (`vigil-gpui.exe`) |
+|---|---|---|
+| Release executable | 23.0 MB (22.0 MiB), plus the WebView2 runtime | 29.7 MB (28.4 MiB), nothing else |
+| Processes | 7 | 1 |
+| Startup, window visible / content drawn (median of 5) | 447 / 465 ms | 251 / 295 ms |
+| Idle on the start page: private memory / working set | 255.7 / 459.0 MB | 89.5 / 70.1 MB |
+| Idle CPU | 2.5% of one core | 2.8% of one core |
+| Processes page, live: private memory / working set | 342.9 / 544.8 MB | 116.8 / 102.1 MB |
+| Processes page, live: CPU | 5.4% of one core (0.34% of the machine) | 3.9% of one core (0.24% of the machine) |
+| Release build (dependencies cached) | 2 min 57 s | 4 min 43 s |
+
+The native Processes page now has its icons, menus and inspector, and costs 8 MB and about one point of a core
+more than in phase 1. Idle CPU is now on a par: both include the watch's first check, and GPUI still wakes two
+threads every frame interval. The executable grew by 3.5 MB with the new pages, the controls and the tray.
+
+### Next
+
+The foundations hold: every page that is left is built from the same pieces (the control set, the keyed
+table, `common::send` for requests, `common::read` for background reads, `--demo` data). Phase 3 can port the
+remaining pages in the order of the table above, the security pages first, and then replace the Tauri binary:
+`vigil-gpui` becomes `vigil.exe` (with `vigil scan`, `vigil mcp` and the other command lines, already in
+vigil-core), the NSIS installer packs it, and `ui/` and `vigil-app` are removed.
