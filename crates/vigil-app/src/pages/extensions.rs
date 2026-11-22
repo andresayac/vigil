@@ -657,17 +657,15 @@ impl Render for ExtensionsPage {
             },
             &tk,
         );
-        let mut head = kit::row()
-            .child(ui::page_title(t("page.extensions")))
-            .child(views)
-            .child(div().flex_1());
+        let mut head = kit::row().child(ui::page_title(t("page.extensions"))).child(views);
+        let mut bar = ui::CommandBar::new("ex-bar");
         if self.view_policies {
             let removable = policy.as_ref().is_some_and(|p| {
                 p.b("removable") && p.s("scope") != "file" && (p.s("scope") == "user" || self.ctx.elevated)
             }) && !busy;
             let id = policy.as_ref().map(|p| p.s("id").to_string()).unwrap_or_default();
-            head = head.child(
-                ui::command("ex-remove", icons::DELETE, t("ext.removePolicy"))
+            bar = bar.cmd(
+                ui::cmd("ex-remove", icons::DELETE, t("ext.removePolicy"))
                     .disabled(!removable)
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.send(json!({"kind": "browser-policy", "op": "remove", "id": id}), window, cx)
@@ -687,14 +685,14 @@ impl Render for ExtensionsPage {
                 .as_ref()
                 .filter(|e| e.has("path") && e.b("pathExists"))
                 .map(|e| e.s("key").to_string());
-            head = head
-                .child(
-                    ui::command("ex-page", '\u{E8A7}', t("ext.openPage"))
+            bar = bar
+                .cmd(
+                    ui::cmd("ex-page", '\u{E8A7}', t("ext.openPage"))
                         .disabled(!can_page)
                         .on_click(cx.listener(move |this, _, window, cx| this.send(page_request.clone(), window, cx))),
                 )
-                .child(
-                    ui::command("ex-folder", icons::FOLDER, t("ext.openFolder"))
+                .cmd(
+                    ui::cmd("ex-folder", icons::FOLDER, t("ext.openFolder"))
                         .disabled(folder.is_none())
                         .on_click(cx.listener(move |this, _, window, cx| {
                             if let Some(key) = &folder {
@@ -703,11 +701,12 @@ impl Render for ExtensionsPage {
                         })),
                 );
         }
-        head = head.child(ui::separator(&tk)).child(
-            ui::command("ex-refresh", icons::REFRESH, t("common.refresh"))
+        bar = bar.separator().cmd(
+            ui::cmd("ex-refresh", icons::REFRESH, t("common.refresh"))
                 .disabled(self.loading)
                 .on_click(cx.listener(|this, _, _, cx| this.load(cx))),
         );
+        head = head.child(bar);
 
         // Where: browsers and their profiles.
         let mut places: Vec<(String, String)> = Vec::new();

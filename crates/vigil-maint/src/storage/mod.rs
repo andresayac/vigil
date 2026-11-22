@@ -10,6 +10,7 @@
 //! * every file is opened without following links, its real path is read from that same handle
 //!   and checked to be inside the real root, and only then is it deleted through that handle.
 
+mod dupes;
 mod space;
 #[cfg(test)]
 mod tests;
@@ -30,6 +31,10 @@ use windows::Win32::UI::Shell::{
 };
 use windows::core::PCWSTR;
 
+pub use dupes::{
+    DEFAULT_MIN_SIZE, DupFile, DupGroup, DupOptions, DupScan, file_sha256, find_duplicates, in_system_folder,
+    system_folders,
+};
 pub use space::{LargeFile, Node, SpaceScan, scan_space};
 
 use crate::error::{MaintError, MaintErrorKind};

@@ -27,14 +27,16 @@ use crate::pages::processes::ProcessesPage;
 use crate::pages::quarantine::QuarantinePage;
 use crate::pages::services::ServicesPage;
 use crate::pages::startup::StartupPage;
+use crate::palette::Palette;
 use crate::platform::Command;
+use crate::search::{self as find, Entry, Target};
 use crate::theme::{self, Choice, FONT_BODY, Tokens, tokens};
 use crate::ui::kit::J as _;
 use crate::ui::{self, FButton, Kind, Severity};
 use gpui_kit::base::Selectable as _;
 
 /// (key, section) of every page, in the order of the navigation pane.
-pub const PAGES: [(&str, &str); 22] = [
+pub const PAGES: [(&str, &str); 24] = [
     ("overview", "nav.security"),
     ("findings", "nav.security"),
     ("alerts", "nav.security"),
@@ -54,13 +56,15 @@ pub const PAGES: [(&str, &str); 22] = [
     ("tasks", "nav.maintenance"),
     ("programs", "nav.maintenance"),
     ("storage", "nav.maintenance"),
+    ("restore", "nav.maintenance"),
     ("system", "nav.maintenance"),
     ("updates", "nav.maintenance"),
+    ("power", "nav.maintenance"),
     ("reliability", "nav.maintenance"),
 ];
 
 /// Element ids of the navigation items (GPUI ids are static strings or numbers).
-const NAV_IDS: [&str; 22] = [
+const NAV_IDS: [&str; 24] = [
     "nav-overview",
     "nav-findings",
     "nav-alerts",
@@ -80,8 +84,10 @@ const NAV_IDS: [&str; 22] = [
     "nav-tasks",
     "nav-programs",
     "nav-storage",
+    "nav-restore",
     "nav-system",
     "nav-updates",
+    "nav-power",
     "nav-reliability",
 ];
 
@@ -131,6 +137,8 @@ pub struct Shell {
     acting: Acting,
     /// An InfoBar over the content (an exported report, a refused restart).
     notice: Option<(Severity, String)>,
+    /// The command palette (Ctrl+K) while it is open.
+    palette: Option<Entity<Palette>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -195,6 +203,20 @@ impl Shell {
                 this.apply_theme(window, cx);
             }),
             cx.observe(&report, |_, _, cx| cx.notify()),
+            {
+                // Ctrl+K anywhere in the window, and the palette's keys while it is open (its text
+                // box would otherwise keep Up, Down and Enter), before any control sees them.
+                let shell = cx.entity().downgrade();
+                cx.intercept_keystrokes(move |event, window, cx| {
+                    let keystroke = event.keystroke.clone();
+                    let used = shell
+                        .update(cx, |shell, cx| shell.palette_key(&keystroke, window, cx))
+                        .unwrap_or(false);
+                    if used {
+                        cx.stop_propagation();
+                    }
+                })
+            },
         ];
         let mut shell = Self {
             page,
@@ -212,6 +234,7 @@ impl Shell {
             focus_pid,
             acting: Acting::default(),
             notice: None,
+            palette: None,
             _subscriptions: subscriptions,
         };
         // The data folder could not be fully restricted to administrators: say so.
@@ -229,6 +252,14 @@ impl Shell {
                 "run" => {
                     let ctx = shell.ctx(cx);
                     crate::dialogs::run_task(ctx, window, cx);
+                }
+                // `search` or `search=<text>`: the command palette, with that text typed.
+                other if other == "search" || other.starts_with("search=") => {
+                    shell.open_palette(window, cx);
+                    if let (Some(text), Some(palette)) = (other.strip_prefix("search="), shell.palette.clone()) {
+                        let text = text.to_string();
+                        palette.update(cx, |palette, cx| palette.set_query(&text, window, cx));
+                    }
                 }
                 _ => {}
             });
@@ -345,8 +376,13 @@ impl Shell {
             ),
             "optimize" => Some(cx.new(|cx| crate::pages::optimize::OptimizePage::new(ctx, cx)).into()),
             "storage" => Some(cx.new(|cx| crate::pages::storage::StoragePage::new(ctx, cx)).into()),
+            "restore" => Some(
+                cx.new(|cx| crate::pages::restore::RestorePage::new(ctx, window, cx))
+                    .into(),
+            ),
             "system" => Some(cx.new(|cx| crate::pages::system::SystemPage::new(ctx, cx)).into()),
             "updates" => Some(cx.new(|cx| crate::pages::updates::UpdatesPage::new(ctx, cx)).into()),
+            "power" => Some(cx.new(|cx| crate::pages::power::PowerPage::new(ctx, cx)).into()),
             "reliability" => Some(
                 cx.new(|cx| crate::pages::reliability::ReliabilityPage::new(ctx, cx))
                     .into(),
@@ -570,6 +606,148 @@ impl Shell {
         self.apply_theme(window, cx);
         let page = self.page;
         self.open(page, window, cx);
+    }
+
+    /// What the palette can find now: the pages, the processes of the last live sample, the loaded
+    /// report's findings, the watch's alerts, and what the pages read last (see `search.rs`).
+    fn search_entries(&self, cx: &mut Context<Self>) -> (Vec<Entry>, Vec<find::Kind>) {
+        let mut entries = Vec::new();
+        for (key, _) in PAGES.iter() {
+            let key: &'static str = key;
+            let title = t(&format!("page.{key}"));
+            let english = vigil_i18n::with_language("en", || t(&format!("page.{key}")));
+            entries.push(Entry::new(
+                find::Kind::Page,
+                &title,
+                "",
+                &[&english, find::page_synonyms(key)],
+                Target::Page(key),
+            ));
+        }
+        for p in &self.live.read(cx).processes {
+            let title = if p.description.is_empty() {
+                &p.name
+            } else {
+                &p.description
+            };
+            entries.push(Entry::new(
+                find::Kind::Process,
+                title,
+                &format!("{} PID {}", p.name, p.pid),
+                &[&p.exe, &p.user],
+                Target::Process(p.pid),
+            ));
+        }
+        if let Some(analysis) = &self.report.read(cx).analysis {
+            for item in analysis.a("items") {
+                let detail = if item.has("path") {
+                    item.s("path")
+                } else {
+                    item.s("subtitle")
+                };
+                entries.push(Entry::new(
+                    find::Kind::Finding,
+                    item.s("title"),
+                    detail,
+                    &[item.s("subtitle"), item.s("kind"), item.s("sha256")],
+                    Target::Finding(item.s("id").to_string()),
+                ));
+            }
+        }
+        if let Some(alerts) = self.ctx(cx).watch_alerts().as_array() {
+            for alert in alerts.iter().take(200) {
+                entries.push(Entry::new(
+                    find::Kind::Alert,
+                    alert.s("title"),
+                    alert.s("detail"),
+                    &[alert.s("target")],
+                    Target::Page("alerts"),
+                ));
+            }
+        }
+        let (mut remembered, missing) = find::remembered();
+        entries.append(&mut remembered);
+        (entries, missing)
+    }
+
+    /// Opens the command palette (Ctrl+K or the search button).
+    fn open_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.palette.is_some() {
+            return;
+        }
+        let (entries, missing) = self.search_entries(cx);
+        let shell = cx.entity().downgrade();
+        let closing = shell.clone();
+        let on_pick: crate::palette::OnPick = std::rc::Rc::new(move |target, window, cx| {
+            let _ = shell.update(cx, |shell, cx| shell.pick(target, window, cx));
+        });
+        let on_close: crate::palette::OnClose = std::rc::Rc::new(move |_, cx| {
+            let _ = closing.update(cx, |shell, cx| {
+                shell.palette = None;
+                cx.notify();
+            });
+        });
+        self.palette = Some(cx.new(|cx| Palette::new(entries, missing, on_pick, on_close, window, cx)));
+        cx.notify();
+    }
+
+    /// Ctrl+K opens (or closes) the palette; while it is open, Up, Down, Page Up, Page Down, Enter
+    /// and Escape are its. True when the key was used.
+    fn palette_key(&mut self, keystroke: &gpui_kit::Keystroke, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let m = &keystroke.modifiers;
+        if keystroke.key == "k" && m.control && !m.alt && !m.shift && !m.platform {
+            if self.palette.take().is_some() {
+                cx.notify();
+            } else {
+                self.open_palette(window, cx);
+            }
+            return true;
+        }
+        let Some(palette) = self.palette.clone() else {
+            return false;
+        };
+        if m.control || m.alt || m.platform {
+            return false;
+        }
+        match keystroke.key.as_str() {
+            "escape" => {
+                self.palette = None;
+                cx.notify();
+                true
+            }
+            "enter" => {
+                let target = palette.read(cx).selected_target();
+                if let Some(target) = target {
+                    self.pick(target, window, cx);
+                }
+                true
+            }
+            key => palette.update(cx, |palette, cx| palette.key(key, cx)),
+        }
+    }
+
+    /// Opens a palette result on its page. Nothing runs: it only shows the item.
+    fn pick(&mut self, target: Target, window: &mut Window, cx: &mut Context<Self>) {
+        self.palette = None;
+        match target {
+            Target::Page(page) => self.open(page, window, cx),
+            Target::Process(pid) => {
+                self.focus_pid = Some(pid);
+                self.open("processes", window, cx);
+            }
+            Target::Finding(id) => {
+                self.report
+                    .update(cx, |r, _| r.focus = Some(crate::app::Focus::Item(id)));
+                self.open("findings", window, cx);
+            }
+            Target::Seek { page, text } => {
+                // The page's search box starts with the item's name (see `grid::seed`).
+                find::set_seed(Some(text));
+                self.open(page, window, cx);
+                find::set_seed(None);
+            }
+        }
+        cx.notify();
     }
 
     fn more_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -801,8 +979,27 @@ impl Shell {
                     )
                     .when(!compact, |this| {
                         this.child(div().text_size(px(12.)).text_color(tk.ink2).child("Vigil"))
+                            .child(div().flex_1())
+                            .child(
+                                ui::icon_button("nav-search", icons::SEARCH, t("palette.button"))
+                                    .tip(t("palette.button"))
+                                    .w(px(40.))
+                                    .h(px(36.))
+                                    .on_click(cx.listener(|this, _, window, cx| this.open_palette(window, cx))),
+                            )
                     }),
             )
+            .when(compact, |this| {
+                this.child(
+                    div().pb_1().child(
+                        ui::icon_button("nav-search", icons::SEARCH, t("palette.button"))
+                            .tip(t("palette.button"))
+                            .w(px(40.))
+                            .h(px(36.))
+                            .on_click(cx.listener(|this, _, window, cx| this.open_palette(window, cx))),
+                    ),
+                )
+            })
             .child(div().px_1().pb_2().flex().child({
                 let label = t(if scanning { "nav.scanning" } else { "nav.newScan" });
                 let mut scan = FButton::new("new-scan", Kind::Accent)
@@ -880,7 +1077,9 @@ impl Render for Shell {
             .acting
             .bar("shell-result", &tk)
             .map(|bar| div().absolute().bottom(px(16.)).right(px(20.)).w(px(560.)).child(bar));
+        let palette = self.palette.clone();
         div()
+            .relative()
             .size_full()
             .flex()
             .bg(tk.canvas)
@@ -905,6 +1104,7 @@ impl Render for Shell {
                     .children(notice)
                     .children(acting),
             )
+            .children(palette)
     }
 }
 

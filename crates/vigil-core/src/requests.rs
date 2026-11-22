@@ -71,6 +71,11 @@ pub enum Request {
     Recycle {
         paths: Vec<String>,
     },
+    /// Copies found by the last duplicate search, sent to the Recycle Bin (checked against that
+    /// search in `service::build_plan`; see `duplicates::plan`).
+    Duplicates {
+        paths: Vec<String>,
+    },
     Shell {
         op: String,
         path: Option<String>,
@@ -360,6 +365,8 @@ pub fn build(request: &Request, ctx: &Context<'_>) -> Result<Plan, String> {
         Request::Tuning { op, params } => tuning_plan(op, params, ctx),
         Request::Cleanup { keys } => cleanup_plan(keys, ctx),
         Request::Recycle { paths } => recycle_plan(paths, ctx),
+        // Planned in `service::build_plan` from the last duplicate search (not part of `Context`).
+        Request::Duplicates { .. } => Err(tr!("Unknown request: {0}", "duplicates")),
         Request::Shell { op, path, url, name } => shell_plan(op, path.as_deref(), url.as_deref(), name.as_deref()),
         Request::Service { op, name, start_type } => service_plan(op, name, start_type.as_deref(), ctx),
         Request::Startup { op, id } => startup_plan(op, id, ctx),
@@ -1224,14 +1231,21 @@ fn tuning_plan(op: &str, params: &Value, ctx: &Context<'_>) -> Result<Plan, Stri
             .group("fix")
             .no_admin()
         }
-        "system.restore_point" => spec(
-            "system.restore_point",
-            tr!("Create a restore point"),
-            "Windows",
-            tr!("Creates a System Restore point you can return to."),
-        )
-        .group("fix")
-        .irreversible(),
+        "system.restore_point" => {
+            let typed = params.get("description").and_then(Value::as_str).unwrap_or("");
+            let description = crate::restore::description(typed)?;
+            spec(
+                "system.restore_point",
+                tr!("Create a restore point"),
+                description.clone(),
+                tr!(
+                    "Creates a System Restore point you can return to. Windows makes at most one every 24 hours: if one was made recently, it keeps that one."
+                ),
+            )
+            .params(json!({"description": description}))
+            .group("fix")
+            .irreversible()
+        }
         "defender.full_scan" => spec(
             "defender.full_scan",
             tr!("Run a full Defender scan"),

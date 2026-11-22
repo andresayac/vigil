@@ -11,7 +11,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use gpui_kit::component::input::{InputEvent, InputState};
-use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
+use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::component::table::{Column, ColumnSort, DataTable, TableDelegate, TableState};
 use gpui_kit::component::{Sizable, Size};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -1334,7 +1334,7 @@ impl ProcessesPage {
         }
     }
 
-    fn render_commandbar(&self, cx: &mut Context<Self>) -> Div {
+    fn render_commandbar(&self, window: &Window, cx: &mut Context<Self>) -> ui::CommandBar {
         let tk = *tokens(cx);
         let picked = self.picked(cx).map(|(row, _, _)| row);
         let busy = self.acting.busy;
@@ -1345,67 +1345,64 @@ impl ProcessesPage {
         let menu = |id: &'static str, glyph: char, label: String, which: &'static str, enabled: bool| {
             let page = cx.entity().downgrade();
             let row = picked.clone();
-            ui::command(id, glyph, label)
-                .chevron()
-                .disabled(!enabled)
-                .dropdown_menu(move |menu, _, _| {
-                    let mut menu = menu;
-                    for item in Self::menu_items(page.clone(), which, row.as_ref(), elevated, busy) {
-                        menu = menu.item(item);
-                    }
-                    menu
-                })
+            ui::cmd(id, glyph, label).disabled(!enabled).menu(move |menu, _, _| {
+                let mut menu = menu;
+                for item in Self::menu_items(page.clone(), which, row.as_ref(), elevated, busy) {
+                    menu = menu.item(item);
+                }
+                menu
+            })
         };
         let weak = cx.entity().downgrade();
-        div()
-            .flex()
-            .items_center()
-            .gap_1()
-            .child(
-                ui::command("run-task", '\u{E7C4}', t("proc.runTask"))
+        let views = [t("proc.viewGrouped"), t("proc.viewTree"), t("proc.viewList")];
+        let views_width = ui::bar::segmented_width(window, &views.iter().map(String::as_str).collect::<Vec<_>>());
+        let [grouped, tree, list] = views;
+        ui::CommandBar::new("proc-bar")
+            .cmd(
+                ui::cmd("run-task", '\u{E7C4}', t("proc.runTask"))
                     .disabled(busy)
                     .on_click(cx.listener(|this, _, window, cx| this.act("run_task", None, window, cx))),
             )
-            .child(
-                ui::command("end-task", icons::END_TASK, t("proc.endTask"))
+            .cmd(
+                ui::cmd("end-task", icons::END_TASK, t("proc.endTask"))
+                    .keep()
                     .disabled(!can_end)
                     .on_click(cx.listener(|this, _, window, cx| this.act("terminate", None, window, cx))),
             )
-            .child(
-                ui::command("efficiency", icons::EFFICIENCY, t("proc.efficiency"))
+            .cmd(
+                ui::cmd("efficiency", icons::EFFICIENCY, t("proc.efficiency"))
                     .disabled(!has_row || busy)
                     .on_click(cx.listener(|this, _, window, cx| this.act("efficiency", None, window, cx))),
             )
-            .child(menu(
+            .cmd(menu(
                 "priority",
                 icons::PRIORITY,
                 t("proc.priority"),
                 "priority",
                 has_row && !busy,
             ))
-            .child(menu(
+            .cmd(menu(
                 "file",
                 icons::FILE,
                 t("proc.file"),
                 "file",
                 picked.as_ref().is_some_and(|r| !r.exe.is_empty()),
             ))
-            .child(menu("more", icons::MORE, t("proc.more"), "more", has_row))
-            .child(ui::separator(&tk))
-            .child(ui::segmented(
-                "proc-view",
-                t("proc.view"),
-                vec![
-                    (View::Grouped, t("proc.viewGrouped")),
-                    (View::Tree, t("proc.viewTree")),
-                    (View::List, t("proc.viewList")),
-                ],
-                view,
-                move |value, _, cx| {
-                    let _ = weak.update(cx, |page, cx| page.set_view(value, cx));
-                },
-                &tk,
-            ))
+            .cmd(menu("more", icons::MORE, t("proc.more"), "more", has_row))
+            .separator()
+            .fixed(
+                ui::segmented(
+                    "proc-view",
+                    t("proc.view"),
+                    vec![(View::Grouped, grouped), (View::Tree, tree), (View::List, list)],
+                    view,
+                    move |value, _, cx| {
+                        let _ = weak.update(cx, |page, cx| page.set_view(value, cx));
+                    },
+                    &tk,
+                ),
+                views_width,
+            )
     }
 
     fn render_inspector(&self, row: &ProcessRow, count: usize, label: &str, cx: &mut Context<Self>) -> Div {
@@ -1664,7 +1661,7 @@ fn finding_marks(core: &AppState) -> HashMap<String, String> {
 }
 
 impl Render for ProcessesPage {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let tk = *tokens(cx);
         let picked = self.picked(cx);
         let live = self.live.read(cx);
@@ -1733,8 +1730,7 @@ impl Render for ProcessesPage {
                     .gap_2()
                     .min_h(px(40.))
                     .child(ui::page_title(t("page.processes")))
-                    .child(div().flex_1())
-                    .child(self.render_commandbar(cx)),
+                    .child(self.render_commandbar(window, cx)),
             )
             .children(self.acting.bar("proc-result", &tk))
             .when_some(error, |this, error| {

@@ -86,6 +86,9 @@ pub struct ScheduledTask {
     /// A program it runs (or a script a host such as PowerShell runs) is in a folder a standard
     /// user can change. Filled in by the caller, which owns that policy; false here.
     pub user_writable: bool,
+    /// The task may wake the computer to run (`WakeToRun`; the power plan's "allow wake timers"
+    /// decides whether Windows honours it).
+    pub wake_to_run: bool,
 }
 
 /// When a task starts.
@@ -669,6 +672,7 @@ pub fn from_xml(path: &str, xml: &str) -> ScheduledTask {
         program_exists: false,
         microsoft: path.to_lowercase().starts_with("\\microsoft\\"),
         user_writable: false,
+        wake_to_run: flag("WakeToRun", false),
     }
 }
 

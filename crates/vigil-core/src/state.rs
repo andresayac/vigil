@@ -41,6 +41,8 @@ pub struct Inner {
     pub pending: Option<Pending>,
     pub cleanup: Vec<CleanupTarget>,
     pub space_files: Vec<(String, u64)>,
+    /// The groups of the last duplicate search (a request to remove copies is checked against them).
+    pub duplicates: Vec<vigil_maint::storage::DupGroup>,
     pub hardware: Option<Hardware>,
 }
 
@@ -67,6 +69,7 @@ pub struct AppState {
     pub acting: AtomicBool,
     pub scan_cancel: Arc<AtomicBool>,
     pub space_cancel: Arc<AtomicBool>,
+    pub dupes_cancel: Arc<AtomicBool>,
 }
 
 impl AppState {
@@ -91,6 +94,7 @@ impl AppState {
             acting: AtomicBool::new(false),
             scan_cancel: Arc::new(AtomicBool::new(false)),
             space_cancel: Arc::new(AtomicBool::new(false)),
+            dupes_cancel: Arc::new(AtomicBool::new(false)),
         };
         state.load_latest();
         Ok(state)

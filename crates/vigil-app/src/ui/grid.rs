@@ -523,6 +523,7 @@ pub fn search<V: 'static>(
     use gpui_kit::component::input::{InputEvent, InputState};
     let input = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
     let table = table.clone();
+    seed(&input, &table, window, cx);
     let subscription = cx.subscribe(&input, move |_, input, event: &InputEvent, cx| {
         if matches!(event, InputEvent::Change) {
             let text = input.read(cx).value().to_string();
@@ -534,6 +535,25 @@ pub fn search<V: 'static>(
         }
     });
     (input, subscription)
+}
+
+/// Starts a page's search box with the text the global search (Ctrl+K) opened it with, and filters
+/// the table by it, so the item picked there shows. Nothing happens when the page opened otherwise.
+pub fn seed<V: 'static>(
+    input: &gpui_kit::Entity<gpui_kit::component::input::InputState>,
+    table: &gpui_kit::Entity<TableState<Grid>>,
+    window: &mut Window,
+    cx: &mut Context<V>,
+) {
+    let Some(text) = crate::search::take_seed() else {
+        return;
+    };
+    input.update(cx, |state, cx| state.set_value(text.clone(), window, cx));
+    table.update(cx, |table, cx| {
+        table.delegate_mut().set_filter(&text);
+        table.refresh(cx);
+        cx.notify();
+    });
 }
 
 #[cfg(test)]

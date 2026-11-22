@@ -186,6 +186,7 @@ impl StartupPage {
                 .col_movable(false)
         });
         let search = cx.new(|cx| InputState::new(window, cx).placeholder(t("startup.search")));
+        grid::seed(&search, &table, window, cx);
         let subscriptions = vec![
             cx.observe(&table, |_, _, cx| cx.notify()),
             cx.subscribe(&search, |this, input, event: &InputEvent, cx| {
@@ -224,6 +225,7 @@ impl StartupPage {
         if self.core.is_none() {
             let (rows, signatures) = crate::demo_pages::startup();
             self.rows = rows;
+            crate::search::remember_startup(&self.rows);
             self.signatures = signatures;
             self.impact = crate::data::demo("startupImpact");
             self.fill(cx);
@@ -234,6 +236,7 @@ impl StartupPage {
         common::read(cx, vigil_sys::startup::list, |page, rows, cx| {
             page.loading = false;
             page.rows = rows;
+            crate::search::remember_startup(&page.rows);
             page.fill(cx);
             page.check(cx);
             page.read_icons(cx);
@@ -581,45 +584,47 @@ impl Render for StartupPage {
                     .gap_1()
                     .min_h(px(40.))
                     .child(ui::page_title(t("page.startup")))
-                    .child(div().flex_1())
                     .child(
-                        ui::command("st-enable", icons::CHECK, t("startup.enable"))
-                            .disabled(!can_enable)
-                            .on_click(cx.listener(|this, _, window, cx| this.toggle("enable", window, cx))),
-                    )
-                    .child(
-                        ui::command("st-disable", icons::END_TASK, t("startup.disable"))
-                            .disabled(!can_disable)
-                            .on_click(cx.listener(|this, _, window, cx| this.toggle("disable", window, cx))),
-                    )
-                    .when(policy, |this| {
-                        this.child(
-                            ui::command("st-delete", icons::DELETE, t("startup.delete"))
-                                .danger(can_delete)
-                                .disabled(!can_delete)
-                                .on_click(cx.listener(|this, _, window, cx| this.toggle("delete", window, cx))),
-                        )
-                    })
-                    .child(ui::separator(&tk))
-                    .child(
-                        ui::command("st-location", icons::FOLDER, t("proc.location"))
-                            .disabled(target.is_empty())
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.shell("location", location_target.clone(), window, cx)
-                            })),
-                    )
-                    .child(
-                        ui::command("st-properties", icons::PROPERTIES, t("proc.properties"))
-                            .disabled(target.is_empty())
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.shell("properties", properties_target.clone(), window, cx)
-                            })),
-                    )
-                    .child(ui::separator(&tk))
-                    .child(
-                        ui::command("st-refresh", icons::REFRESH, t("common.refresh"))
-                            .disabled(self.loading)
-                            .on_click(cx.listener(|this, _, _, cx| this.load(cx))),
+                        ui::CommandBar::new("st-bar")
+                            .cmd(
+                                ui::cmd("st-enable", icons::CHECK, t("startup.enable"))
+                                    .disabled(!can_enable)
+                                    .on_click(cx.listener(|this, _, window, cx| this.toggle("enable", window, cx))),
+                            )
+                            .cmd(
+                                ui::cmd("st-disable", icons::END_TASK, t("startup.disable"))
+                                    .disabled(!can_disable)
+                                    .on_click(cx.listener(|this, _, window, cx| this.toggle("disable", window, cx))),
+                            )
+                            .when(policy, |this| {
+                                this.cmd(
+                                    ui::cmd("st-delete", icons::DELETE, t("startup.delete"))
+                                        .danger(can_delete)
+                                        .disabled(!can_delete)
+                                        .on_click(cx.listener(|this, _, window, cx| this.toggle("delete", window, cx))),
+                                )
+                            })
+                            .separator()
+                            .cmd(
+                                ui::cmd("st-location", icons::FOLDER, t("proc.location"))
+                                    .disabled(target.is_empty())
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.shell("location", location_target.clone(), window, cx)
+                                    })),
+                            )
+                            .cmd(
+                                ui::cmd("st-properties", icons::PROPERTIES, t("proc.properties"))
+                                    .disabled(target.is_empty())
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.shell("properties", properties_target.clone(), window, cx)
+                                    })),
+                            )
+                            .separator()
+                            .cmd(
+                                ui::cmd("st-refresh", icons::REFRESH, t("common.refresh"))
+                                    .disabled(self.loading)
+                                    .on_click(cx.listener(|this, _, _, cx| this.load(cx))),
+                            ),
                     ),
             )
             .child(div().text_size(px(12.)).text_color(tk.ink3).child(t("startup.note")))

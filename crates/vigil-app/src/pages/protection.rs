@@ -826,27 +826,25 @@ impl Render for ProtectionPage {
         let right = self.settings_card(cx, &tk);
         kit::page("protection")
             .child(
-                kit::row()
-                    .child(ui::page_title(t("page.protection")))
-                    .child(div().flex_1())
-                    .child(
-                        ui::command("pr-update", '\u{E896}', t("protection.update"))
-                            .disabled(!d.b("available") || !self.ctx.elevated || self.acting.busy)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.run(json!({"kind": "defender", "op": "update"}), window, cx)
-                            })),
-                    )
-                    .child(
-                        ui::command("pr-open", '\u{E8A7}', t("protection.openSecurity")).on_click(
+                kit::row().child(ui::page_title(t("page.protection"))).child(
+                    ui::CommandBar::new("pr-bar")
+                        .cmd(
+                            ui::cmd("pr-update", '\u{E896}', t("protection.update"))
+                                .disabled(!d.b("available") || !self.ctx.elevated || self.acting.busy)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.run(json!({"kind": "defender", "op": "update"}), window, cx)
+                                })),
+                        )
+                        .cmd(ui::cmd("pr-open", '\u{E8A7}', t("protection.openSecurity")).on_click(
                             cx.listener(|this, _, window, cx| this.security("windowsdefender://threat", window, cx)),
+                        ))
+                        .separator()
+                        .cmd(
+                            ui::cmd("pr-refresh", icons::REFRESH, t("common.refresh"))
+                                .disabled(self.loading)
+                                .on_click(cx.listener(|this, _, _, cx| this.load(cx))),
                         ),
-                    )
-                    .child(ui::separator(&tk))
-                    .child(
-                        ui::command("pr-refresh", icons::REFRESH, t("common.refresh"))
-                            .disabled(self.loading)
-                            .on_click(cx.listener(|this, _, _, cx| this.load(cx))),
-                    ),
+                ),
             )
             .child(kit::muted(t("protection.lead"), &tk))
             .children(self.acting.bar("pr-result", &tk))

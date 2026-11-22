@@ -108,6 +108,20 @@ impl PathResolver {
         Self { devices }
     }
 
+    /// `nt_path` ("\Device\HarddiskVolume3\...") with its device as a drive letter; unchanged when
+    /// no drive matches.
+    pub(crate) fn map(&self, nt_path: &str) -> String {
+        for (device, letter) in &self.devices {
+            let prefix = nt_path.as_bytes().get(..device.len());
+            if prefix.is_some_and(|p| p.eq_ignore_ascii_case(device.as_bytes()))
+                && let Some(rest) = nt_path.get(device.len()..)
+            {
+                return format!("{letter}{rest}");
+            }
+        }
+        nt_path.to_string()
+    }
+
     pub(crate) fn dos_path(&self, pid: u32) -> String {
         let Some(nt_path) = nt::nt_image_path(pid) else {
             return String::new();

@@ -1049,25 +1049,23 @@ impl Render for AccountsPage {
                     });
                 },
                 &tk,
-            ))
-            .child(div().flex_1());
+            ));
         if self.loading {
             head = head.child(kit::faint(t("common.reading"), &tk));
         }
-        head = head.child(
-            ui::command("ac-users", icons::SETTINGS, t("accounts.otherUsers")).on_click(cx.listener(
-                |this, _, window, cx| {
+        let mut bar =
+            ui::CommandBar::new("ac-bar").cmd(ui::cmd("ac-users", icons::SETTINGS, t("accounts.otherUsers")).on_click(
+                cx.listener(|this, _, window, cx| {
                     this.send(
                         json!({"kind": "shell", "op": "url", "url": "ms-settings:otherusers"}),
                         window,
                         cx,
                     )
-                },
-            )),
-        );
+                }),
+            ));
         if lusrmgr {
-            head = head.child(
-                ui::command("ac-lusrmgr", '\u{E716}', t("accounts.lusrmgr")).on_click(cx.listener(
+            bar = bar.cmd(
+                ui::cmd("ac-lusrmgr", '\u{E716}', t("accounts.lusrmgr")).on_click(cx.listener(
                     |this, _, window, cx| {
                         this.send(
                             json!({"kind": "shell", "op": "console", "name": "lusrmgr.msc"}),
@@ -1078,11 +1076,12 @@ impl Render for AccountsPage {
                 )),
             );
         }
-        head = head.child(ui::separator(&tk)).child(
-            ui::command("ac-refresh", icons::REFRESH, t("common.refresh"))
+        bar = bar.separator().cmd(
+            ui::cmd("ac-refresh", icons::REFRESH, t("common.refresh"))
                 .disabled(self.loading)
                 .on_click(cx.listener(|this, _, _, cx| this.load(cx))),
         );
+        head = head.child(bar);
         let mut page = kit::page("accounts")
             .child(head)
             .child(kit::faint(t("accounts.note"), &tk))

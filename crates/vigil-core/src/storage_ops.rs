@@ -16,6 +16,12 @@ pub fn register_all() {
     register("storage.clean", Arc::new(clean), None, false);
     register("storage.empty_bin", Arc::new(empty_bin), None, false);
     register("storage.recycle", Arc::new(recycle), None, false);
+    register(
+        "storage.recycle_duplicates",
+        Arc::new(crate::duplicates::recycle_copies),
+        None,
+        false,
+    );
 }
 
 fn basename(path: &str) -> &str {

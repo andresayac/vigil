@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use gpui_kit::component::input::{InputEvent, InputState};
-use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
+use gpui_kit::component::menu::PopupMenuItem;
 use gpui_kit::component::table::TableState;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
@@ -20,8 +20,8 @@ use crate::i18n::{t, tf};
 use crate::icons;
 use crate::pages::common::{self, Acting, Acts};
 use crate::theme::{Tokens, tokens};
+use crate::ui;
 use crate::ui::grid::{self, Grid, GridCell, GridCol, GridRow};
-use crate::ui::{self, FButton, Kind};
 
 /// A service as the page shows it: what Windows reports, and whether Vigil refuses to change it.
 #[derive(Clone)]
@@ -118,6 +118,7 @@ impl ServicesPage {
                 .col_movable(false)
         });
         let search = cx.new(|cx| InputState::new(window, cx).placeholder(t("services.filter")));
+        grid::seed(&search, &table, window, cx);
         let subscriptions = vec![
             cx.observe(&table, |_, _, cx| cx.notify()),
             cx.subscribe(&search, |this, input, event: &InputEvent, cx| {
@@ -152,6 +153,7 @@ impl ServicesPage {
     fn load(&mut self, cx: &mut Context<Self>) {
         if self.core.is_none() {
             self.rows = crate::demo_pages::services();
+            crate::search::remember_services(self.rows.iter().map(|r| &r.service));
             self.fill(cx);
             return;
         }
@@ -173,6 +175,7 @@ impl ServicesPage {
                 match result {
                     Ok(rows) => {
                         page.rows = rows;
+                        crate::search::remember_services(page.rows.iter().map(|r| &r.service));
                         page.error = None;
                     }
                     Err(error) => page.error = Some(error.to_string()),
@@ -350,11 +353,9 @@ impl Render for ServicesPage {
         let weak = cx.entity().downgrade();
         let current_type = start.clone();
 
-        let type_menu = FButton::new("svc-type", Kind::Standard)
-            .label(t("services.startupType"))
-            .chevron()
+        let type_menu = ui::cmd("svc-type", '\u{E7E8}', t("services.startupType"))
             .disabled(!can_set_type)
-            .dropdown_menu(move |menu, _, _| {
+            .menu(move |menu, _, _| {
                 let mut menu = menu;
                 for (value, key) in START_TYPES {
                     let weak = weak.clone();
@@ -416,30 +417,28 @@ impl Render for ServicesPage {
                     ),
             )
             .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .child(
-                        ui::command("svc-start", icons::START, t("services.start"))
+                ui::CommandBar::new("svc-bar")
+                    .start()
+                    .cmd(
+                        ui::cmd("svc-start", icons::START, t("services.start"))
                             .disabled(!can_start)
                             .on_click(cx.listener(|this, _, window, cx| this.run("start", None, window, cx))),
                     )
-                    .child(
-                        ui::command("svc-stop", icons::STOP, t("services.stop"))
+                    .cmd(
+                        ui::cmd("svc-stop", icons::STOP, t("services.stop"))
                             .danger(can_stop)
                             .disabled(!can_stop)
                             .on_click(cx.listener(|this, _, window, cx| this.run("stop", None, window, cx))),
                     )
-                    .child(
-                        ui::command("svc-restart", icons::REFRESH, t("services.restart"))
+                    .cmd(
+                        ui::cmd("svc-restart", icons::REFRESH, t("services.restart"))
                             .disabled(!can_restart)
                             .on_click(cx.listener(|this, _, window, cx| this.run("restart", None, window, cx))),
                     )
-                    .child(type_menu)
-                    .child(ui::separator(&tk))
-                    .child(
-                        ui::command("svc-location", icons::FOLDER, t("proc.location"))
+                    .cmd(type_menu)
+                    .separator()
+                    .cmd(
+                        ui::cmd("svc-location", icons::FOLDER, t("proc.location"))
                             .disabled(executable.is_empty())
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 let request = Request::Shell {
@@ -451,8 +450,8 @@ impl Render for ServicesPage {
                                 common::send(this, request, window, cx);
                             })),
                     )
-                    .child(
-                        ui::command("svc-console", icons::SETTINGS, t("services.openConsole")).on_click(cx.listener(
+                    .cmd(
+                        ui::cmd("svc-console", icons::SETTINGS, t("services.openConsole")).on_click(cx.listener(
                             |this, _, window, cx| {
                                 let request = Request::Shell {
                                     op: "console".into(),

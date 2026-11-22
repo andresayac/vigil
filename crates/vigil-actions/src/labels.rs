@@ -76,6 +76,10 @@ const OP_LABELS: &[(&str, &str)] = &[
     ("storage.clean", tl!("Clean up junk")),
     ("storage.empty_bin", tl!("Empty Recycle Bin")),
     ("storage.recycle", tl!("Send to Recycle Bin")),
+    (
+        "storage.recycle_duplicates",
+        tl!("Send duplicate copies to Recycle Bin"),
+    ),
     ("vigil.autostart", tl!("Start with Windows")),
 ];
 

@@ -1,6 +1,7 @@
 //! Storage: the drives, cleanup of what Windows and apps leave behind (measured first, cleaned
 //! through the action service), and the space analysis of a drive or folder with a treemap and
-//! the largest files (sent to the Recycle Bin through the action service).
+//! the largest files (sent to the Recycle Bin through the action service), and duplicate files
+//! (copies chosen here go to the Recycle Bin after the core checks them again).
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -50,6 +51,18 @@ pub struct StoragePage {
     acting: Acting,
     /// What the last request was, so the page reads what it changed.
     last: &'static str,
+    /// The Duplicates tab is open (it takes precedence over `tab_space`).
+    tab_dupes: bool,
+    dup_root: String,
+    /// Files smaller than this many MB are not compared.
+    dup_min_mb: u64,
+    dup_scan: Option<Value>,
+    dup_scanning: bool,
+    dup_status: String,
+    /// The copies chosen for the Recycle Bin.
+    dup_checked: BTreeSet<String>,
+    /// Copies already sent to the Recycle Bin (hidden until the next search).
+    dup_removed: BTreeSet<String>,
 }
 
 impl Acts for StoragePage {
@@ -67,6 +80,10 @@ impl Acts for StoragePage {
             }
             "recycle" => {
                 self.removed.extend(std::mem::take(&mut self.files));
+                self.load_drives(cx);
+            }
+            "duplicates" => {
+                self.dup_removed.extend(std::mem::take(&mut self.dup_checked));
                 self.load_drives(cx);
             }
             _ => {}
@@ -95,6 +112,19 @@ impl StoragePage {
             removed: BTreeSet::new(),
             acting: Acting::default(),
             last: "",
+            tab_dupes: false,
+            dup_root: String::new(),
+            dup_min_mb: 1,
+            dup_scan: None,
+            dup_scanning: false,
+            dup_status: t("dupes.hint"),
+            dup_checked: BTreeSet::new(),
+            dup_removed: BTreeSet::new(),
+        };
+        page.dup_root = if page.ctx.core.is_some() {
+            vigil_core::duplicates::default_folder()
+        } else {
+            data::demo("duplicates").s("root").to_string()
         };
         page.load_drives(cx);
         page.measure(cx);
@@ -290,6 +320,7 @@ impl StoragePage {
                     .on_click(move |_, _, cx| {
                         let _ = weak.update(cx, |this, cx| {
                             this.tab_space = true;
+                            this.tab_dupes = false;
                             this.analyze(target.clone(), cx);
                         });
                     })
@@ -824,6 +855,389 @@ impl StoragePage {
     }
 }
 
+/// Groups shown at most (the ones that waste the most first).
+const DUP_GROUPS_SHOWN: usize = 200;
+
+impl StoragePage {
+    /// Searches the chosen folder for duplicates (the core remembers the groups it found: only
+    /// those copies can be sent to the Recycle Bin).
+    fn find_dupes(&mut self, cx: &mut Context<Self>) {
+        if self.dup_scanning || self.dup_root.is_empty() {
+            return;
+        }
+        self.dup_scanning = true;
+        self.dup_status = tf(
+            "dupes.reading",
+            &[("folder", &vigil_core::display::shown_line(&self.dup_root))],
+        );
+        let (tx, mut rx) = mpsc::unbounded::<String>();
+        let core = self.ctx.core.clone();
+        let root = self.dup_root.clone();
+        let min_mb = self.dup_min_mb;
+        let task = cx.background_spawn(async move {
+            match core {
+                Some(st) => vigil_core::duplicates::find(&st, &root, min_mb, &move |line| {
+                    let _ = tx.unbounded_send(line.to_string());
+                })
+                .and_then(|scan| serde_json::to_value(scan).map_err(|e| e.to_string())),
+                None => Ok(data::demo("duplicates")),
+            }
+        });
+        cx.spawn(async move |this, cx| {
+            let follow = this.clone();
+            let mut cx2 = cx.clone();
+            let progress = async move {
+                while let Some(line) = rx.next().await {
+                    let _ = follow.update(&mut cx2, |page, cx| {
+                        page.dup_status = line;
+                        cx.notify();
+                    });
+                }
+            };
+            let (result, ()) = futures::join!(task, progress);
+            let _ = this.update(cx, |page, cx| {
+                page.dup_scanning = false;
+                match result {
+                    Ok(scan) => {
+                        let mut parts = vec![tf(
+                            "dupes.summary",
+                            &[
+                                ("groups", &num(scan.a("groups").len() as f64, 0)),
+                                ("size", &size(scan.n("wasted"), 1)),
+                                ("files", &num(scan.n("files"), 0)),
+                                ("seconds", &num(scan.n("seconds"), 1)),
+                            ],
+                        )];
+                        if scan.b("cancelled") {
+                            parts.push(t("storage.stoppedEarly"));
+                        }
+                        if scan.b("capped") {
+                            parts.push(t("dupes.capped"));
+                        }
+                        if scan.b("groupsCapped") {
+                            parts.push(t("dupes.groupsCapped"));
+                        }
+                        if scan.n("cloudSkipped") > 0.0 {
+                            parts.push(tn("dupes.cloudSkipped", scan.n("cloudSkipped") as u64, &[]));
+                        }
+                        if scan.n("errors") > 0.0 {
+                            parts.push(tn("dupes.unreadable", scan.n("errors") as u64, &[]));
+                        }
+                        page.dup_status = parts.join(" · ");
+                        page.dup_checked.clear();
+                        page.dup_removed.clear();
+                        page.dup_scan = Some(scan);
+                    }
+                    Err(e) => page.dup_status = tf("dupes.failed", &[("error", &e)]),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn choose_dup_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let picked = cx.prompt_for_paths(gpui_kit::PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some(t("dupes.chooseFolder").into()),
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(Ok(Some(paths))) = picked.await else { return };
+            let Some(path) = paths.into_iter().next() else { return };
+            let _ = this.update(cx, |this, cx| {
+                this.dup_root = path.display().to_string();
+                this.find_dupes(cx);
+            });
+        })
+        .detach();
+    }
+
+    /// The copies of a group still shown (not sent to the Recycle Bin yet).
+    fn dup_files<'a>(&self, group: &'a Value) -> Vec<&'a Value> {
+        group
+            .a("files")
+            .iter()
+            .filter(|f| !self.dup_removed.contains(f.s("path")))
+            .collect()
+    }
+
+    /// Chooses every copy but the oldest of each group (the original is usually the oldest).
+    fn choose_all_but_oldest(&mut self) {
+        let Some(scan) = self.dup_scan.clone() else { return };
+        self.dup_checked.clear();
+        for group in scan.a("groups").iter().take(DUP_GROUPS_SHOWN) {
+            let files = self.dup_files(group);
+            if files.len() < 2 {
+                continue;
+            }
+            let oldest = files
+                .iter()
+                .min_by_key(|f| (f.i("modifiedMs"), f.s("path").to_lowercase()))
+                .map(|f| f.s("path").to_string())
+                .unwrap_or_default();
+            for f in files {
+                if f.s("path") != oldest {
+                    self.dup_checked.insert(f.s("path").to_string());
+                }
+            }
+        }
+    }
+
+    fn dupes_tab(&mut self, cx: &mut Context<Self>, tk: &Tokens) -> Div {
+        let weak = cx.entity().downgrade();
+        let min = self.dup_min_mb;
+        let controls = kit::row()
+            .child(kit::body(t("dupes.folder")).font_weight(FontWeight::SEMIBOLD))
+            .child(
+                kit::muted(self.dup_root.clone(), tk)
+                    .min_w_0()
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .whitespace_nowrap(),
+            )
+            .child(
+                ui::button("dp-choose", t("dupes.chooseFolder"))
+                    .disabled(self.dup_scanning)
+                    .on_click(cx.listener(|this, _, window, cx| this.choose_dup_folder(window, cx))),
+            )
+            .child(
+                FButton::new("dp-min", Kind::Standard)
+                    .label(tf("dupes.minSize", &[("size", &size((min << 20) as f64, 0))]))
+                    .accessible_name(t("dupes.minSizeName"))
+                    .chevron()
+                    .dropdown_menu(move |menu, _, _| {
+                        let mut menu = menu;
+                        for mb in [0u64, 1, 10, 100, 1024] {
+                            let weak = weak.clone();
+                            let label = if mb == 0 {
+                                t("dupes.anySize")
+                            } else {
+                                tf("dupes.minSize", &[("size", &size((mb << 20) as f64, 0))])
+                            };
+                            menu = menu.item(PopupMenuItem::new(label).checked(mb == min).on_click(move |_, _, cx| {
+                                let _ = weak.update(cx, |this, cx| {
+                                    this.dup_min_mb = mb;
+                                    cx.notify();
+                                });
+                            }));
+                        }
+                        menu
+                    }),
+            )
+            .child(
+                ui::accent_button("dp-find", t("dupes.find"))
+                    .disabled(self.dup_scanning || self.dup_root.is_empty())
+                    .on_click(cx.listener(|this, _, _, cx| this.find_dupes(cx))),
+            )
+            .child(
+                ui::button("dp-stop", t("storage.stop"))
+                    .disabled(!self.dup_scanning)
+                    .on_click(cx.listener(|this, _, _, _| {
+                        if let Some(core) = &this.ctx.core {
+                            vigil_core::duplicates::cancel(core);
+                        }
+                    })),
+            );
+        let tab = div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(controls)
+            .child(kit::faint(t("dupes.note"), tk))
+            .child(
+                kit::faint(self.dup_status.clone(), tk)
+                    .min_w_0()
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .whitespace_nowrap(),
+            );
+        let Some(scan) = self.dup_scan.clone() else {
+            return tab;
+        };
+        let groups: Vec<&Value> = scan
+            .a("groups")
+            .iter()
+            .filter(|g| self.dup_files(g).len() >= 2)
+            .take(DUP_GROUPS_SHOWN)
+            .collect();
+        let chosen: Vec<String> = self.dup_checked.iter().cloned().collect();
+        let chosen_size: f64 = scan
+            .a("groups")
+            .iter()
+            .map(|g| {
+                g.a("files")
+                    .iter()
+                    .filter(|f| self.dup_checked.contains(f.s("path")))
+                    .count() as f64
+                    * g.n("size")
+            })
+            .sum();
+        let one = (chosen.len() == 1).then(|| chosen[0].clone());
+        let mut panel = kit::panel(tk).child(
+            kit::row()
+                .child(kit::h3(t("dupes.groupsTitle")))
+                .child(div().flex_1())
+                .child(
+                    ui::button("dp-auto", t("dupes.chooseCopies"))
+                        .disabled(groups.is_empty())
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.choose_all_but_oldest();
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    ui::button("dp-clear", t("dupes.clearChoice"))
+                        .disabled(chosen.is_empty())
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.dup_checked.clear();
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    ui::button("dp-location", t("proc.location"))
+                        .disabled(one.is_none())
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            if let Some(path) = &one {
+                                this.last = "";
+                                common::send_json(
+                                    this,
+                                    json!({"kind": "shell", "op": "location", "path": path}),
+                                    window,
+                                    cx,
+                                );
+                            }
+                        })),
+                )
+                .child(
+                    ui::button("dp-recycle", t("dupes.recycle"))
+                        .danger(true)
+                        .disabled(chosen.is_empty() || self.acting.busy || self.ctx.core.is_none())
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.last = "duplicates";
+                            common::send_json(this, json!({"kind": "duplicates", "paths": chosen}), window, cx);
+                        })),
+                ),
+        );
+        if groups.is_empty() {
+            panel = panel.child(kit::faint(t("dupes.none"), tk));
+            return tab.child(panel);
+        }
+        panel = panel.child(kit::faint(
+            if self.dup_checked.is_empty() {
+                t("dupes.chooseHint")
+            } else {
+                tn(
+                    "dupes.chosen",
+                    self.dup_checked.len() as u64,
+                    &[("size", &size(chosen_size, 1))],
+                )
+            },
+            tk,
+        ));
+        let mut list = div()
+            .id("dp-groups")
+            .max_h(px(520.))
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .gap_2();
+        let mut row_index = 0u64;
+        for group in groups {
+            let files = self.dup_files(group);
+            let unchecked = files.iter().filter(|f| !self.dup_checked.contains(f.s("path"))).count();
+            list = list.child(
+                div()
+                    .flex()
+                    .gap_2()
+                    .px_2()
+                    .py_1()
+                    .bg(tk.surface2)
+                    .text_size(px(13.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(div().flex_1().child(tn(
+                        "dupes.groupLine",
+                        files.len() as u64,
+                        &[("size", &size(group.n("size"), 1))],
+                    )))
+                    .child(kit::faint(
+                        tf(
+                            "dupes.groupFree",
+                            &[("size", &size(group.n("size") * (files.len() as f64 - 1.0), 1))],
+                        ),
+                        tk,
+                    )),
+            );
+            for f in files {
+                let path = f.s("path").to_string();
+                let (folder, name) = path
+                    .rsplit_once('\\')
+                    .map(|(a, b)| (a.to_string(), b.to_string()))
+                    .unwrap_or_else(|| (String::new(), path.clone()));
+                let checked = self.dup_checked.contains(&path);
+                // The last copy left unchosen in a group cannot be chosen: one copy always stays.
+                let last = !checked && unchecked <= 1;
+                let weak = cx.entity().downgrade();
+                let key = path.clone();
+                let tip = vigil_core::display::shown(&path);
+                list = list.child(
+                    div()
+                        .id(ElementId::NamedInteger("dp-row".into(), row_index))
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .h(px(28.))
+                        .px_2()
+                        .text_size(px(13.))
+                        .tooltip(move |window, cx| {
+                            gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(window, cx)
+                        })
+                        .child(ui::check_box(
+                            ElementId::NamedInteger("dp-file".into(), row_index),
+                            checked,
+                            last,
+                            vigil_core::display::shown_line(&name),
+                            move |on, _, cx| {
+                                let _ = weak.update(cx, |this, cx| {
+                                    if on {
+                                        this.dup_checked.insert(key.clone());
+                                    } else {
+                                        this.dup_checked.remove(&key);
+                                    }
+                                    cx.notify();
+                                });
+                            },
+                            tk,
+                        ))
+                        .child(
+                            kit::faint(folder, tk)
+                                .flex_1()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .whitespace_nowrap(),
+                        )
+                        .child(
+                            kit::faint(
+                                if f.i("modifiedMs") > 0 {
+                                    when(&kit::local_iso(f.i("modifiedMs")))
+                                } else {
+                                    String::new()
+                                },
+                                tk,
+                            )
+                            .w(px(130.)),
+                        ),
+                );
+                row_index += 1;
+            }
+        }
+        panel = panel.child(list);
+        tab.child(panel)
+    }
+}
+
 /// Opens child `index` of the folder shown.
 type Open = Arc<dyn Fn(usize, &mut Window, &mut gpui_kit::App)>;
 
@@ -1041,7 +1455,10 @@ impl Render for StoragePage {
         let tk = *tokens(cx);
         let weak = cx.entity().downgrade();
         let weak2 = cx.entity().downgrade();
-        let body = if self.tab_space {
+        let weak3 = cx.entity().downgrade();
+        let body = if self.tab_dupes {
+            self.dupes_tab(cx, &tk)
+        } else if self.tab_space {
             self.space_tab(cx, window, &tk)
         } else {
             self.clean_tab(cx, window, &tk)
@@ -1055,11 +1472,12 @@ impl Render for StoragePage {
                         "st-tab-clean",
                         t("storage.tabClean"),
                         None,
-                        !self.tab_space,
+                        !self.tab_space && !self.tab_dupes,
                         false,
                         move |_, cx| {
                             let _ = weak.update(cx, |this, cx| {
                                 this.tab_space = false;
+                                this.tab_dupes = false;
                                 cx.notify();
                             });
                         },
@@ -1069,11 +1487,26 @@ impl Render for StoragePage {
                         "st-tab-space",
                         t("storage.tabSpace"),
                         None,
-                        self.tab_space,
+                        self.tab_space && !self.tab_dupes,
                         false,
                         move |_, cx| {
                             let _ = weak2.update(cx, |this, cx| {
                                 this.tab_space = true;
+                                this.tab_dupes = false;
+                                cx.notify();
+                            });
+                        },
+                        &tk,
+                    ))
+                    .child(kit::chip(
+                        "st-tab-dupes",
+                        t("dupes.tab"),
+                        None,
+                        self.tab_dupes,
+                        false,
+                        move |_, cx| {
+                            let _ = weak3.update(cx, |this, cx| {
+                                this.tab_dupes = true;
                                 cx.notify();
                             });
                         },

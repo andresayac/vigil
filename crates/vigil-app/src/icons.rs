@@ -57,8 +57,10 @@ pub fn page(key: &str) -> char {
         "tasks" => '\u{E787}',
         "programs" => '\u{E71D}',
         "storage" => '\u{EDA2}',
+        "restore" => '\u{E777}',
         "system" => '\u{E950}',
         "updates" => '\u{E895}',
+        "power" => '\u{E83F}',
         "reliability" => '\u{E95E}',
         _ => '\u{E8A5}',
     }

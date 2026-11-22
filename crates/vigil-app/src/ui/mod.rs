@@ -12,8 +12,11 @@
 //!
 //! Text handed to these controls is drawn as plain text: nothing interprets markup.
 
+pub mod bar;
 pub mod grid;
 pub mod kit;
+
+pub use bar::{CommandBar, cmd};
 
 use std::rc::Rc;
 
@@ -457,7 +460,10 @@ pub fn search_box(state: &Entity<InputState>, tk: &Tokens) -> Input {
 
 /// A page title (Subtitle in the WinUI type ramp).
 pub fn page_title(text: impl Into<SharedString>) -> impl IntoElement {
+    // Never squeezed or wrapped by a command bar next to it: the bar collapses instead.
     div()
+        .flex_none()
+        .whitespace_nowrap()
         .pl_1()
         .font_family(crate::theme::FONT_DISPLAY)
         .text_size(px(20.))

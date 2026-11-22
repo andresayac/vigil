@@ -1,4 +1,163 @@
 {
+ "duplicates": {
+  "root": "C:\\Users\\jdoe",
+  "groups": [
+   {
+    "size": 1350565965,
+    "sha256": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+    "files": [
+     {
+      "path": "C:\\Users\\jdoe\\Pictures\\Phone backup\\Holiday 2025.mp4",
+      "modifiedMs": 1756537920000,
+      "createdMs": 1756537920000
+     },
+     {
+      "path": "C:\\Users\\jdoe\\Videos\\Holiday 2025.mp4",
+      "modifiedMs": 1755205500000,
+      "createdMs": 1755205500000
+     }
+    ],
+    "wasted": 1350565965
+   },
+   {
+    "size": 452986066,
+    "sha256": "c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1",
+    "files": [
+     {
+      "path": "C:\\Users\\jdoe\\Desktop\\Contoso Setup 4.2.exe",
+      "modifiedMs": 1763664120000,
+      "createdMs": 1763664120000
+     },
+     {
+      "path": "C:\\Users\\jdoe\\Downloads\\Contoso Setup 4.2.exe",
+      "modifiedMs": 1762078500000,
+      "createdMs": 1762078500000
+     },
+     {
+      "path": "C:\\Users\\jdoe\\Downloads\\old\\Contoso Setup 4.2.exe",
+      "modifiedMs": 1761642000000,
+      "createdMs": 1761642000000
+     }
+    ],
+    "wasted": 905972132
+   },
+   {
+    "size": 8392929,
+    "sha256": "5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b",
+    "files": [
+     {
+      "path": "C:\\Users\\jdoe\\Documents\\Backup\\Q3 report.pdf",
+      "modifiedMs": 1759737660000,
+      "createdMs": 1759737660000
+     },
+     {
+      "path": "C:\\Users\\jdoe\\Documents\\Fabrikam\\Q3 report.pdf",
+      "modifiedMs": 1759681200000,
+      "createdMs": 1759681200000
+     }
+    ],
+    "wasted": 8392929
+   },
+   {
+    "size": 3146718,
+    "sha256": "9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d",
+    "files": [
+     {
+      "path": "C:\\Users\\jdoe\\Pictures\\IMG_2041.jpg",
+      "modifiedMs": 1752928200000,
+      "createdMs": 1752928200000
+     },
+     {
+      "path": "C:\\Users\\jdoe\\Pictures\\Phone backup\\IMG_2041.jpg",
+      "modifiedMs": 1756537920000,
+      "createdMs": 1756537920000
+     }
+    ],
+    "wasted": 3146718
+   }
+  ],
+  "wasted": 2268077744,
+  "files": 48213,
+  "folders": 5120,
+  "compared": 184,
+  "hashedBytes": 3221225472,
+  "errors": 2,
+  "linksSkipped": 3,
+  "cloudSkipped": 41,
+  "minSize": 1048576,
+  "seconds": 18.4,
+  "cancelled": false,
+  "capped": false,
+  "groupsCapped": false
+ },
+ "restore": {
+  "points": [
+   {
+    "sequence": 58,
+    "description": "Vigil: before the Contoso driver update",
+    "kind": "settings",
+    "createdMs": 1767202800000,
+    "vigil": true
+   },
+   {
+    "sequence": 57,
+    "description": "Windows Update",
+    "kind": "install",
+    "createdMs": 1766891520000,
+    "vigil": false
+   },
+   {
+    "sequence": 56,
+    "description": "Installed Fabrikam Audio Driver",
+    "kind": "driver",
+    "createdMs": 1766153100000,
+    "vigil": false
+   },
+   {
+    "sequence": 55,
+    "description": "Vigil",
+    "kind": "settings",
+    "createdMs": 1765531860000,
+    "vigil": true
+   },
+   {
+    "sequence": 54,
+    "description": "Scheduled Checkpoint",
+    "kind": "checkpoint",
+    "createdMs": 1764900000000,
+    "vigil": false
+   }
+  ],
+  "pointsReadable": true,
+  "drives": [
+   {
+    "drive": "C:",
+    "label": "",
+    "total": 2146409906176,
+    "protected": true,
+    "used": 6871947673,
+    "allocated": 7516192768,
+    "max": 42949672960,
+    "unlimited": false
+   },
+   {
+    "drive": "D:",
+    "label": "Data",
+    "total": 499289948160,
+    "protected": false,
+    "used": null,
+    "allocated": null,
+    "max": null,
+    "unlimited": false
+   }
+  ],
+  "storageReadable": true,
+  "offByPolicy": false,
+  "configLocked": false,
+  "frequencyMinutes": 1440,
+  "elevated": true,
+  "problem": ""
+ },
  "appInfo": {
   "version": "demo",
   "elevated": false,
@@ -8646,5 +8805,428 @@
     "postBootMs": 24000
    }
   ]
+ },
+ "power": {
+  "readMs": 1795329000000,
+  "onAc": false,
+  "batteryPercent": 64,
+  "hasBattery": true,
+  "batteries": [
+   {
+    "name": "Contoso 5K9 Li-ion",
+    "manufacturer": "Contoso",
+    "chemistry": "LION",
+    "rechargeable": true,
+    "relative": false,
+    "designMwh": 54000,
+    "fullMwh": 41040,
+    "healthPercent": 76,
+    "cycleCount": 412,
+    "remainingMwh": 26265,
+    "chargePercent": 64,
+    "rateMw": -9200,
+    "voltageMv": 11420,
+    "state": "discharging",
+    "critical": false,
+    "estimatedSeconds": 10320
+   }
+  ],
+  "lidPresent": true,
+  "sleepAvailable": true,
+  "hibernateAvailable": true,
+  "hiberfilePresent": true,
+  "modernStandby": false,
+  "plan": {
+   "name": "Balanced",
+   "guid": "381b4222-f694-41f0-9685-ff5bb260df2e",
+   "sleepAc": 1800,
+   "sleepDc": 900,
+   "hibernateAc": 0,
+   "hibernateDc": 10800,
+   "displayAc": 600,
+   "displayDc": 300,
+   "lidAc": 1,
+   "lidDc": 1,
+   "wakeTimersAc": 1,
+   "wakeTimersDc": 2
+  },
+  "requestsRead": true,
+  "requests": [
+   {
+    "kind": "display",
+    "source": "process",
+    "name": "C:\\Program Files\\Contoso\\Player\\player.exe",
+    "reason": "Video Wake Lock"
+   },
+   {
+    "kind": "system",
+    "source": "driver",
+    "name": "Contoso High Definition Audio Device (HDAUDIO\\FUNC_01&VEN_10EC&DEV_0897)",
+    "reason": "An audio stream is currently in use."
+   }
+  ],
+  "events": [
+   {
+    "timeMs": 1795321800000,
+    "time": "2026-11-21T23:30:00",
+    "kind": "sleep",
+    "source": "",
+    "sourceKind": "",
+    "sleptMinutes": null,
+    "reason": "0"
+   },
+   {
+    "timeMs": 1795263060000,
+    "time": "2026-11-21T07:11:00",
+    "kind": "resume",
+    "source": "",
+    "sourceKind": "",
+    "sleptMinutes": null,
+    "reason": ""
+   },
+   {
+    "timeMs": 1795263000000,
+    "time": "2026-11-21T07:10:00",
+    "kind": "wake",
+    "source": "Power Button",
+    "sourceKind": "device",
+    "sleptMinutes": 230,
+    "reason": ""
+   },
+   {
+    "timeMs": 1795248600000,
+    "time": "2026-11-21T03:10:00",
+    "kind": "sleep",
+    "source": "",
+    "sourceKind": "",
+    "sleptMinutes": null,
+    "reason": "0"
+   },
+   {
+    "timeMs": 1795248120000,
+    "time": "2026-11-21T03:02:00",
+    "kind": "resume",
+    "source": "",
+    "sourceKind": "",
+    "sleptMinutes": null,
+    "reason": ""
+   },
+   {
+    "timeMs": 1795248000000,
+    "time": "2026-11-21T03:00:00",
+    "kind": "wake",
+    "source": "Contoso Updater",
+    "sourceKind": "timer",
+    "sleptMinutes": 210,
+    "reason": ""
+   },
+   {
+    "timeMs": 1795235400000,
+    "time": "2026-11-20T23:30:00",
+    "kind": "sleep",
+    "source": "",
+    "sourceKind": "",
+    "sleptMinutes": null,
+    "reason": "0"
+   },
+   {
+    "timeMs": 1795176660000,
+    "time": "2026-11-20T07:11:00",
+    "kind": "resume",
+    "source": "",
+    "sourceKind": "",
+    "sleptMinutes": null,
+    "reason": ""
+   },
+   {
+    "timeMs": 1795176600000,
+    "time": "2026-11-20T07:10:00",
+    "kind": "wake",
+    "source": "HID Keyboard Device",
+    "sourceKind": "device",
+    "sleptMinutes": 460,
+    "reason": ""
+   },
+   {
+    "timeMs": 1795149000000,
+    "time": "2026-11-19T23:30:00",
+    "kind": "sleep",
+    "source": "",
+    "sourceKind": "",
+    "sleptMinutes": null,
+    "reason": "0"
+   },
+   {
+    "timeMs": 1795090260000,
+    "time": "2026-11-19T07:11:00",
+    "kind": "resume",
+    "source": "",
+    "sourceKind": "",
+    "sleptMinutes": null,
+    "reason": ""
+   },
+   {
+    "timeMs": 1795090200000,
+    "time": "2026-11-19T07:10:00",
+    "kind": "wake",
+    "source": "Power Button",
+    "sourceKind": "device",
+    "sleptMinutes": 230,
+    "reason": ""
+   },
+   {
+    "timeMs": 1795075800000,
+    "time": "2026-11-19T03:10:00",
+    "kind": "sleep",
+    "source": "",
+    "sourceKind": "",
+    "sleptMinutes": null,
+    "reason": "0"
+   },
+   {
+    "timeMs": 1795075320000,
+    "time": "2026-11-19T03:02:00",
+    "kind": "resume",
+    "source": "",
+    "sourceKind": "",
+    "sleptMinutes": null,
+    "reason": ""
+   },
+   {
+    "timeMs": 1795075200000,
+    "time": "2026-11-19T03:00:00",
+    "kind": "wake",
+    "source": "Contoso Updater",
+    "sourceKind": "timer",
+    "sleptMinutes": 210,
+    "reason": ""
+   },
+   {
+    "timeMs": 1795062600000,
+    "time": "2026-11-18T23:30:00",
+    "kind": "sleep",
+    "source": "",
+    "sourceKind": "",
+    "sleptMinutes": null,
+    "reason": "0"
+   },
+   {
+    "timeMs": 1795003860000,
+    "time": "2026-11-18T07:11:00",
+    "kind": "resume",
+    "source": "",
+    "sourceKind": "",
+    "sleptMinutes": null,
+    "reason": ""
+   },
+   {
+    "timeMs": 1795003800000,
+    "time": "2026-11-18T07:10:00",
+    "kind": "wake",
+    "source": "HID Keyboard Device",
+    "sourceKind": "device",
+    "sleptMinutes": 460,
+    "reason": ""
+   },
+   {
+    "timeMs": 1794976200000,
+    "time": "2026-11-17T23:30:00",
+    "kind": "sleep",
+    "source": "",
+    "sourceKind": "",
+    "sleptMinutes": null,
+    "reason": "0"
+   },
+   {
+    "timeMs": 1794917460000,
+    "time": "2026-11-17T07:11:00",
+    "kind": "resume",
+    "source": "",
+    "sourceKind": "",
+    "sleptMinutes": null,
+    "reason": ""
+   },
+   {
+    "timeMs": 1794917400000,
+    "time": "2026-11-17T07:10:00",
+    "kind": "wake",
+    "source": "Power Button",
+    "sourceKind": "device",
+    "sleptMinutes": 230,
+    "reason": ""
+   },
+   {
+    "timeMs": 1794903000000,
+    "time": "2026-11-17T03:10:00",
+    "kind": "sleep",
+    "source": "",
+    "sourceKind": "",
+    "sleptMinutes": null,
+    "reason": "0"
+   },
+   {
+    "timeMs": 1794902520000,
+    "time": "2026-11-17T03:02:00",
+    "kind": "resume",
+    "source": "",
+    "sourceKind": "",
+    "sleptMinutes": null,
+    "reason": ""
+   },
+   {
+    "timeMs": 1794902400000,
+    "time": "2026-11-17T03:00:00",
+    "kind": "wake",
+    "source": "Contoso Updater",
+    "sourceKind": "timer",
+    "sleptMinutes": 210,
+    "reason": ""
+   },
+   {
+    "timeMs": 1794889800000,
+    "time": "2026-11-16T23:30:00",
+    "kind": "sleep",
+    "source": "",
+    "sourceKind": "",
+    "sleptMinutes": null,
+    "reason": "0"
+   },
+   {
+    "timeMs": 1794831060000,
+    "time": "2026-11-16T07:11:00",
+    "kind": "resume",
+    "source": "",
+    "sourceKind": "",
+    "sleptMinutes": null,
+    "reason": ""
+   },
+   {
+    "timeMs": 1794831000000,
+    "time": "2026-11-16T07:10:00",
+    "kind": "wake",
+    "source": "HID Keyboard Device",
+    "sourceKind": "device",
+    "sleptMinutes": 460,
+    "reason": ""
+   },
+   {
+    "timeMs": 1794803400000,
+    "time": "2026-11-15T23:30:00",
+    "kind": "sleep",
+    "source": "",
+    "sourceKind": "",
+    "sleptMinutes": null,
+    "reason": "0"
+   }
+  ],
+  "wakeSources": [
+   {
+    "source": "Power Button",
+    "sourceKind": "device",
+    "count": 3,
+    "lastMs": 1795263000000
+   },
+   {
+    "source": "Contoso Updater",
+    "sourceKind": "timer",
+    "count": 3,
+    "lastMs": 1795248000000
+   },
+   {
+    "source": "HID Keyboard Device",
+    "sourceKind": "device",
+    "count": 3,
+    "lastMs": 1795176600000
+   }
+  ],
+  "days": [
+   {
+    "date": "2026-11-15",
+    "sleeps": 1,
+    "wakes": 0
+   },
+   {
+    "date": "2026-11-16",
+    "sleeps": 1,
+    "wakes": 1
+   },
+   {
+    "date": "2026-11-17",
+    "sleeps": 2,
+    "wakes": 2
+   },
+   {
+    "date": "2026-11-18",
+    "sleeps": 1,
+    "wakes": 1
+   },
+   {
+    "date": "2026-11-19",
+    "sleeps": 2,
+    "wakes": 2
+   },
+   {
+    "date": "2026-11-20",
+    "sleeps": 1,
+    "wakes": 1
+   },
+   {
+    "date": "2026-11-21",
+    "sleeps": 2,
+    "wakes": 2
+   }
+  ],
+  "sleeps": 10,
+  "wakes": 9,
+  "wakeTasks": [
+   {
+    "path": "\\Contoso\\Updater",
+    "name": "Updater",
+    "enabled": true,
+    "nextRun": "2026-11-22T16:30:00",
+    "program": "C:\\Program Files\\Contoso\\Updater\\updater.exe",
+    "microsoft": false
+   },
+   {
+    "path": "\\Microsoft\\Windows\\UpdateOrchestrator\\Reboot",
+    "name": "Reboot",
+    "enabled": false,
+    "nextRun": "",
+    "program": "C:\\Windows\\System32\\MusNotification.exe",
+    "microsoft": true
+   }
+  ],
+  "wakeDevicesRead": true,
+  "wakeDevices": [
+   "HID Keyboard Device",
+   "Contoso Ethernet Controller"
+  ],
+  "hints": [
+   {
+    "code": "battery_worn",
+    "severity": "warn",
+    "subject": "Contoso 5K9 Li-ion",
+    "count": 76
+   },
+   {
+    "code": "kept_awake",
+    "severity": "info",
+    "subject": "C:\\Program Files\\Contoso\\Player\\player.exe",
+    "count": 2
+   },
+   {
+    "code": "timer_wakes",
+    "severity": "info",
+    "subject": "Contoso Updater",
+    "count": 3
+   },
+   {
+    "code": "wake_tasks",
+    "severity": "info",
+    "subject": "",
+    "count": 1
+   }
+  ],
+  "notes": []
  }
 }

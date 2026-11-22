@@ -284,6 +284,11 @@ fn base_definitions() -> Vec<ToolDef> {
             schema(json!({}), &[]),
         ),
         def(
+            "get_power",
+            "Battery and sleep, read only: each battery's design and full-charge capacity, health, cycle count and charge; what keeps the computer awake now (power requests; needs administrator rights); sleeps and wakes of the last 7 days with each wake's source; scheduled tasks and devices allowed to wake it; the active power plan's sleep, hibernate, display and lid settings; and hints.",
+            schema(json!({}), &[]),
+        ),
+        def(
             "list_alerts",
             "Alerts of Vigil's background watch (new startup entries, services, tasks, drivers, changed security settings, open remote-access ports), newest first.",
             schema(
@@ -450,6 +455,7 @@ pub fn call(ctx: &Context, name: &str, input: &Value) -> Result<Value, String> {
         "get_signins_summary" => signins(input),
         "get_reliability_summary" => reliability(input),
         "get_updates" => Ok(compact(&to_value(&vigil_sys::updates::read()), 30)),
+        "get_power" => Ok(compact(&to_value(&vigil_sys::power::read()), 30)),
         "list_alerts" => alerts(input),
         "check_file" => check_file(input),
         "get_scan_summary" | "get_related" | "get_process_events" | "get_file_history" => {

@@ -163,6 +163,10 @@ fn build_plan(st: &AppState, request: &Request) -> Result<Plan, String> {
         let live = vigil_sys::defender::read();
         return crate::protection::plan(op, setting, list, value, &live);
     }
+    if let Request::Duplicates { paths } = request {
+        let groups = st.lock().duplicates.clone();
+        return crate::duplicates::plan(paths, &groups);
+    }
     if let Request::Posture { op } = request {
         let live = crate::posture::read();
         return crate::posture::plan(op, &live);

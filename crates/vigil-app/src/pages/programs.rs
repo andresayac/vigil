@@ -563,43 +563,43 @@ impl Render for ProgramsPage {
                     .child(div().w_full().max_w(px(640.)).child(ui::search_box(&self.search, &tk))),
             )
             .child(
-                kit::row()
-                    .child(ui::page_title(t("page.programs")))
-                    .child(div().flex_1())
-                    .child(
-                        ui::command("pg-uninstall", icons::DELETE, t("programs.uninstall"))
-                            .disabled(!can_uninstall)
-                            .on_click(cx.listener(|this, _, window, cx| this.run("uninstall", window, cx))),
-                    )
-                    .child(
-                        ui::command("pg-entry", '\u{E75C}', t("programs.removeEntry"))
-                            .disabled(!can_remove_entry)
-                            .on_click(cx.listener(|this, _, window, cx| this.run("remove_entry", window, cx))),
-                    )
-                    .child(ui::separator(&tk))
-                    .child(
-                        ui::command("pg-folder", icons::FOLDER, t("programs.openFolder"))
-                            .disabled(!can_folder)
-                            .on_click(cx.listener(|this, _, window, cx| this.run("folder", window, cx))),
-                    )
-                    .child(
-                        ui::command("pg-settings", icons::SETTINGS, t("programs.openSettings")).on_click(cx.listener(
-                            |this, _, window, cx| {
-                                common::send_json(
-                                    this,
-                                    json!({"kind": "shell", "op": "url", "url": "ms-settings:appsfeatures"}),
-                                    window,
-                                    cx,
-                                )
-                            },
-                        )),
-                    )
-                    .child(ui::separator(&tk))
-                    .child(
-                        ui::command("pg-refresh", icons::REFRESH, t("common.refresh"))
-                            .disabled(self.loading)
-                            .on_click(cx.listener(|this, _, _, cx| this.load(cx))),
-                    ),
+                kit::row().child(ui::page_title(t("page.programs"))).child(
+                    ui::CommandBar::new("pg-bar")
+                        .cmd(
+                            ui::cmd("pg-uninstall", icons::DELETE, t("programs.uninstall"))
+                                .disabled(!can_uninstall)
+                                .on_click(cx.listener(|this, _, window, cx| this.run("uninstall", window, cx))),
+                        )
+                        .cmd(
+                            ui::cmd("pg-entry", '\u{E75C}', t("programs.removeEntry"))
+                                .disabled(!can_remove_entry)
+                                .on_click(cx.listener(|this, _, window, cx| this.run("remove_entry", window, cx))),
+                        )
+                        .separator()
+                        .cmd(
+                            ui::cmd("pg-folder", icons::FOLDER, t("programs.openFolder"))
+                                .disabled(!can_folder)
+                                .on_click(cx.listener(|this, _, window, cx| this.run("folder", window, cx))),
+                        )
+                        .cmd(
+                            ui::cmd("pg-settings", icons::SETTINGS, t("programs.openSettings")).on_click(cx.listener(
+                                |this, _, window, cx| {
+                                    common::send_json(
+                                        this,
+                                        json!({"kind": "shell", "op": "url", "url": "ms-settings:appsfeatures"}),
+                                        window,
+                                        cx,
+                                    )
+                                },
+                            )),
+                        )
+                        .separator()
+                        .cmd(
+                            ui::cmd("pg-refresh", icons::REFRESH, t("common.refresh"))
+                                .disabled(self.loading)
+                                .on_click(cx.listener(|this, _, _, cx| this.load(cx))),
+                        ),
+                ),
             )
             .child(kit::faint(t("programs.note"), &tk))
             .children(self.acting.bar("pg-result", &tk))

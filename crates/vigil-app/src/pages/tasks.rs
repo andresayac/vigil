@@ -662,57 +662,59 @@ impl Render for TasksPage {
                                 &tk,
                             )),
                     )
-                    .child(div().flex_1())
                     .child(
-                        ui::command("tk-enable", icons::CHECK, t("tasks.enable"))
-                            .disabled(!(changeable && !enabled))
-                            .on_click(cx.listener(|this, _, window, cx| this.run("enable", window, cx))),
-                    )
-                    .child(
-                        ui::command("tk-disable", icons::END_TASK, t("tasks.disable"))
-                            .disabled(!(changeable && enabled))
-                            .on_click(cx.listener(|this, _, window, cx| this.run("disable", window, cx))),
-                    )
-                    .child(
-                        ui::command("tk-run", icons::START, t("tasks.run"))
-                            .disabled(!(changeable && enabled))
-                            .on_click(cx.listener(|this, _, window, cx| this.run("run", window, cx))),
-                    )
-                    .child(
-                        ui::command("tk-delete", icons::DELETE, t("tasks.delete"))
-                            .disabled(!changeable)
-                            .on_click(cx.listener(|this, _, window, cx| this.run("delete", window, cx))),
-                    )
-                    .child(ui::separator(&tk))
-                    .child(
-                        ui::command("tk-location", icons::FOLDER, t("proc.location"))
-                            .disabled(target.is_empty())
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                common::send_json(
-                                    this,
-                                    json!({"kind": "shell", "op": "location", "path": location}),
-                                    window,
-                                    cx,
-                                )
-                            })),
-                    )
-                    .child(
-                        ui::command("tk-scheduler", '\u{E787}', t("tasks.openScheduler")).on_click(cx.listener(
-                            |this, _, window, cx| {
-                                common::send_json(
-                                    this,
-                                    json!({"kind": "shell", "op": "console", "name": "taskschd.msc"}),
-                                    window,
-                                    cx,
-                                )
-                            },
-                        )),
-                    )
-                    .child(ui::separator(&tk))
-                    .child(
-                        ui::command("tk-refresh", icons::REFRESH, t("common.refresh"))
-                            .disabled(self.loading)
-                            .on_click(cx.listener(|this, _, _, cx| this.load(cx))),
+                        ui::CommandBar::new("tk-bar")
+                            .cmd(
+                                ui::cmd("tk-enable", icons::CHECK, t("tasks.enable"))
+                                    .disabled(!(changeable && !enabled))
+                                    .on_click(cx.listener(|this, _, window, cx| this.run("enable", window, cx))),
+                            )
+                            .cmd(
+                                ui::cmd("tk-disable", icons::END_TASK, t("tasks.disable"))
+                                    .disabled(!(changeable && enabled))
+                                    .on_click(cx.listener(|this, _, window, cx| this.run("disable", window, cx))),
+                            )
+                            .cmd(
+                                ui::cmd("tk-run", icons::START, t("tasks.run"))
+                                    .disabled(!(changeable && enabled))
+                                    .on_click(cx.listener(|this, _, window, cx| this.run("run", window, cx))),
+                            )
+                            .cmd(
+                                ui::cmd("tk-delete", icons::DELETE, t("tasks.delete"))
+                                    .disabled(!changeable)
+                                    .on_click(cx.listener(|this, _, window, cx| this.run("delete", window, cx))),
+                            )
+                            .separator()
+                            .cmd(
+                                ui::cmd("tk-location", icons::FOLDER, t("proc.location"))
+                                    .disabled(target.is_empty())
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        common::send_json(
+                                            this,
+                                            json!({"kind": "shell", "op": "location", "path": location}),
+                                            window,
+                                            cx,
+                                        )
+                                    })),
+                            )
+                            .cmd(
+                                ui::cmd("tk-scheduler", '\u{E787}', t("tasks.openScheduler")).on_click(cx.listener(
+                                    |this, _, window, cx| {
+                                        common::send_json(
+                                            this,
+                                            json!({"kind": "shell", "op": "console", "name": "taskschd.msc"}),
+                                            window,
+                                            cx,
+                                        )
+                                    },
+                                )),
+                            )
+                            .separator()
+                            .cmd(
+                                ui::cmd("tk-refresh", icons::REFRESH, t("common.refresh"))
+                                    .disabled(self.loading)
+                                    .on_click(cx.listener(|this, _, _, cx| this.load(cx))),
+                            ),
                     ),
             )
             .child(kit::faint(t("tasks.note"), &tk))

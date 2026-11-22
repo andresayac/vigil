@@ -105,8 +105,10 @@ pub fn open_console(name: &str) -> Result<()> {
     launch(&tool("mmc.exe"), &[&tool(name)])
 }
 
-const TOOLS: [&str; 8] = [
+const TOOLS: [&str; 10] = [
     "SystemPropertiesPerformance.exe",
+    "SystemPropertiesProtection.exe",
+    "rstrui.exe",
     "cleanmgr.exe",
     "dfrgui.exe",
     "resmon.exe",

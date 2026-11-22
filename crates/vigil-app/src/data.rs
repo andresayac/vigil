@@ -28,6 +28,8 @@ pub enum Src {
     Startup,
     StartupImpact,
     Updates,
+    Restore,
+    Power,
     Tuning,
     Hardware(bool),
     Insights,
@@ -55,8 +57,27 @@ fn to<T: Serialize>(value: T) -> Result<Value, String> {
     serde_json::to_value(value).map_err(|e| e.to_string())
 }
 
-/// Reads `src` (`core` missing: the demo).
+/// Reads `src` (`core` missing: the demo). What the global search (Ctrl+K) can find in it is kept
+/// for the search.
 pub fn fetch(core: Option<&Arc<AppState>>, src: Src) -> Result<Value, String> {
+    use crate::search::Kind;
+    let kind = match src {
+        Src::Tasks => Some(Kind::Task),
+        Src::Programs => Some(Kind::Program),
+        Src::Firewall => Some(Kind::Firewall),
+        Src::Extensions => Some(Kind::Extension),
+        Src::Startup => Some(Kind::Startup),
+        _ => None,
+    };
+    let result = read(core, src);
+    if let (Some(kind), Ok(value)) = (kind, &result) {
+        crate::search::remember(kind, crate::search::entries_of(kind, value));
+    }
+    result
+}
+
+/// Reads `src` (`core` missing: the demo).
+fn read(core: Option<&Arc<AppState>>, src: Src) -> Result<Value, String> {
     let Some(st) = core else {
         return Ok(from_demo(src));
     };
@@ -80,6 +101,8 @@ pub fn fetch(core: Option<&Arc<AppState>>, src: Src) -> Result<Value, String> {
         Src::Startup => to(vigil_sys::startup::list()),
         Src::StartupImpact => to(vigil_sys::bootimpact::read()),
         Src::Updates => to(vigil_sys::updates::read()),
+        Src::Restore => to(vigil_core::restore::view(st.admin)),
+        Src::Power => to(vigil_sys::power::read()),
         Src::Tuning => to(vigil_maint::tuning::tuning_state()),
         Src::Hardware(force) => to(st.hardware(force)?),
         Src::Insights => to(api::insights(st)?),
@@ -111,6 +134,8 @@ fn from_demo(src: Src) -> Value {
         Src::Startup => serde_json::to_value(crate::demo_pages::startup().0).unwrap_or(json!([])),
         Src::StartupImpact => demo("startupImpact"),
         Src::Updates => demo("updates"),
+        Src::Restore => demo("restore"),
+        Src::Power => demo("power"),
         Src::Tuning => demo("tuning"),
         Src::Hardware(_) => demo("hardware"),
         Src::Insights => demo("insights"),

@@ -537,56 +537,56 @@ impl Render for FirewallPage {
                     .child(div().w_full().max_w(px(640.)).child(ui::search_box(&self.search, &tk))),
             )
             .child(
-                kit::row()
-                    .child(ui::page_title(t("page.firewall")))
-                    .child(div().flex_1())
-                    .child(
-                        ui::command("fw-enable", icons::CHECK, t("firewall.enable"))
-                            .disabled(!(actionable && !enabled))
-                            .on_click(cx.listener(|this, _, window, cx| this.run("enable", window, cx))),
-                    )
-                    .child(
-                        ui::command("fw-disable", icons::END_TASK, t("firewall.disable"))
-                            .disabled(!(actionable && enabled))
-                            .on_click(cx.listener(|this, _, window, cx| this.run("disable", window, cx))),
-                    )
-                    .child(
-                        ui::command("fw-delete", icons::DELETE, t("firewall.delete"))
-                            .disabled(!(actionable && !builtin))
-                            .on_click(cx.listener(|this, _, window, cx| this.run("delete", window, cx))),
-                    )
-                    .child(ui::separator(&tk))
-                    .child({
-                        let path = location.clone();
-                        ui::command("fw-location", icons::FOLDER, t("proc.location"))
-                            .disabled(location.is_empty())
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                common::send_json(
-                                    this,
-                                    json!({"kind": "shell", "op": "location", "path": path}),
-                                    window,
-                                    cx,
-                                )
-                            }))
-                    })
-                    .child(
-                        ui::command("fw-console", '\u{E8A7}', t("firewall.openConsole")).on_click(cx.listener(
-                            |this, _, window, cx| {
-                                common::send_json(
-                                    this,
-                                    json!({"kind": "shell", "op": "console", "name": "wf.msc"}),
-                                    window,
-                                    cx,
-                                )
-                            },
-                        )),
-                    )
-                    .child(ui::separator(&tk))
-                    .child(
-                        ui::command("fw-refresh", icons::REFRESH, t("common.refresh"))
-                            .disabled(self.loading)
-                            .on_click(cx.listener(|this, _, _, cx| this.load(cx))),
-                    ),
+                kit::row().child(ui::page_title(t("page.firewall"))).child(
+                    ui::CommandBar::new("fw-bar")
+                        .cmd(
+                            ui::cmd("fw-enable", icons::CHECK, t("firewall.enable"))
+                                .disabled(!(actionable && !enabled))
+                                .on_click(cx.listener(|this, _, window, cx| this.run("enable", window, cx))),
+                        )
+                        .cmd(
+                            ui::cmd("fw-disable", icons::END_TASK, t("firewall.disable"))
+                                .disabled(!(actionable && enabled))
+                                .on_click(cx.listener(|this, _, window, cx| this.run("disable", window, cx))),
+                        )
+                        .cmd(
+                            ui::cmd("fw-delete", icons::DELETE, t("firewall.delete"))
+                                .disabled(!(actionable && !builtin))
+                                .on_click(cx.listener(|this, _, window, cx| this.run("delete", window, cx))),
+                        )
+                        .separator()
+                        .cmd({
+                            let path = location.clone();
+                            ui::cmd("fw-location", icons::FOLDER, t("proc.location"))
+                                .disabled(location.is_empty())
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    common::send_json(
+                                        this,
+                                        json!({"kind": "shell", "op": "location", "path": path}),
+                                        window,
+                                        cx,
+                                    )
+                                }))
+                        })
+                        .cmd(
+                            ui::cmd("fw-console", '\u{E8A7}', t("firewall.openConsole")).on_click(cx.listener(
+                                |this, _, window, cx| {
+                                    common::send_json(
+                                        this,
+                                        json!({"kind": "shell", "op": "console", "name": "wf.msc"}),
+                                        window,
+                                        cx,
+                                    )
+                                },
+                            )),
+                        )
+                        .separator()
+                        .cmd(
+                            ui::cmd("fw-refresh", icons::REFRESH, t("common.refresh"))
+                                .disabled(self.loading)
+                                .on_click(cx.listener(|this, _, _, cx| this.load(cx))),
+                        ),
+                ),
             )
             .child(kit::faint(t("firewall.note"), &tk))
             .children(self.acting.bar("fw-result", &tk))

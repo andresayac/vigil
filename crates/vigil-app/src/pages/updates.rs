@@ -529,23 +529,23 @@ impl Render for UpdatesPage {
         if self.loading {
             head = head.child(kit::faint(t("common.reading"), &tk));
         }
-        head = head
-            .child(div().flex_1())
-            .child(
-                ui::command("up-settings", icons::SETTINGS, t("updates.openSettings"))
-                    .on_click(cx.listener(|this, _, window, cx| this.open("ms-settings:windowsupdate", window, cx))),
-            )
-            .child(
-                ui::command("up-history", '\u{E81C}', t("updates.openHistory")).on_click(
+        head = head.child(
+            ui::CommandBar::new("up-bar")
+                .cmd(
+                    ui::cmd("up-settings", icons::SETTINGS, t("updates.openSettings")).on_click(
+                        cx.listener(|this, _, window, cx| this.open("ms-settings:windowsupdate", window, cx)),
+                    ),
+                )
+                .cmd(ui::cmd("up-history", '\u{E81C}', t("updates.openHistory")).on_click(
                     cx.listener(|this, _, window, cx| this.open("ms-settings:windowsupdate-history", window, cx)),
+                ))
+                .separator()
+                .cmd(
+                    ui::cmd("up-refresh", icons::REFRESH, t("common.refresh"))
+                        .disabled(self.loading)
+                        .on_click(cx.listener(|this, _, _, cx| this.load(cx))),
                 ),
-            )
-            .child(ui::separator(&tk))
-            .child(
-                ui::command("up-refresh", icons::REFRESH, t("common.refresh"))
-                    .disabled(self.loading)
-                    .on_click(cx.listener(|this, _, _, cx| this.load(cx))),
-            );
+        );
         let mut page = kit::page("updates")
             .child(head)
             .child(kit::faint(t("updates.note"), &tk))

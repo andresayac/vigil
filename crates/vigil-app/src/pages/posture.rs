@@ -294,18 +294,20 @@ impl Render for PosturePage {
         let busy = self.acting.busy;
         let mut page = kit::page("posture")
             .child(
-                kit::row()
-                    .child(ui::page_title(t("page.posture")))
-                    .child(div().flex_1())
-                    .child(ui::command("po-open", '\u{E8A7}', t("posture.openSecurity")).on_click(
-                        cx.listener(|this, _, window, cx| this.open("windowsdefender://devicesecurity", window, cx)),
-                    ))
-                    .child(ui::separator(&tk))
-                    .child(
-                        ui::command("po-refresh", icons::REFRESH, t("common.refresh"))
-                            .disabled(self.loading)
-                            .on_click(cx.listener(|this, _, _, cx| this.load(cx))),
-                    ),
+                kit::row().child(ui::page_title(t("page.posture"))).child(
+                    ui::CommandBar::new("po-bar")
+                        .cmd(ui::cmd("po-open", '\u{E8A7}', t("posture.openSecurity")).on_click(
+                            cx.listener(|this, _, window, cx| {
+                                this.open("windowsdefender://devicesecurity", window, cx)
+                            }),
+                        ))
+                        .separator()
+                        .cmd(
+                            ui::cmd("po-refresh", icons::REFRESH, t("common.refresh"))
+                                .disabled(self.loading)
+                                .on_click(cx.listener(|this, _, _, cx| this.load(cx))),
+                        ),
+                ),
             )
             .child(kit::muted(t("posture.lead"), &tk))
             .children(self.acting.bar("po-result", &tk));

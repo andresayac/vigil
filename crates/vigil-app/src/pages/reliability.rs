@@ -809,38 +809,39 @@ impl Render for ReliabilityPage {
         if self.loading {
             head = head.child(kit::faint(t("common.reading"), &tk));
         }
-        head = head
-            .child(div().flex_1())
-            .child(
-                ui::command("rel-monitor", '\u{E9D2}', t("rel.monitor")).on_click(cx.listener(
-                    |this, _, window, cx| {
-                        common::send_json(
-                            this,
-                            json!({"kind": "shell", "op": "tool", "name": "reliability"}),
-                            window,
-                            cx,
-                        )
-                    },
-                )),
-            )
-            .child(
-                ui::command("rel-events", '\u{E8A7}', t("menu.eventViewer")).on_click(cx.listener(
-                    |this, _, window, cx| {
-                        common::send_json(
-                            this,
-                            json!({"kind": "shell", "op": "console", "name": "eventvwr.msc"}),
-                            window,
-                            cx,
-                        )
-                    },
-                )),
-            )
-            .child(ui::separator(&tk))
-            .child(
-                ui::command("rel-refresh", icons::REFRESH, t("common.refresh"))
-                    .disabled(self.loading)
-                    .on_click(cx.listener(|this, _, _, cx| this.load(cx))),
-            );
+        head = head.child(
+            ui::CommandBar::new("rel-bar")
+                .cmd(
+                    ui::cmd("rel-monitor", '\u{E9D2}', t("rel.monitor")).on_click(cx.listener(
+                        |this, _, window, cx| {
+                            common::send_json(
+                                this,
+                                json!({"kind": "shell", "op": "tool", "name": "reliability"}),
+                                window,
+                                cx,
+                            )
+                        },
+                    )),
+                )
+                .cmd(
+                    ui::cmd("rel-events", '\u{E8A7}', t("menu.eventViewer")).on_click(cx.listener(
+                        |this, _, window, cx| {
+                            common::send_json(
+                                this,
+                                json!({"kind": "shell", "op": "console", "name": "eventvwr.msc"}),
+                                window,
+                                cx,
+                            )
+                        },
+                    )),
+                )
+                .separator()
+                .cmd(
+                    ui::cmd("rel-refresh", icons::REFRESH, t("common.refresh"))
+                        .disabled(self.loading)
+                        .on_click(cx.listener(|this, _, _, cx| this.load(cx))),
+                ),
+        );
         let mut page = kit::page("reliability")
             .child(head)
             .child(kit::faint(t("rel.note"), &tk))
