@@ -300,21 +300,26 @@ pub(crate) fn open(path: &Path, access: u32, flags: u32) -> Result<OwnedHandle, 
 
 /// Real path of an open file or folder (links resolved), normalised for comparison.
 pub(crate) fn final_path(handle: &OwnedHandle) -> Option<String> {
+    final_path_exact(handle.0).map(|path| normcase(&path))
+}
+
+/// Real path of an open handle as Windows writes it (links in its folders resolved, short names
+/// expanded, the case on disk), without the `\\?\` prefix; `\\server\share\…` for a network path.
+pub(crate) fn final_path_exact(handle: HANDLE) -> Option<String> {
     let mut buffer = vec![0u16; 32768];
     // SAFETY: `handle` is open and `buffer` is a writable slice of the given length.
-    let length = unsafe { GetFinalPathNameByHandleW(handle.0, &mut buffer, VOLUME_NAME_DOS) } as usize;
+    let length = unsafe { GetFinalPathNameByHandleW(handle, &mut buffer, VOLUME_NAME_DOS) } as usize;
     if length == 0 || length >= buffer.len() {
         return None;
     }
     let path = String::from_utf16_lossy(&buffer[..length]);
-    let path = if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+    Some(if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
         format!(r"\\{rest}")
     } else if let Some(rest) = path.strip_prefix(r"\\?\") {
         rest.to_string()
     } else {
         path
-    };
-    Some(normcase(&path))
+    })
 }
 
 /// `os.path.normcase` on Windows: forward slashes become backslashes, everything lower case.

@@ -136,6 +136,24 @@ fn recycle(params: &Value, store: &Store, _id: &str) -> Result<Outcome> {
                 path
             )));
         }
+        // The real path, resolved through a handle opened without following a link at its last
+        // part: a folder on the way swapped for a link (to the Windows folder, say) changes it.
+        let real = storage::resolved_path(file)
+            .map(|real| normpath(&real.to_string_lossy()))
+            .ok_or_else(|| ActionError::new(tr!("{0} no longer exists", path)))?;
+        if !real.eq_ignore_ascii_case(path) {
+            return Err(ActionError::new(tr!(
+                "{0} is now reached through a link ({1}); nothing was removed",
+                path,
+                real
+            )));
+        }
+        if in_dir(&real, &windows) || real.to_lowercase().starts_with(&own) {
+            return Err(ActionError::new(tr!(
+                "{0} belongs to Windows or to Vigil and is not deleted from here",
+                real
+            )));
+        }
     }
     let total: u64 = paths
         .iter()

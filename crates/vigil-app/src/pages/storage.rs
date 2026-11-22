@@ -385,7 +385,7 @@ impl StoragePage {
                 let usable = self.usable(target);
                 let mut tip = target.s("description").to_string();
                 if target.has("note") {
-                    tip = format!("{tip}\n{}", target.s("note"));
+                    tip = format!("{tip}\n{}", vigil_core::display::shown(target.s("note")));
                 }
                 if target.b("admin") && !self.ctx.elevated {
                     tip = format!("{tip}\n{}", t("storage.needsAdmin"));
@@ -496,6 +496,9 @@ impl StoragePage {
                     ui::accent_button("st-clean", t("storage.clean"))
                         .disabled(keys.is_empty() || self.measuring || self.acting.busy)
                         .on_click(cx.listener(move |this, _, window, cx| {
+                            if this.acting.busy {
+                                return;
+                            }
                             this.last = "clean";
                             common::send_json(this, json!({"kind": "cleanup", "keys": keys}), window, cx);
                         })),
@@ -511,6 +514,9 @@ impl StoragePage {
                     ui::button("st-component", t("storage.componentStoreClean"))
                         .disabled(disabled)
                         .on_click(cx.listener(|this, _, window, cx| {
+                            if this.acting.busy {
+                                return;
+                            }
                             this.last = "";
                             common::send_json(
                                 this,
@@ -525,6 +531,9 @@ impl StoragePage {
             .child(kit::muted(t("storage.diskCleanupNote"), tk))
             .child(div().flex().child(
                 ui::button("st-cleanmgr", t("storage.diskCleanupOpen")).on_click(cx.listener(|this, _, window, cx| {
+                    if this.acting.busy {
+                        return;
+                    }
                     this.last = "";
                     common::send_json(
                         this,
@@ -541,6 +550,9 @@ impl StoragePage {
                     .flex()
                     .child(ui::button("st-sense", t("storage.settingsOpen")).on_click(cx.listener(
                         |this, _, window, cx| {
+                            if this.acting.busy {
+                                return;
+                            }
                             this.last = "";
                             common::send_json(
                                 this,
@@ -685,7 +697,7 @@ impl StoragePage {
             let dir = child.b("isDir");
             let drill = dir && !child.a("children").is_empty();
             let weak = cx.entity().downgrade();
-            let tip = child.s("path").to_string();
+            let tip = vigil_core::display::shown(child.s("path"));
             table = table.child(
                 div()
                     .id(ElementId::NamedInteger("st-child".into(), i as u64))
@@ -711,7 +723,11 @@ impl StoragePage {
                             .overflow_hidden()
                             .text_ellipsis()
                             .whitespace_nowrap()
-                            .child(format!("{}{}", child.s("name"), if dir { "\\" } else { "" })),
+                            .child(vigil_core::display::shown_line(&format!(
+                                "{}{}",
+                                child.s("name"),
+                                if dir { "\\" } else { "" }
+                            ))),
                     )
                     .child(div().w(px(90.)).child(size(child.n("size"), 1)))
                     .child(div().w(px(64.)).child(pct(child.n("size") / total * 100.0, 1)))
@@ -759,9 +775,12 @@ impl StoragePage {
                 .child(div().flex_1())
                 .child(
                     ui::button("st-location", t("proc.location"))
-                        .disabled(one.is_none())
+                        .disabled(one.is_none() || self.acting.busy)
                         .on_click(cx.listener(move |this, _, window, cx| {
                             if let Some(path) = &one {
+                                if this.acting.busy {
+                                    return;
+                                }
                                 this.last = "";
                                 common::send_json(
                                     this,
@@ -777,6 +796,9 @@ impl StoragePage {
                         .danger(true)
                         .disabled(chosen.is_empty() || self.acting.busy)
                         .on_click(cx.listener(move |this, _, window, cx| {
+                            if this.acting.busy {
+                                return;
+                            }
                             this.last = "recycle";
                             common::send_json(this, json!({"kind": "recycle", "paths": chosen}), window, cx);
                         })),
@@ -790,9 +812,10 @@ impl StoragePage {
             .flex_col();
         for (i, f) in files.iter().enumerate() {
             let path = f.s("path").to_string();
+            // Names come from the disk: invisible and direction-changing characters are shown.
             let (folder, name) = path
                 .rsplit_once('\\')
-                .map(|(a, b)| (a.to_string(), b.to_string()))
+                .map(|(a, b)| (vigil_core::display::shown_line(a), vigil_core::display::shown_line(b)))
                 .unwrap_or_default();
             let weak = cx.entity().downgrade();
             let key = path.clone();
@@ -1081,7 +1104,7 @@ impl StoragePage {
                 .child(div().flex_1())
                 .child(
                     ui::button("dp-auto", t("dupes.chooseCopies"))
-                        .disabled(groups.is_empty())
+                        .disabled(groups.is_empty() || self.acting.busy)
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.choose_all_but_oldest();
                             cx.notify();
@@ -1089,7 +1112,7 @@ impl StoragePage {
                 )
                 .child(
                     ui::button("dp-clear", t("dupes.clearChoice"))
-                        .disabled(chosen.is_empty())
+                        .disabled(chosen.is_empty() || self.acting.busy)
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.dup_checked.clear();
                             cx.notify();
@@ -1097,9 +1120,12 @@ impl StoragePage {
                 )
                 .child(
                     ui::button("dp-location", t("proc.location"))
-                        .disabled(one.is_none())
+                        .disabled(one.is_none() || self.acting.busy)
                         .on_click(cx.listener(move |this, _, window, cx| {
                             if let Some(path) = &one {
+                                if this.acting.busy {
+                                    return;
+                                }
                                 this.last = "";
                                 common::send_json(
                                     this,
@@ -1115,6 +1141,9 @@ impl StoragePage {
                         .danger(true)
                         .disabled(chosen.is_empty() || self.acting.busy || self.ctx.core.is_none())
                         .on_click(cx.listener(move |this, _, window, cx| {
+                            if this.acting.busy {
+                                return;
+                            }
                             this.last = "duplicates";
                             common::send_json(this, json!({"kind": "duplicates", "paths": chosen}), window, cx);
                         })),
@@ -1325,12 +1354,12 @@ fn treemap(node: &Value, layout: &Layout, open: Open, tk: &Tokens) -> gpui_kit::
             Some(_) => tk.chart_cpu.opacity(0.78 - (index % 5) as f32 * 0.08),
         };
         let name = child
-            .map(|c| c.s("name").to_string())
+            .map(|c| vigil_core::display::shown_line(c.s("name")))
             .unwrap_or_else(|| t("treemap.other"));
         let tip = format!(
             "{}\n{}",
             child
-                .map(|c| c.s("path").to_string())
+                .map(|c| vigil_core::display::shown(c.s("path")))
                 .unwrap_or_else(|| t("treemap.other")),
             size(bytes, 1)
         );

@@ -1291,11 +1291,13 @@ fn undo_account_disable(u: Params<'_>, _store: &Store) -> Result<String> {
     Ok(tr!("enabled the account \"{0}\" again", name))
 }
 
+// A new point is told by a higher sequence number, not by the count: when the space is full,
+// Windows deletes the oldest point while it creates the new one.
 const RESTORE_POINT: &str = r#"
-$before = @(Get-ComputerRestorePoint -ErrorAction SilentlyContinue).Count
+$before = (@(Get-ComputerRestorePoint -ErrorAction SilentlyContinue) | Measure-Object -Property SequenceNumber -Maximum).Maximum
 Checkpoint-Computer -Description $env:PC_DESC -RestorePointType MODIFY_SETTINGS -WarningAction SilentlyContinue
-$after = @(Get-ComputerRestorePoint -ErrorAction SilentlyContinue).Count
-if ($after -gt $before) { 'created' } else { 'skipped' }
+$after = (@(Get-ComputerRestorePoint -ErrorAction SilentlyContinue) | Measure-Object -Property SequenceNumber -Maximum).Maximum
+if ($null -ne $after -and ($null -eq $before -or [uint32]$after -gt [uint32]$before)) { 'created' } else { 'skipped' }
 "#;
 
 /// Creates a system restore point (Windows allows one every 24 hours).

@@ -4,20 +4,23 @@
 //! is the slowest part of a scan. Most files are the same from one scan to the next, so each
 //! result is kept with the identity of the file it describes:
 //!
-//! - the full path (lower case), its size, its last-write time and its file ID (NTFS index and
-//!   volume serial), read before the file is verified. A file whose identity changed is verified
-//!   again; a file replaced by another one with the same name and size gets a new file ID;
+//! - the **SHA-256 of the file's content**, with its size, last-write time and file ID (NTFS index
+//!   and volume serial). Times can be set back by any program that can write the file, and an
+//!   overwrite in place keeps the file ID, so only the content hash says the bytes are the ones
+//!   that were verified. The identity is read before the file is verified and again after it, and
+//!   a result is kept only when both match (a file changed while it was checked is not kept);
+//! - files larger than [`MAX_HASH_BYTES`], links and other reparse points are never cached;
 //! - an entry is trusted for [`MAX_AGE_SECS`] at most, so certificate expiry and revocation are
 //!   checked again in time;
 //! - the whole cache is dropped when the Windows build (CurrentBuild.UBR) changes, since an update
 //!   can change how system files are catalog-signed;
 //! - results that say the file could not be read or verified are never kept.
 //!
-//! The file lives in the data folder of the copy that scans: `%ProgramData%\Vigil` for an elevated
-//! copy (only administrators can write there, so a standard-user process cannot plant a "valid"
-//! result for its own file) and `%LOCALAPPDATA%\Vigil` for a standard-user copy, whose scans run
-//! with that user's rights anyway. It is read with a size cap, never through a link, and replaced
-//! by writing a temporary file next to it and renaming it.
+//! Only an elevated copy uses the cache ([`SigCache::open`] returns `None` otherwise). Its file
+//! lives in `%ProgramData%\Vigil`, where only administrators can write, so a standard-user process
+//! can neither plant a "valid" result nor edit one. A standard copy's data folder can be written by
+//! any program the user runs, so it always verifies every file. The file is read with a size cap,
+//! never through a link, and replaced by writing a temporary file next to it and renaming it.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
@@ -30,13 +33,17 @@ use serde_json::Value;
 use crate::lenient::{Get, lower, str_of};
 
 /// Bump when the stored layout or the collector's fields change.
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 /// The most entries kept (the least recently used are dropped).
 pub(crate) const MAX_ENTRIES: usize = 20_000;
 /// How long a result is trusted, in seconds (7 days).
 pub(crate) const MAX_AGE_SECS: i64 = 7 * 24 * 3600;
 /// A cache file larger than this is ignored (it would be far beyond `MAX_ENTRIES`).
 const MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
+/// Larger files are verified at every scan (hashing them would cost about as much).
+pub(crate) const MAX_HASH_BYTES: u64 = 256 * 1024 * 1024;
+/// Files hashed at the same time.
+const HASH_WORKERS: usize = 4;
 
 /// What identifies one version of a file.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -46,6 +53,8 @@ pub(crate) struct Identity {
     pub(crate) written: u64,
     /// Volume serial and file index.
     pub(crate) file_id: String,
+    /// SHA-256 of the content (lower-case hex): what really says the file is the same.
+    pub(crate) sha256: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -78,9 +87,13 @@ pub(crate) struct SigCache {
 
 impl SigCache {
     /// Opens the cache at `path` (empty when missing, damaged, from another Windows build or
-    /// behind a link).
-    pub(crate) fn open(path: &Path) -> Self {
-        Self::open_at(path, windows_build(), now())
+    /// behind a link). `None` when this process is not elevated: its data folder can be written
+    /// by any program the user runs, so a cache there could be made to call a file valid.
+    pub(crate) fn open(path: &Path) -> Option<Self> {
+        if !elevated() {
+            return None;
+        }
+        Some(Self::open_at(path, windows_build(), now()))
     }
 
     fn open_at(path: &Path, build: String, now: i64) -> Self {
@@ -98,10 +111,31 @@ impl SigCache {
         }
     }
 
-    /// The cached result for `path` when the file is still the one that was verified, recently.
-    pub(crate) fn get(&mut self, path: &str) -> Option<Value> {
-        let identity = identity(path)?;
-        self.lookup(path, identity)
+    /// The cached results for `paths` (in the same order) when each file is still the one that
+    /// was verified, recently. The files are hashed a few at a time.
+    pub(crate) fn get_many(&mut self, paths: &[String]) -> Vec<Option<Value>> {
+        let identities = identities(paths);
+        paths
+            .iter()
+            .zip(identities)
+            .map(|(path, identity)| identity.and_then(|identity| self.lookup(path, identity)))
+            .collect()
+    }
+
+    /// Keeps fresh results: each file's identity is read again, and a result is kept only when
+    /// the file is still exactly the one read before it was verified.
+    pub(crate) fn put_many<'v>(&mut self, infos: impl Iterator<Item = &'v Value>) {
+        let infos: Vec<&Value> = infos.filter(|info| cacheable(info)).collect();
+        let paths: Vec<String> = infos
+            .iter()
+            .map(|info| info.get("path").map(str_of).unwrap_or_default())
+            .collect();
+        let after = identities(&paths);
+        for (info, identity) in infos.into_iter().zip(after) {
+            if let Some(identity) = identity {
+                self.put_checked(info, &identity);
+            }
+        }
     }
 
     fn lookup(&mut self, path: &str, identity: Identity) -> Option<Value> {
@@ -128,8 +162,9 @@ impl SigCache {
         hit
     }
 
-    /// Keeps a fresh result (only results that describe a readable, verified file).
-    pub(crate) fn put(&mut self, info: &Value) {
+    /// Keeps a fresh result (only results that describe a readable, verified file) when `after`,
+    /// the identity read once it was verified, is the one read before.
+    fn put_checked(&mut self, info: &Value, after: &Identity) {
         if !cacheable(info) {
             return;
         }
@@ -137,6 +172,9 @@ impl SigCache {
         let Some(identity) = self.pending.remove(&key) else {
             return;
         };
+        if &identity != after {
+            return;
+        }
         self.entries.insert(
             key,
             Entry {
@@ -266,49 +304,112 @@ fn write_replacing(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     result
 }
 
-/// The identity of the file at `path`, or `None` when it cannot be opened (missing, denied).
+/// True when this process runs elevated (the only kind that uses the cache).
+fn elevated() -> bool {
+    #[cfg(windows)]
+    {
+        vigil_sys::elevation::is_elevated()
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+/// The identities of `paths` (same order), read a few files at a time.
+fn identities(paths: &[String]) -> Vec<Option<Identity>> {
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let next = AtomicUsize::new(0);
+    let results: Mutex<Vec<Option<Identity>>> = Mutex::new(vec![None; paths.len()]);
+    std::thread::scope(|scope| {
+        for _ in 0..HASH_WORKERS.min(paths.len()) {
+            scope.spawn(|| {
+                loop {
+                    let index = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(path) = paths.get(index) else { break };
+                    let found = identity(path);
+                    if let Ok(mut all) = results.lock() {
+                        all[index] = found;
+                    }
+                }
+            });
+        }
+    });
+    results.into_inner().unwrap_or_default()
+}
+
+/// The identity of the file at `path`: `None` when it cannot be opened (missing, denied), is a
+/// folder, a link or another reparse point, is larger than [`MAX_HASH_BYTES`], or changed while it
+/// was read.
 #[cfg(windows)]
 pub(crate) fn identity(path: &str) -> Option<Identity> {
-    use windows::Win32::Foundation::CloseHandle;
-    use windows::Win32::Storage::FileSystem::{
-        BY_HANDLE_FILE_INFORMATION, CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE,
-        FILE_SHARE_READ, FILE_SHARE_WRITE, GetFileInformationByHandle, OPEN_EXISTING,
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::AsRawHandle;
+
+    use sha2::{Digest, Sha256};
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::Storage::FileSystem::{BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle};
+
+    /// FILE_FLAG_OPEN_REPARSE_POINT: a link is opened itself (and then refused), never followed.
+    const OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    const SEQUENTIAL_SCAN: u32 = 0x0800_0000;
+    const SHARE_ALL: u32 = 0x7;
+    const ATTRIBUTE_DIRECTORY: u32 = 0x10;
+    const ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    /// FILE_ATTRIBUTE_OFFLINE | RECALL_ON_OPEN | RECALL_ON_DATA_ACCESS: reading would download it.
+    const ATTRIBUTE_NOT_LOCAL: u32 = 0x1000 | 0x4_0000 | 0x40_0000;
+
+    let mut file = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(SHARE_ALL)
+        .custom_flags(OPEN_REPARSE_POINT | SEQUENTIAL_SCAN)
+        .open(path)
+        .ok()?;
+    let info = |file: &fs::File| -> Option<BY_HANDLE_FILE_INFORMATION> {
+        let mut info = BY_HANDLE_FILE_INFORMATION::default();
+        // SAFETY: the handle is open for the duration of the call; `info` is writable.
+        unsafe { GetFileInformationByHandle(HANDLE(file.as_raw_handle()), &mut info) }.ok()?;
+        Some(info)
     };
-    use windows::core::PCWSTR;
-    let wide: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
-    // SAFETY: `wide` is a NUL-terminated path; only attributes are requested; the handle is closed
-    // below.
-    let handle = unsafe {
-        CreateFileW(
-            PCWSTR(wide.as_ptr()),
-            FILE_READ_ATTRIBUTES.0,
-            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-            None,
-            OPEN_EXISTING,
-            FILE_FLAG_BACKUP_SEMANTICS,
-            None,
-        )
+    let before = info(&file)?;
+    if before.dwFileAttributes & (ATTRIBUTE_DIRECTORY | ATTRIBUTE_REPARSE_POINT | ATTRIBUTE_NOT_LOCAL) != 0 {
+        return None;
     }
-    .ok()?;
-    let mut info = BY_HANDLE_FILE_INFORMATION::default();
-    // SAFETY: valid handle and output structure.
-    let read = unsafe { GetFileInformationByHandle(handle, &mut info) };
-    // SAFETY: the handle came from CreateFileW above and is closed once.
-    unsafe {
-        let _ = CloseHandle(handle);
+    let size = (u64::from(before.nFileSizeHigh) << 32) | u64::from(before.nFileSizeLow);
+    if size > MAX_HASH_BYTES {
+        return None;
     }
-    read.ok()?;
-    const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x10;
-    if info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY != 0 {
+    let mut digest = Sha256::new();
+    let mut buffer = vec![0u8; 1 << 20];
+    let mut read_total = 0u64;
+    loop {
+        let read = file.read(&mut buffer).ok()?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+        read_total += read as u64;
+        if read_total > size {
+            return None;
+        }
+    }
+    let after = info(&file)?;
+    let written = |i: &BY_HANDLE_FILE_INFORMATION| {
+        (u64::from(i.ftLastWriteTime.dwHighDateTime) << 32) | u64::from(i.ftLastWriteTime.dwLowDateTime)
+    };
+    let after_size = (u64::from(after.nFileSizeHigh) << 32) | u64::from(after.nFileSizeLow);
+    if read_total != size || after_size != size || written(&after) != written(&before) {
         return None;
     }
     Some(Identity {
-        size: (u64::from(info.nFileSizeHigh) << 32) | u64::from(info.nFileSizeLow),
-        written: (u64::from(info.ftLastWriteTime.dwHighDateTime) << 32) | u64::from(info.ftLastWriteTime.dwLowDateTime),
+        size,
+        written: written(&before),
         file_id: format!(
             "{:08x}-{:08x}{:08x}",
-            info.dwVolumeSerialNumber, info.nFileIndexHigh, info.nFileIndexLow
+            before.dwVolumeSerialNumber, before.nFileIndexHigh, before.nFileIndexLow
         ),
+        sha256: digest.finalize().iter().map(|b| format!("{b:02x}")).collect(),
     })
 }
 
@@ -334,6 +435,17 @@ mod tests {
             size,
             written: 133_000_000_000_000_000,
             file_id: "0000abcd-0000000000001234".into(),
+            sha256: "ab".repeat(32),
+        }
+    }
+
+    /// `put_checked` with the identity read before (as `put_many` does when the file is unchanged).
+    fn put(cache: &mut SigCache, info: &Value) {
+        let key = lower(&info.get("path").map(str_of).unwrap_or_default());
+        if let Some(identity) = cache.pending.get(&key).cloned() {
+            cache.put_checked(info, &identity);
+        } else {
+            cache.put_checked(info, &id(0));
         }
     }
 
@@ -347,7 +459,7 @@ mod tests {
         let file = dir.join("cache.json");
         let mut cache = SigCache::open_at(&file, "26100.1".into(), 1_000);
         assert!(cache.lookup(r"C:\Tools\a.exe", id(10)).is_none());
-        cache.put(&info(r"C:\Tools\a.exe", "Valid"));
+        put(&mut cache, &info(r"C:\Tools\a.exe", "Valid"));
         cache.save();
 
         let mut cache = SigCache::open_at(&file, "26100.1".into(), 2_000);
@@ -359,6 +471,11 @@ mod tests {
         let mut moved = id(10);
         moved.file_id = "0000abcd-0000000000009999".into();
         assert!(cache.lookup(r"C:\Tools\a.exe", moved).is_none());
+        // Same size, time and file ID, other content (an overwrite in place with the time set
+        // back): verified again.
+        let mut overwritten = id(10);
+        overwritten.sha256 = "cd".repeat(32);
+        assert!(cache.lookup(r"C:\Tools\a.exe", overwritten).is_none());
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -368,7 +485,7 @@ mod tests {
         let file = dir.join("cache.json");
         let mut cache = SigCache::open_at(&file, "26100.1".into(), 1_000);
         cache.lookup(r"C:\a.exe", id(1));
-        cache.put(&info(r"C:\a.exe", "Valid"));
+        put(&mut cache, &info(r"C:\a.exe", "Valid"));
         cache.save();
         let mut later = SigCache::open_at(&file, "26100.1".into(), 1_000 + MAX_AGE_SECS + 1);
         assert!(later.lookup(r"C:\a.exe", id(1)).is_none(), "too old");
@@ -402,11 +519,11 @@ mod tests {
             ),
         ] {
             cache.lookup(path, id(1));
-            cache.put(&value);
+            put(&mut cache, &value);
         }
         assert_eq!(cache.len(), 0);
         // A result for a file this scan never looked up (no identity read first) is not kept.
-        cache.put(&info(r"C:\never.exe", "Valid"));
+        put(&mut cache, &info(r"C:\never.exe", "Valid"));
         assert_eq!(cache.len(), 0);
         let _ = fs::remove_dir_all(&dir);
     }
@@ -419,7 +536,7 @@ mod tests {
         for n in 0..(MAX_ENTRIES + 5) {
             let path = format!(r"C:\f\{n}.exe");
             cache.pending.insert(lower(&path), id(n as u64));
-            cache.put(&info(&path, "Valid"));
+            put(&mut cache, &info(&path, "Valid"));
             if let Some(entry) = cache.entries.get_mut(&lower(&path)) {
                 entry.used = n as i64;
             }
@@ -438,6 +555,48 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    #[test]
+    fn a_file_changed_while_it_was_verified_is_not_kept() {
+        let dir = temp_dir("changed");
+        let file = dir.join("cache.json");
+        let mut cache = SigCache::open_at(&file, "b".into(), 1_000);
+        assert!(cache.lookup(r"C:\a.exe", id(5)).is_none());
+        let mut after = id(5);
+        after.sha256 = "ef".repeat(32);
+        cache.put_checked(&info(r"C:\a.exe", "Valid"), &after);
+        assert_eq!(cache.len(), 0, "the content read after the check differs");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn an_overwrite_in_place_with_the_old_time_is_seen() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let dir = temp_dir("inplace");
+        let file = dir.join("tool.exe");
+        fs::write(&file, b"signed content 1").expect("write");
+        let path = file.display().to_string();
+        let first = identity(&path).expect("identity");
+        // Overwrite the same bytes count in place, then put the last-write time back, as a
+        // program that can write the file could.
+        let times = fs::metadata(&file).expect("meta").modified().expect("time");
+        {
+            let mut handle = fs::OpenOptions::new()
+                .write(true)
+                .share_mode(0x7)
+                .open(&file)
+                .expect("open");
+            handle.write_all(b"payload content!").expect("overwrite");
+            handle.set_modified(times).expect("set time");
+        }
+        let second = identity(&path).expect("identity");
+        assert_eq!(first.size, second.size);
+        assert_eq!(first.file_id, second.file_id, "an overwrite in place keeps the file ID");
+        assert_eq!(first.written, second.written, "the time was put back");
+        assert_ne!(first, second, "the content hash tells them apart");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[cfg(windows)]
     #[test]
     fn identity_follows_the_file() {
@@ -453,5 +612,32 @@ mod tests {
         assert!(identity(&dir.display().to_string()).is_none(), "a folder");
         assert!(identity(&dir.join("missing").display().to_string()).is_none());
         let _ = fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod cost {
+    /// Times hashing the files of a list (one path per line, from `VIGIL_HASH_LIST`); counts and
+    /// times only: `cargo test --release -p vigil-scan sigcache::cost -- --ignored --nocapture`
+    #[test]
+    #[ignore = "reads every file of a list given by hand"]
+    fn hashing_cost() {
+        let Ok(list) = std::env::var("VIGIL_HASH_LIST") else {
+            return;
+        };
+        let text = std::fs::read_to_string(list).unwrap_or_default();
+        let paths: Vec<String> = text.lines().map(str::to_string).filter(|l| !l.is_empty()).collect();
+        for round in ["first", "second"] {
+            let started = std::time::Instant::now();
+            let found = super::identities(&paths);
+            let hashed = found.iter().flatten().count();
+            let bytes: u64 = found.iter().flatten().map(|i| i.size).sum();
+            println!(
+                "{round}: {} files, {hashed} hashed, {:.1} MB, {:.2} s",
+                paths.len(),
+                bytes as f64 / 1048576.0,
+                started.elapsed().as_secs_f64()
+            );
+        }
     }
 }

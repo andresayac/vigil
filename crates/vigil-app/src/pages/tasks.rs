@@ -567,7 +567,11 @@ impl TasksPage {
             }),
         );
         if task.has("author") {
-            pane = fact(pane, t("tasks.colAuthor"), div().child(task.s("author").to_string()));
+            pane = fact(
+                pane,
+                t("tasks.colAuthor"),
+                div().child(kit::plain(task.s("author").to_string())),
+            );
         }
         if task.has("created") {
             pane = fact(pane, t("tasks.created"), div().child(date_time_of(task.s("created"))));

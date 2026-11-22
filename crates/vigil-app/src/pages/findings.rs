@@ -780,7 +780,7 @@ impl FindingsPage {
                                 .text_color(tk.ink3)
                                 .child(format!("+{}", kit::text(f.at("weight")))),
                         )
-                        .child(div().flex_1().child(f.s("text").to_string()))
+                        .child(div().flex_1().child(kit::plain(f.s("text").to_string())))
                 }));
         }
         let roles = item.a("roles");

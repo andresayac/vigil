@@ -84,6 +84,10 @@ pub const PORT_GRACE: u32 = 5;
 /// listing now and then, a driver or task briefly unreadable). After it, the item is forgotten
 /// and a return is reported as new.
 pub const ABSENT_GRACE_MS: i64 = 7 * 24 * 60 * 60 * 1000;
+/// An item missing for at least this long that comes back is reported ("came back"): only a quick
+/// flap stays quiet. Services are left out (some hide from the list now and then; see
+/// [`came_back`]).
+pub const COMEBACK_MS: i64 = 5 * 60 * 1000;
 /// BITS jobs are read at most this often, and only while the BITS service already runs.
 pub const BITS_EVERY_MS: i64 = 5 * 60 * 1000;
 /// The fingerprint's format. 2: Run keys set by policy are read (entries found there by the first
@@ -312,6 +316,10 @@ pub struct Fingerprint {
     pub bits: Option<BTreeMap<String, BitsPrint>>,
     /// When the BITS jobs were last read (ms), so they are read at most every [`BITS_EVERY_MS`].
     pub bits_read: i64,
+    /// `bits` holds every account's jobs (read by an elevated copy). A later read of one account's
+    /// jobs only does not count as having read the others (see [`merged_at`]).
+    #[serde(default)]
+    pub bits_all_users: bool,
 }
 
 /// A BITS job with a notify command line: the program BITS runs when the job finishes or fails.
@@ -393,6 +401,183 @@ fn last_part(path: &str) -> &str {
 
 /// The alerts for what changed between two fingerprints (sections missing on either side are skipped).
 pub fn diff(old: &Fingerprint, new: &Fingerprint) -> Vec<Alert> {
+    let mut out = diff_items(old, new);
+    out.extend(came_back(old, new, now_ms()));
+    out
+}
+
+/// Items that were missing for at least [`COMEBACK_MS`] and are there again (they stayed in the
+/// baseline for the grace period, so [`diff_items`] does not call them new). Persistence that is
+/// removed, then put back by what installed it, is news. Services are not reported: some hide from
+/// the service list now and then and would come back at every check.
+pub fn came_back(old: &Fingerprint, new: &Fingerprint, now: i64) -> Vec<Alert> {
+    let mut out = Vec::new();
+    for (id, since) in &old.absent {
+        // 0: Vigil removed it (see [`forget`]); it is there again.
+        let removed_by_vigil = *since == REMOVED_BY_VIGIL;
+        if !removed_by_vigil && now - since < COMEBACK_MS {
+            continue;
+        }
+        let Some((section, key)) = id.split_once('|') else {
+            continue;
+        };
+        // Services are left out even after Vigil deleted one: a deleted service can stay in the
+        // list until the next restart. It leaves the baseline once gone, so a new one is reported.
+        let found = match section {
+            "startup" => new
+                .startup
+                .as_ref()
+                .and_then(|m| m.get(key))
+                .map(|e| ("startup", "startup", e.name.clone(), e.command.clone())),
+            "task" => new
+                .tasks
+                .as_ref()
+                .and_then(|m| m.get(key))
+                .map(|path| ("task", "tasks", path.clone(), path.clone())),
+            "driver" => new
+                .drivers
+                .as_ref()
+                .and_then(|m| m.get(key))
+                .map(|d| ("driver", "alerts", key.to_string(), d.path.clone())),
+            "bits" => new.bits.as_ref().and_then(|m| m.get(key)).map(|job| {
+                let name = if job.name.is_empty() {
+                    key.to_string()
+                } else {
+                    job.name.clone()
+                };
+                ("bits", "alerts", name, job.program.clone())
+            }),
+            hook if hook.starts_with("hook:") => new
+                .hooks
+                .get(&hook["hook:".len()..])
+                .and_then(|values| values.get(key))
+                .map(|value| ("hook", "alerts", key.to_string(), value.clone())),
+            _ => None,
+        };
+        if let Some((kind, target, name, detail)) = found {
+            out.push(if removed_by_vigil {
+                alert(
+                    kind,
+                    "warning",
+                    target,
+                    tr!("Back after Vigil removed it: {0}", name),
+                    detail,
+                )
+            } else {
+                alert(kind, "info", target, tr!("Came back: {0}", name), detail)
+            });
+        }
+    }
+    out
+}
+
+/// The `absent` time of an item Vigil itself removed: older than any grace period, so a removed
+/// item leaves the baseline at the next check, and one that is there again is reported.
+pub const REMOVED_BY_VIGIL: i64 = 0;
+
+/// Ops that make an item disappear. After one succeeds, the items it names leave the baseline at
+/// once ([`forget`]): if what installed them puts them back, that is reported, never hidden by the
+/// grace period.
+pub const REMOVING_OPS: [&str; 5] = [
+    "registry.delete",
+    "service.delete",
+    "task.delete",
+    "wmi.remove",
+    "program.remove_entry",
+];
+
+/// The names (lower case) a successful removing action recorded: its target and every text of its
+/// parameters (key, value name, service, task path…).
+pub fn removed_names(records: &[vigil_actions::Record]) -> Vec<String> {
+    fn texts(value: &serde_json::Value, out: &mut Vec<String>) {
+        match value {
+            serde_json::Value::String(text) => {
+                let text = text.trim().to_lowercase();
+                if text.chars().count() >= 3 {
+                    out.push(text);
+                }
+            }
+            serde_json::Value::Array(list) => list.iter().for_each(|v| texts(v, out)),
+            serde_json::Value::Object(map) => map.values().for_each(|v| texts(v, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for record in records.iter().filter(|r| r.ok() && REMOVING_OPS.contains(&r.op())) {
+        record.0.get("target").into_iter().for_each(|v| texts(v, &mut out));
+        record.0.get("params").into_iter().for_each(|v| texts(v, &mut out));
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// Marks the baseline items `names` designate as removed by Vigil (see [`REMOVED_BY_VIGIL`]):
+/// startup entries by name or id, services, drivers and BITS jobs by name, tasks by path or name,
+/// registry hook values by value name. Returns how many were marked.
+pub fn forget(baseline: &mut Fingerprint, names: &[String]) -> usize {
+    let named = |candidates: &[&str]| {
+        candidates
+            .iter()
+            .any(|c| !c.is_empty() && names.iter().any(|n| n.eq_ignore_ascii_case(c)))
+    };
+    let mut marked: Vec<String> = Vec::new();
+    for (id, entry) in baseline.startup.iter().flatten() {
+        if named(&[id, &entry.name]) {
+            marked.push(format!("startup|{id}"));
+        }
+    }
+    for (name, service) in baseline.services.iter().flatten() {
+        if named(&[name, &service.display]) {
+            marked.push(format!("service|{name}"));
+        }
+    }
+    for (key, path) in baseline.tasks.iter().flatten() {
+        if named(&[key, path, last_part(path)]) {
+            marked.push(format!("task|{key}"));
+        }
+    }
+    for (key, task) in baseline.task_files.iter().flatten() {
+        if named(&[key, &task.path, last_part(&task.path)]) {
+            marked.push(format!("taskfile|{key}"));
+        }
+    }
+    for name in baseline.drivers.iter().flatten().map(|(name, _)| name) {
+        if named(&[name]) {
+            marked.push(format!("driver|{name}"));
+        }
+    }
+    for (id, job) in baseline.bits.iter().flatten() {
+        if named(&[id, &job.name]) {
+            marked.push(format!("bits|{id}"));
+        }
+    }
+    for (source, values) in &baseline.hooks {
+        for name in values.keys() {
+            if named(&[name]) {
+                marked.push(format!("hook:{source}|{name}"));
+            }
+        }
+    }
+    for id in &marked {
+        baseline.absent.insert(id.clone(), REMOVED_BY_VIGIL);
+    }
+    marked.len()
+}
+
+/// [`forget`] in the saved state of this account (the watch reads it at its next check).
+pub fn forget_removed(records: &[vigil_actions::Record]) {
+    let names = removed_names(records);
+    if names.is_empty() {
+        return;
+    }
+    if let Some(store) = Store::in_profile() {
+        let _ = store.update(|file| forget(&mut file.baseline, &names));
+    }
+}
+
+/// [`diff`] without the items that came back.
+fn diff_items(old: &Fingerprint, new: &Fingerprint) -> Vec<Alert> {
     let mut out = Vec::new();
     let migrating = old.version < 2;
     if let (Some(old), Some(new)) = (&old.startup, &new.startup) {
@@ -771,7 +956,23 @@ pub fn merged_at(old: &Fingerprint, new: Fingerprint, now: i64) -> Fingerprint {
         &mut absent,
         now,
     );
-    let bits = kept_or("bits", old.bits.as_ref(), new.bits, &old.absent, &mut absent, now);
+    // A read of one account's jobs after a read of every account's: the other accounts' jobs were
+    // not read, so they stay as they were (and are neither dropped nor reported later as new).
+    let narrower = new.bits.is_some() && !new.bits_all_users && old.bits_all_users;
+    let bits_all_users = if new.bits.is_some() {
+        new.bits_all_users || old.bits_all_users
+    } else {
+        old.bits_all_users
+    };
+    let bits = if narrower {
+        let mut jobs = new.bits.unwrap_or_default();
+        for (id, job) in old.bits.iter().flatten() {
+            jobs.entry(id.clone()).or_insert_with(|| job.clone());
+        }
+        Some(jobs)
+    } else {
+        kept_or("bits", old.bits.as_ref(), new.bits, &old.absent, &mut absent, now)
+    };
     // A hook source read now replaces the old one (keeping values missing for less than the grace
     // period); one not read keeps it.
     let mut hooks = old.hooks.clone();
@@ -811,6 +1012,7 @@ pub fn merged_at(old: &Fingerprint, new: Fingerprint, now: i64) -> Fingerprint {
         absent,
         bits,
         bits_read: old.bits_read.max(new.bits_read),
+        bits_all_users,
     }
 }
 
@@ -843,7 +1045,7 @@ pub fn read_fingerprint(elevated: bool, previous: &Fingerprint) -> Fingerprint {
         (None, None)
     };
     let (events, event_hits, logs_hidden) = read_events(&WindowsLogs, &previous.events, now_ms());
-    let (bits, bits_read) = read_bits(elevated, previous.bits_read, now_ms());
+    let (bits, bits_read, bits_all_users) = read_bits(elevated, previous.bits_read, now_ms());
     Fingerprint {
         startup: startup_print(),
         services: vigil_sys::services::list_light().ok().map(|list| service_print(&list)),
@@ -864,18 +1066,19 @@ pub fn read_fingerprint(elevated: bool, previous: &Fingerprint) -> Fingerprint {
         absent: BTreeMap::new(),
         bits,
         bits_read,
+        bits_all_users,
     }
 }
 
 /// The BITS jobs that run a program, every [`BITS_EVERY_MS`] and only while the BITS service
 /// already runs (creating the BITS object would start it). `None` when not read this time.
-fn read_bits(elevated: bool, last: i64, now: i64) -> (Option<BTreeMap<String, BitsPrint>>, i64) {
+fn read_bits(elevated: bool, last: i64, now: i64) -> (Option<BTreeMap<String, BitsPrint>>, i64, bool) {
     if (0..BITS_EVERY_MS).contains(&(now - last)) || vigil_sys::bits::service_running() != Some(true) {
-        return (None, last);
+        return (None, last, false);
     }
     match vigil_sys::bits::list(elevated) {
-        Ok(found) => (Some(bits_print(&found.jobs)), now),
-        Err(_) => (None, last),
+        Ok(found) => (Some(bits_print(&found.jobs)), now, found.all_users),
+        Err(_) => (None, last, false),
     }
 }
 
@@ -3403,6 +3606,133 @@ mod tests {
         unread.tasks = None;
         let later = merged_at(&next, unread, start + HOUR);
         assert_eq!(later.absent.get(r"task|\sync"), Some(&start));
+    }
+
+    #[test]
+    fn persistence_that_comes_back_is_reported_but_a_quick_flap_is_not() {
+        vigil_i18n::with_language("en", || {
+            let now = 1_700_000_000_000;
+            let base = baseline();
+            let mut missing = base.clone();
+            missing.startup.as_mut().expect("startup").remove("reg:a");
+            let kept = merged_at(&base, missing, now);
+            assert_eq!(kept.absent.get("startup|reg:a"), Some(&now));
+            // Back after a minute: a flap, quiet.
+            assert!(came_back(&kept, &base, now + 60_000).is_empty());
+            // Back after an hour: reported, as information.
+            let back = came_back(&kept, &base, now + HOUR);
+            assert_eq!(
+                kinds(&back),
+                [("startup".to_string(), "Came back: Updater".to_string())]
+            );
+            assert_eq!(back[0].severity, "info");
+            // A service that hides now and then stays quiet, however long it was missing.
+            let mut hidden = kept.clone();
+            hidden.absent.insert("service|updatersvc".into(), now);
+            assert!(
+                came_back(&hidden, &base, now + 3 * HOUR)
+                    .iter()
+                    .all(|a| a.kind != "service")
+            );
+        });
+    }
+
+    #[test]
+    fn what_vigil_removed_leaves_the_baseline_and_its_return_is_news() {
+        vigil_i18n::with_language("en", || {
+            let now = 1_700_000_000_000;
+            let mut base = baseline();
+            base.tasks = Some(BTreeMap::from([(r"\contoso\sync".into(), r"\Contoso\Sync".into())]));
+            // Vigil deleted the Run value "Updater" and the task \Contoso\Sync.
+            let names = vec!["updater".to_string(), r"\contoso\sync".to_string()];
+            assert_eq!(forget(&mut base, &names), 2);
+            assert_eq!(base.absent.get("startup|reg:a"), Some(&REMOVED_BY_VIGIL));
+            assert_eq!(base.absent.get(r"task|\contoso\sync"), Some(&REMOVED_BY_VIGIL));
+
+            // Put back before the next check: reported at once (no grace).
+            let mut readded = base.clone();
+            readded.absent.clear();
+            let back = came_back(&base, &readded, now);
+            assert_eq!(back.len(), 2, "{:?}", kinds(&back));
+            assert!(back.iter().all(|a| a.severity == "warning"));
+            assert!(back.iter().any(|a| a.title == "Back after Vigil removed it: Updater"));
+
+            // Really gone at the next check: dropped from the baseline at once...
+            let mut gone = base.clone();
+            gone.absent.clear();
+            gone.startup.as_mut().expect("startup").remove("reg:a");
+            gone.tasks = Some(BTreeMap::new());
+            let next = merged_at(&base, gone, now);
+            assert!(next.startup.as_ref().is_some_and(|s| !s.contains_key("reg:a")));
+            assert!(next.tasks.as_ref().is_some_and(BTreeMap::is_empty));
+            assert!(next.absent.is_empty());
+            // ...so putting it back a day later is a new entry, not hidden by the grace period.
+            let alerts = diff(&next, &baseline());
+            assert!(
+                alerts.iter().any(|a| a.title == "New startup entry: Updater"),
+                "{:?}",
+                kinds(&alerts)
+            );
+        });
+    }
+
+    #[test]
+    fn removed_names_come_only_from_successful_removals() {
+        let record = |op: &str, ok: bool, params: serde_json::Value| {
+            let mut map = serde_json::Map::new();
+            map.insert("op".into(), serde_json::json!(op));
+            map.insert("ok".into(), serde_json::json!(ok));
+            map.insert("target".into(), serde_json::json!("Updater"));
+            map.insert("params".into(), params);
+            vigil_actions::Record(map)
+        };
+        let records = vec![
+            record(
+                "registry.delete",
+                true,
+                serde_json::json!({"key": r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run", "name": "Updater"}),
+            ),
+            record("task.delete", false, serde_json::json!({"path": r"\Other"})),
+            record("startup.disable", true, serde_json::json!({"name": "Helper"})),
+        ];
+        let names = removed_names(&records);
+        assert!(names.contains(&"updater".to_string()));
+        assert!(!names.iter().any(|n| n == r"\other"), "a failed removal names nothing");
+        assert!(!names.iter().any(|n| n == "helper"), "turning off is not removing");
+    }
+
+    #[test]
+    fn a_narrower_bits_read_does_not_drop_other_accounts_jobs() {
+        let job = |name: &str| BitsPrint {
+            name: name.into(),
+            program: r"C:\Program Files\Contoso\notify.exe".into(),
+            parameters: String::new(),
+            owner: String::new(),
+        };
+        let mut old = baseline();
+        old.bits = Some(BTreeMap::from([
+            ("{A}".to_string(), job("other account")),
+            ("{B}".to_string(), job("mine")),
+        ]));
+        old.bits_all_users = true;
+        // The tray copy (standard rights) reads only its own jobs.
+        let mut narrow = baseline();
+        narrow.bits = Some(BTreeMap::from([("{B}".to_string(), job("mine"))]));
+        narrow.bits_all_users = false;
+        assert!(diff(&old, &narrow).is_empty());
+        let start = 1_700_000_000_000;
+        let mut next = merged_at(&old, narrow.clone(), start);
+        next = merged_at(&next, narrow, start + ABSENT_GRACE_MS + 1);
+        assert!(
+            next.bits.as_ref().is_some_and(|b| b.contains_key("{A}")),
+            "not read is not gone"
+        );
+        assert!(next.bits_all_users);
+        // The elevated copy reads every account again: nothing is new.
+        let mut all = baseline();
+        all.bits = old.bits.clone();
+        all.bits_all_users = true;
+        assert!(diff(&next, &all).iter().all(|a| a.kind != "bits"));
     }
 
     #[test]

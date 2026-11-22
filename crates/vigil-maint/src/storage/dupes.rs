@@ -7,8 +7,11 @@
 //! Like the other walks, this never enters a link, and every file is opened without following
 //! one. Files whose data is not on this disk (online-only cloud files) are never opened: reading
 //! them would download them. Files kept by a cloud provider or by deduplication (other reparse
-//! points) are left out as well. Windows' own folders, the program folders and ProgramData are
-//! never searched.
+//! points) are left out as well. Windows' own folders, the program folders, ProgramData and other
+//! accounts' profile folders are never searched. Every check is made on the folder's real path
+//! (links and short names such as `PROGRA~1` resolved through a handle), so another spelling of a
+//! protected folder is refused too. Hard links of one file are one file: they are never shown as
+//! copies of each other.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
@@ -27,6 +30,11 @@ use super::{Cancel, format_size, group_thousands};
 use crate::error::{MaintError, MaintErrorKind};
 use crate::walk::listings;
 use crate::win::{ATTR_NOT_LOCAL, ATTR_REPARSE_POINT, Entry};
+
+/// FILE_READ_ATTRIBUTES.
+const READ_ATTRIBUTES: u32 = 0x80;
+/// FILE_FLAG_BACKUP_SEMANTICS: needed to open a folder.
+const BACKUP_SEMANTICS: u32 = 0x0200_0000;
 
 /// Files smaller than this are not compared by default (they rarely free much space).
 pub const DEFAULT_MIN_SIZE: u64 = 1 << 20;
@@ -113,6 +121,9 @@ pub struct DupScan {
     pub links_skipped: u64,
     /// Files whose data is in the cloud or kept by a provider: never opened.
     pub cloud_skipped: u64,
+    /// Extra names (hard links) of a file already counted: the same file, not a copy.
+    #[serde(default)]
+    pub hard_links: u64,
     pub min_size: u64,
     pub seconds: f64,
     pub cancelled: bool,
@@ -159,13 +170,62 @@ pub fn system_folders() -> Vec<PathBuf> {
     out
 }
 
-/// True when `path` is one of [`system_folders`] or inside one.
+/// True when `low` (lower case, no trailing `\\`) is `folder` or inside it.
+fn under(low: &str, folder: &str) -> bool {
+    !folder.is_empty() && (low == folder || low.starts_with(&format!("{folder}\\")))
+}
+
+/// [`system_folders`] as written and as their real paths, lower case.
+fn system_folder_keys() -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for folder in system_folders() {
+        out.push(lower(&folder));
+        if let Some(real) = resolved_path(&folder) {
+            out.push(lower(&real));
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// True when `path` is one of [`system_folders`] or inside one (compared with both their written
+/// and real paths: pass a real path, see [`resolved_path`], to catch other spellings).
 pub fn in_system_folder(path: &Path) -> bool {
     let low = lower(path);
-    system_folders().iter().any(|folder| {
-        let folder = lower(folder);
-        low == folder || low.starts_with(&format!("{folder}\\"))
-    })
+    system_folder_keys().iter().any(|folder| under(&low, folder))
+}
+
+/// The real path of a file or folder: links in its folders resolved, short names (`PROGRA~1`)
+/// expanded, the case on disk. The last part is opened without following a link. `None` when it
+/// cannot be opened, or when it is on a network share.
+pub fn resolved_path(path: &Path) -> Option<PathBuf> {
+    let handle = crate::win::open(path, READ_ATTRIBUTES, BACKUP_SEMANTICS | OPEN_REPARSE_POINT).ok()?;
+    let real = crate::win::final_path_exact(handle.0)?;
+    (!real.starts_with(r"\\")).then(|| PathBuf::from(real))
+}
+
+/// The folder that holds every account's profile (`C:\Users`) and this account's profile, both as
+/// real paths in lower case; empty strings when they cannot be told.
+fn profile_folders() -> (String, String) {
+    let real = |path: PathBuf| resolved_path(&path).map(|p| lower(&p)).unwrap_or_else(|| lower(&path));
+    let own = std::env::var_os("USERPROFILE")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute());
+    let all = std::env::var_os("PUBLIC")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .and_then(|p| p.parent().map(Path::to_path_buf))
+        .or_else(|| own.as_ref().and_then(|p| p.parent().map(Path::to_path_buf)));
+    (all.map(real).unwrap_or_default(), own.map(real).unwrap_or_default())
+}
+
+/// True when `real` (a real path) is inside another account's profile folder (or the shared
+/// Public and Default ones): a search started by an administrator never touches those.
+pub fn in_other_profile(real: &Path) -> bool {
+    let (all, own) = profile_folders();
+    let low = lower(real);
+    !all.is_empty() && low != all && under(&low, &all) && !under(&low, &own)
 }
 
 /// Folders at a drive's root that hold Windows' own data.
@@ -193,17 +253,45 @@ fn open_plain(path: &Path) -> Option<(File, u64)> {
     Some((file, meta.len()))
 }
 
+/// The volume serial and file index of an open file: the same for every hard link of it.
+fn file_id(file: &File) -> Option<(u32, u64)> {
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::Storage::FileSystem::{BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle};
+    let mut info = BY_HANDLE_FILE_INFORMATION::default();
+    // SAFETY: the handle is open for the duration of the call; `info` is writable.
+    unsafe { GetFileInformationByHandle(HANDLE(file.as_raw_handle()), &mut info) }.ok()?;
+    Some((
+        info.dwVolumeSerialNumber,
+        (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow),
+    ))
+}
+
+/// A file read again right before it is touched (see [`check_file`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckedFile {
+    pub size: u64,
+    /// Lower-case hex.
+    pub sha256: String,
+    /// Volume serial and file index: the same for every hard link of the file.
+    pub file_id: (u32, u64),
+    /// The path Windows resolves the open file to (links in its folders resolved, short names
+    /// expanded).
+    pub real_path: String,
+}
+
 fn hex(digest: &[u8]) -> String {
     digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// SHA-256 of the first and last 64 KB (the whole file when it is smaller), with the size mixed
-/// in. `None` when the file changed size or cannot be read.
-fn quick_hash(path: &Path, size: u64) -> Option<[u8; 32]> {
+/// in, and the file's ID. `None` when the file changed size or cannot be read.
+fn quick_hash(path: &Path, size: u64) -> Option<([u8; 32], (u32, u64))> {
     let (mut file, length) = open_plain(path)?;
     if length != size {
         return None;
     }
+    let id = file_id(&file)?;
     let mut hasher = Sha256::new();
     hasher.update(size.to_le_bytes());
     let head = size.min(QUICK_BYTES) as usize;
@@ -217,7 +305,7 @@ fn quick_hash(path: &Path, size: u64) -> Option<[u8; 32]> {
         file.read_exact(&mut buffer).ok()?;
         hasher.update(&buffer);
     }
-    Some(hasher.finalize().into())
+    Some((hasher.finalize().into(), id))
 }
 
 /// SHA-256 of the whole file, read in 1 MB chunks. `None` when it changed size, could not be
@@ -248,6 +336,14 @@ fn full_hash(path: &Path, size: u64, stop: &(dyn Fn() -> bool + Sync), read: &At
 /// The SHA-256 (lower-case hex) and size of one file, opened without following a link. Refused
 /// for links, reparse points and files whose data is not on this disk.
 pub fn file_sha256(path: &Path) -> Result<(u64, String), MaintError> {
+    check_file(path).map(|file| (file.size, file.sha256))
+}
+
+/// One file read again before it is touched, through one handle opened without following a link
+/// at its last part: its size, SHA-256, file ID and the real path Windows resolves it to (compare
+/// it with the path you expect: a folder swapped for a link changes it). Refused for links,
+/// reparse points, folders and files whose data is not on this disk.
+pub fn check_file(path: &Path) -> Result<CheckedFile, MaintError> {
     let text = path.to_string_lossy().into_owned();
     let entry = crate::win::lstat(path)
         .map_err(|_| MaintError::new(MaintErrorKind::NotFound, tr!("{0} no longer exists", text)))?;
@@ -257,11 +353,33 @@ pub fn file_sha256(path: &Path) -> Result<(u64, String), MaintError> {
             tr!("{0} is a link or a cloud file and is not touched", text),
         ));
     }
-    let size = entry.size;
-    let read = AtomicU64::new(0);
-    full_hash(path, size, &|| false, &read)
-        .map(|hash| (size, hash))
-        .ok_or_else(|| MaintError::new(MaintErrorKind::Windows, tr!("{0} could not be read", text)))
+    let unreadable = || MaintError::new(MaintErrorKind::Windows, tr!("{0} could not be read", text));
+    let (mut file, size) = open_plain(path).ok_or_else(unreadable)?;
+    let id = file_id(&file).ok_or_else(unreadable)?;
+    let real_path = {
+        use std::os::windows::io::AsRawHandle;
+        crate::win::final_path_exact(windows::Win32::Foundation::HANDLE(file.as_raw_handle())).ok_or_else(unreadable)?
+    };
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0u8; CHUNK];
+    let mut total = 0u64;
+    loop {
+        let count = file.read(&mut buffer).map_err(|_| unreadable())?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&buffer[..count]);
+        total += count as u64;
+    }
+    if total != size {
+        return Err(unreadable());
+    }
+    Ok(CheckedFile {
+        size,
+        sha256: hex(&hasher.finalize()),
+        file_id: id,
+        real_path,
+    })
 }
 
 /// Runs `work` on every item with a few threads; results keep the items' order.
@@ -302,6 +420,25 @@ pub fn find_duplicates(
             tr!("Choose a folder on this computer: {0}", text),
         ));
     }
+    // Checked as written, then walked and checked again as its real path: a short name or a link
+    // to a protected folder is that folder.
+    if in_system_folder(&root) {
+        return Err(MaintError::new(
+            MaintErrorKind::Unsupported,
+            tr!(
+                "{0} belongs to Windows or to installed programs and is not searched",
+                text
+            ),
+        ));
+    }
+    let root = resolved_path(&root)
+        .ok_or_else(|| MaintError::new(MaintErrorKind::NotFound, tr!("{0} does not exist", text)))?;
+    if in_other_profile(&root) {
+        return Err(MaintError::new(
+            MaintErrorKind::Unsupported,
+            tr!("{0} belongs to another account and is not searched", text),
+        ));
+    }
     if in_system_folder(&root) {
         return Err(MaintError::new(
             MaintErrorKind::Unsupported,
@@ -319,8 +456,14 @@ pub fn find_duplicates(
             tr!("{0} is not a folder", text),
         ));
     }
-    let system: Vec<String> = system_folders().iter().map(|p| lower(p)).collect();
-    let skip: Vec<String> = options.skip.iter().map(|p| lower(p)).collect();
+    let system = system_folder_keys();
+    let skip: Vec<String> = options
+        .skip
+        .iter()
+        .flat_map(|p| [Some(lower(p)), resolved_path(p).map(|r| lower(&r))])
+        .flatten()
+        .collect();
+    let (profiles, own_profile) = profile_folders();
 
     let mut scan = DupScan {
         root: text,
@@ -333,6 +476,7 @@ pub fn find_duplicates(
         errors: 0,
         links_skipped: 0,
         cloud_skipped: 0,
+        hard_links: 0,
         min_size: options.min_size,
         seconds: 0.0,
         cancelled: false,
@@ -346,7 +490,13 @@ pub fn find_duplicates(
             return false;
         }
         let low = lower(&entry.path);
-        !system.contains(&low) && !skip.contains(&low)
+        // Other accounts' profiles (and Public, Default) are never entered.
+        let other_profile = !profiles.is_empty()
+            && under(&low, &profiles)
+            && low != profiles
+            && !under(&low, &own_profile)
+            && !under(&own_profile, &low);
+        !system.contains(&low) && !skip.contains(&low) && !other_profile
     };
     listings(&root, &descend, &mut |listing| {
         if cancel.cancelled() {
@@ -436,9 +586,17 @@ pub fn find_duplicates(
         hash
     });
     let mut by_quick: HashMap<(u64, [u8; 32]), Vec<usize>> = HashMap::new();
+    // Hard links of one file share its ID: only the first name found counts.
+    let mut seen_ids: HashMap<(u32, u64), usize> = HashMap::new();
     for (&index, hash) in twins.iter().zip(quick) {
         match hash {
-            Some(hash) => by_quick.entry((candidates[index].size, hash)).or_default().push(index),
+            Some((hash, id)) => {
+                if seen_ids.insert(id, index).is_some() {
+                    scan.hard_links += 1;
+                    continue;
+                }
+                by_quick.entry((candidates[index].size, hash)).or_default().push(index);
+            }
             None => scan.errors += u64::from(!stopped()),
         }
     }
@@ -614,6 +772,63 @@ mod tests {
         assert_eq!(scan.cloud_skipped, 1);
         assert!(file_sha256(&copy).is_err(), "a file not on this disk is never hashed");
         assert!(file_sha256(&link).is_err(), "a link is never hashed");
+    }
+
+    #[test]
+    fn hard_links_are_one_file_not_copies() {
+        let tree = TempTree::new("vigil-dupes-");
+        let data = bytes(9, 200_000);
+        let one = write(&tree.base.join(r"a\one.bin"), &data);
+        let link = tree.base.join(r"b\same.bin");
+        fs::create_dir_all(link.parent().unwrap()).unwrap();
+        fs::hard_link(&one, &link).unwrap();
+        let scan = find_duplicates(&tree.base, &options(1), &quiet, &NeverCancel).unwrap();
+        assert!(
+            scan.groups.is_empty(),
+            "two names of one file free nothing: {:?}",
+            scan.groups
+        );
+        assert_eq!(scan.hard_links, 1);
+        assert_eq!(check_file(&one).unwrap().file_id, check_file(&link).unwrap().file_id);
+
+        // A real copy next to them: one group of two, the link not counted.
+        write(&tree.base.join(r"c\copy.bin"), &data);
+        let scan = find_duplicates(&tree.base, &options(1), &quiet, &NeverCancel).unwrap();
+        assert_eq!(scan.groups.len(), 1);
+        assert_eq!(scan.groups[0].files.len(), 2);
+        assert_eq!(scan.groups[0].wasted, 200_000);
+    }
+
+    #[test]
+    fn a_folder_reached_through_a_link_is_its_real_folder() {
+        let mut tree = TempTree::new("vigil-dupes-");
+        let real = tree.base.join("real");
+        let data = bytes(4, 10_000);
+        let file = write(&real.join("f.bin"), &data);
+        let link = tree.base.join("via");
+        tree.junction(&link, &real);
+        // The file through the junction resolves to its real path.
+        let through = check_file(&link.join("f.bin")).unwrap();
+        assert!(
+            through.real_path.eq_ignore_ascii_case(&file.to_string_lossy()),
+            "{} vs {}",
+            through.real_path,
+            file.display()
+        );
+        assert!(
+            resolved_path(&link)
+                .unwrap()
+                .to_string_lossy()
+                .eq_ignore_ascii_case(&real.to_string_lossy())
+                || resolved_path(&link).unwrap() == link,
+            "a junction opened without following it is the junction itself"
+        );
+        // A system folder reached by a short name is still refused.
+        for folder in system_folders() {
+            if let Some(real) = resolved_path(&folder) {
+                assert!(in_system_folder(&real));
+            }
+        }
     }
 
     #[test]

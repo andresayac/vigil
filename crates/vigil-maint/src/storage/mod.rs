@@ -16,7 +16,6 @@ mod space;
 mod tests;
 
 use std::collections::{BTreeMap, HashMap};
-use std::os::windows::ffi::OsStrExt;
 use std::path::{Component, Path, PathBuf, Prefix};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -26,14 +25,12 @@ use windows::Win32::Storage::FileSystem::{
     FILE_BASIC_INFO, FILE_INFO_BY_HANDLE_CLASS, GetDiskFreeSpaceExW, GetDriveTypeW, GetFileInformationByHandleEx,
     GetLogicalDriveStringsW, GetVolumeInformationW, RemoveDirectoryW, SetFileInformationByHandle,
 };
-use windows::Win32::UI::Shell::{
-    SHEmptyRecycleBinW, SHFILEOPSTRUCTW, SHFileOperationW, SHQUERYRBINFO, SHQueryRecycleBinW,
-};
+use windows::Win32::UI::Shell::{SHEmptyRecycleBinW, SHQUERYRBINFO, SHQueryRecycleBinW};
 use windows::core::PCWSTR;
 
 pub use dupes::{
-    DEFAULT_MIN_SIZE, DupFile, DupGroup, DupOptions, DupScan, file_sha256, find_duplicates, in_system_folder,
-    system_folders,
+    CheckedFile, DEFAULT_MIN_SIZE, DupFile, DupGroup, DupOptions, DupScan, check_file, file_sha256, find_duplicates,
+    in_other_profile, in_system_folder, resolved_path, system_folders,
 };
 pub use space::{LargeFile, Node, SpaceScan, scan_space};
 
@@ -1371,17 +1368,14 @@ fn check_recyclable(path: &Path) -> Result<(), MaintError> {
     Ok(())
 }
 
-const FO_DELETE: u32 = 3;
-const FOF_SILENT: u16 = 0x4;
-const FOF_NOCONFIRMATION: u16 = 0x10;
-const FOF_ALLOWUNDO: u16 = 0x40;
-const FOF_NOERRORUI: u16 = 0x400;
-const FOF_WANTNUKEWARNING: u16 = 0x4000;
-
-/// Moves files or folders to the Recycle Bin. Every path is checked before anything moves.
+/// Moves files or folders to the Recycle Bin, and never deletes anything permanently. Every path is
+/// checked before anything moves.
 ///
-/// Windows deletes permanently, without asking, what does not fit in the Recycle Bin; the
-/// nuke-warning flag makes it ask in exactly that case.
+/// The shell deletes for good what cannot go to the Recycle Bin (a file larger than the bin, a
+/// drive whose bin is turned off), and asks first only when it can show a dialog. Here the move
+/// runs through `IFileOperation` with a progress sink that refuses every deletion the shell plans
+/// to make permanently ([`allows_delete`]): those files stay where they are, and the error says
+/// which, how many were moved, and that nothing was deleted for good. No dialog is ever shown.
 pub fn send_to_recycle_bin(paths: &[PathBuf]) -> Result<(), MaintError> {
     if paths.is_empty() {
         return Ok(());
@@ -1389,35 +1383,209 @@ pub fn send_to_recycle_bin(paths: &[PathBuf]) -> Result<(), MaintError> {
     for path in paths {
         check_recyclable(path)?;
     }
-    // A double-NUL-terminated list of full paths (the shell does not take the \\?\ prefix).
-    let mut list: Vec<u16> = Vec::new();
-    for path in paths {
-        list.extend(path.as_os_str().encode_wide());
-        list.push(0);
+    let list = paths.to_vec();
+    // COM on a thread of its own, in a single-threaded apartment as the shell expects.
+    let outcome = std::thread::spawn(move || recycle::run(&list))
+        .join()
+        .unwrap_or_else(|_| Err(tr!("the Recycle Bin operation stopped unexpectedly")));
+    let refused = outcome.map_err(|text| MaintError::new(MaintErrorKind::Windows, text))?;
+    let left: Vec<&PathBuf> = paths.iter().filter(|p| exists(p)).collect();
+    if left.is_empty() {
+        return Ok(());
     }
-    list.push(0);
-    let mut operation = SHFILEOPSTRUCTW {
-        wFunc: FO_DELETE,
-        pFrom: PCWSTR(list.as_ptr()),
-        fFlags: FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI | FOF_WANTNUKEWARNING,
-        ..Default::default()
+    let moved = paths.len() - left.len();
+    let names: Vec<String> = left.iter().take(5).map(|p| display(p)).collect();
+    let mut text = tr!(
+        "moved {0} of {1} to the Recycle Bin; these could not go to it and were left in place (nothing was deleted permanently): {2}",
+        moved,
+        paths.len(),
+        names.join(", ")
+    );
+    if left.len() > names.len() {
+        text = tr!("{0} and {1} more", text, left.len() - names.len());
+    }
+    if !refused.is_empty() {
+        text = tr!(
+            "{0}. They are too large for the Recycle Bin, or it is turned off for their drive",
+            text
+        );
+    }
+    Err(MaintError::new(MaintErrorKind::Windows, text))
+}
+
+/// True when the shell is about to recycle an item (`PreDeleteItem`'s flags): anything else would
+/// be a permanent deletion, which is refused.
+pub fn allows_delete(flags: u32) -> bool {
+    use windows::Win32::UI::Shell::TSF_DELETE_RECYCLE_IF_POSSIBLE;
+    flags & (TSF_DELETE_RECYCLE_IF_POSSIBLE.0 as u32) != 0
+}
+
+mod recycle {
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex, PoisonError};
+
+    use vigil_i18n::tr;
+    use windows::Win32::Foundation::E_ABORT;
+    use windows::Win32::System::Com::{
+        CLSCTX_ALL, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoCreateInstance, CoInitializeEx, CoUninitialize,
     };
-    // SAFETY: `operation` points at `list`, which outlives the call and is double-NUL terminated.
-    let result = unsafe { SHFileOperationW(&mut operation) };
-    if result != 0 {
-        return Err(MaintError::windows(
-            tr!(
-                "Windows could not move the files to the Recycle Bin (code 0x{0})",
-                format!("{:X}", result)
-            ),
-            i64::from(result),
-        ));
+    use windows::Win32::UI::Shell::{
+        FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT, FOFX_EARLYFAILURE, FOFX_RECYCLEONDELETE,
+        FileOperation, IFileOperation, IFileOperationProgressSink, IFileOperationProgressSink_Impl, IShellItem,
+        SHCreateItemFromParsingName,
+    };
+    use windows::core::{HRESULT, HSTRING, PCWSTR, Ref, Result, implement};
+
+    /// Refuses every deletion that would not go to the Recycle Bin.
+    #[implement(IFileOperationProgressSink)]
+    struct RecycleOnly {
+        refused: Arc<Mutex<Vec<String>>>,
     }
-    if operation.fAnyOperationsAborted.as_bool() {
-        return Err(MaintError::new(
-            MaintErrorKind::Windows,
-            tr!("Moving to the Recycle Bin was cancelled; some files were not moved"),
-        ));
+
+    impl IFileOperationProgressSink_Impl for RecycleOnly_Impl {
+        fn StartOperations(&self) -> Result<()> {
+            Ok(())
+        }
+        fn FinishOperations(&self, _: HRESULT) -> Result<()> {
+            Ok(())
+        }
+        fn PreRenameItem(&self, _: u32, _: Ref<IShellItem>, _: &PCWSTR) -> Result<()> {
+            Ok(())
+        }
+        fn PostRenameItem(&self, _: u32, _: Ref<IShellItem>, _: &PCWSTR, _: HRESULT, _: Ref<IShellItem>) -> Result<()> {
+            Ok(())
+        }
+        fn PreMoveItem(&self, _: u32, _: Ref<IShellItem>, _: Ref<IShellItem>, _: &PCWSTR) -> Result<()> {
+            Ok(())
+        }
+        fn PostMoveItem(
+            &self,
+            _: u32,
+            _: Ref<IShellItem>,
+            _: Ref<IShellItem>,
+            _: &PCWSTR,
+            _: HRESULT,
+            _: Ref<IShellItem>,
+        ) -> Result<()> {
+            Ok(())
+        }
+        fn PreCopyItem(&self, _: u32, _: Ref<IShellItem>, _: Ref<IShellItem>, _: &PCWSTR) -> Result<()> {
+            Ok(())
+        }
+        fn PostCopyItem(
+            &self,
+            _: u32,
+            _: Ref<IShellItem>,
+            _: Ref<IShellItem>,
+            _: &PCWSTR,
+            _: HRESULT,
+            _: Ref<IShellItem>,
+        ) -> Result<()> {
+            Ok(())
+        }
+        fn PreDeleteItem(&self, flags: u32, item: Ref<IShellItem>) -> Result<()> {
+            if super::allows_delete(flags) {
+                return Ok(());
+            }
+            let name = item
+                .ok()
+                .ok()
+                // SAFETY: a valid shell item handed in by the operation, for the call's duration.
+                .and_then(|i| unsafe { i.GetDisplayName(windows::Win32::UI::Shell::SIGDN_FILESYSPATH) }.ok())
+                .map(|text| {
+                    // SAFETY: GetDisplayName returned a CoTaskMem string; it is read, then freed.
+                    let shown = unsafe { text.to_string() }.unwrap_or_default();
+                    unsafe { windows::Win32::System::Com::CoTaskMemFree(Some(text.0 as *const _)) };
+                    shown
+                })
+                .unwrap_or_default();
+            self.refused.lock().unwrap_or_else(PoisonError::into_inner).push(name);
+            Err(E_ABORT.into())
+        }
+        fn PostDeleteItem(&self, _: u32, _: Ref<IShellItem>, _: HRESULT, _: Ref<IShellItem>) -> Result<()> {
+            Ok(())
+        }
+        fn PreNewItem(&self, _: u32, _: Ref<IShellItem>, _: &PCWSTR) -> Result<()> {
+            Ok(())
+        }
+        fn PostNewItem(
+            &self,
+            _: u32,
+            _: Ref<IShellItem>,
+            _: &PCWSTR,
+            _: &PCWSTR,
+            _: u32,
+            _: HRESULT,
+            _: Ref<IShellItem>,
+        ) -> Result<()> {
+            Ok(())
+        }
+        fn UpdateProgress(&self, _: u32, _: u32) -> Result<()> {
+            Ok(())
+        }
+        fn ResetTimer(&self) -> Result<()> {
+            Ok(())
+        }
+        fn PauseTimer(&self) -> Result<()> {
+            Ok(())
+        }
+        fn ResumeTimer(&self) -> Result<()> {
+            Ok(())
+        }
     }
-    Ok(())
+
+    struct Apartment;
+
+    impl Drop for Apartment {
+        fn drop(&mut self) {
+            // SAFETY: pairs the successful CoInitializeEx of `run`, on the same thread.
+            unsafe { CoUninitialize() };
+        }
+    }
+
+    /// Recycles `paths` (already checked); returns the items the sink refused (they would have been
+    /// deleted for good). Runs on its own thread.
+    pub(super) fn run(paths: &[PathBuf]) -> std::result::Result<Vec<String>, String> {
+        // SAFETY: initialises COM for this new thread; undone by `Apartment`.
+        let init = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) };
+        if init.is_err() {
+            return Err(tr!(
+                "Windows could not start the Recycle Bin operation ({0})",
+                init.message()
+            ));
+        }
+        let _apartment = Apartment;
+        let failed =
+            |e: windows::core::Error| tr!("Windows could not move the files to the Recycle Bin ({0})", e.message());
+        let refused = Arc::new(Mutex::new(Vec::new()));
+        // SAFETY: plain COM calls on interfaces created here, on this thread's apartment.
+        unsafe {
+            let operation: IFileOperation = CoCreateInstance(&FileOperation, None, CLSCTX_ALL).map_err(failed)?;
+            operation
+                .SetOperationFlags(
+                    FOF_NOCONFIRMATION
+                        | FOF_SILENT
+                        | FOF_NOERRORUI
+                        | FOF_ALLOWUNDO
+                        | FOFX_RECYCLEONDELETE
+                        | FOFX_EARLYFAILURE,
+                )
+                .map_err(failed)?;
+            let sink: IFileOperationProgressSink = RecycleOnly {
+                refused: Arc::clone(&refused),
+            }
+            .into();
+            let cookie = operation.Advise(&sink).map_err(failed)?;
+            for path in paths {
+                let item: IShellItem =
+                    SHCreateItemFromParsingName(&HSTRING::from(path.as_os_str()), None).map_err(failed)?;
+                operation.DeleteItem(&item, None).map_err(failed)?;
+            }
+            // A refused item aborts the rest (early failure): the caller tells what stayed.
+            let _ = operation.PerformOperations();
+            let _ = operation.Unadvise(cookie);
+        }
+        let out = refused.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        Ok(out)
+    }
 }

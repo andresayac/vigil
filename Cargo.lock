@@ -6935,6 +6935,7 @@ dependencies = [
  "sha2 0.10.9",
  "vigil-i18n",
  "windows 0.62.2",
+ "windows-core 0.62.2",
 ]
 
 [[package]]

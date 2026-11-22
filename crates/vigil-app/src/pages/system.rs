@@ -523,7 +523,7 @@ impl Render for SystemPage {
                                 .w(px(80.))
                                 .flex_none()
                                 .text_color(tk.ink3)
-                                .child(i.s("area").to_string()),
+                                .child(kit::plain(i.s("area").to_string())),
                         )
                         .child(
                             div()

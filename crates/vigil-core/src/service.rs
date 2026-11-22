@@ -369,6 +369,8 @@ fn run_spec(st: &AppState, spec: ActionSpec, item: Option<String>, ui: &dyn Ui) 
     if let Some(id) = &item {
         record_on_item(st, id, &records);
     }
+    // What Vigil removed leaves the background watch's baseline: if it comes back, that is news.
+    crate::watch::forget_removed(&records);
     Ok(ActionOutcome {
         records: records.iter().map(record_json).collect(),
         ..Default::default()

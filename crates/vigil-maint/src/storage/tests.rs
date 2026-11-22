@@ -809,3 +809,17 @@ fn firefox_profiles_are_ordered_by_joined_path() {
         .collect();
     assert_eq!(names, ["x.default-release", "x.default"]);
 }
+
+#[test]
+fn only_recycling_is_allowed_never_a_permanent_delete() {
+    use windows::Win32::UI::Shell::TSF_DELETE_RECYCLE_IF_POSSIBLE;
+    let recycle = TSF_DELETE_RECYCLE_IF_POSSIBLE.0 as u32;
+    assert!(allows_delete(recycle));
+    assert!(allows_delete(recycle | 0x1));
+    // The shell plans a permanent deletion (too large for the bin, bin turned off): refused.
+    assert!(!allows_delete(0));
+    assert!(!allows_delete(0x1 | 0x2));
+    // Paths are checked before anything moves: a missing one stops the whole request.
+    let missing = std::env::temp_dir().join("vigil-missing-for-the-recycle-test.bin");
+    assert!(send_to_recycle_bin(&[missing]).is_err());
+}

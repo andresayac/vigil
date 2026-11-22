@@ -175,7 +175,7 @@ A server on this computer (`localhost`) keeps everything here: nothing leaves th
 | **Startup apps** | What starts at sign-in, read live: the Run and RunOnce keys of your account and of every user, and both Startup folders, with publisher, signature and status. Entries that run through rundll32, script hosts or PowerShell name the host that runs them. With administrator rights, each entry shows its startup impact as Windows measured it at the last starts (High: over 1 s of processor time or 3 MB read, or a start made 1 s slower; Medium: over 300 ms or 300 KB; Low: under both), and the header shows how long recent starts took. | Turn an entry on or off with the switch Windows uses (undo it from History), open its location. |
 | **Scheduled tasks** | Every task in Task Scheduler, read live, with its triggers in plain words, last and next run, last result, account and rights, and the program each action starts. Tasks that run a file with full rights from a folder any user can change are marked, as are tasks whose program no longer exists. Tasks under `\Microsoft\` can be hidden. | Enable, disable, delete (the task definition is saved first, so History can recreate it), run now, open Task Scheduler. Windows tasks under `\Microsoft\` are shown but never changed. |
 | **Installed programs** | Every program in Settings' list of installed apps, read live from the Uninstall keys (the machine's, 32-bit ones included, yours and those of other signed-in accounts), with publisher, version, install date, declared size and the signatures of its program and uninstaller. Marked: programs installed in the last 7 days, remote access and tunnelling tools, unsigned files, and leftover entries whose uninstaller and files are gone. | Uninstall with the program's own uninstaller, remove a leftover entry (its registry key is saved first, so History can bring it back), open the install folder or Settings' Installed apps. Microsoft's entries are never removed. |
-| **Storage** | Every drive's free space, junk files by place, a space analyzer (treemap, biggest folders, largest files) and duplicate files: copies with the same content (size, then a quick hash, then SHA-256) under a folder you choose, never searching Windows' folder, the program folders or ProgramData, never following links and never opening online-only cloud files. | Clean the selected places, clean up the component store, send large files to the Recycle Bin, send chosen duplicate copies to the Recycle Bin (each is checked again to be identical to a copy that stays; the last copy of a file is never removed). |
+| **Storage** | Every drive's free space, junk files by place, a space analyzer (treemap, biggest folders, largest files) and duplicate files: copies with the same content (size, then a quick hash, then SHA-256) under a folder you choose, never searching Windows' folder, the program folders, ProgramData or other accounts' profiles (checked on the folder's real path, so a link or short name to them is refused too), never following links, never opening online-only cloud files, and counting hard links of one file as that one file. | Clean the selected places, clean up the component store, send large files to the Recycle Bin, send chosen duplicate copies to the Recycle Bin (each is checked again to be identical to a copy that stays; the last copy of a file is never removed). |
 | **Restore points** | The System Restore points (needs administrator rights), the ones Vigil made marked; which drives System Protection covers and the space it uses; policies that turn System Restore off; how often Windows allows a new point. | Make a restore point with a description, open System Restore or System Protection. Restore points are never deleted from Vigil. |
 | **System** | Windows, processor, memory modules, graphics adapters and driver age, disks with health, temperature and wear, board, BIOS, page file, battery, and concrete findings such as memory running below its rated speed. | Copy a plain-text summary. |
 | **Windows Update** | What Windows Update recorded on this computer, without searching online: the install history with failures grouped by update and their error codes, the last successful install, a pending restart and since when, paused updates, active hours, policies that turn updates off, defer them or send them through an organization's server, the service's start type, the Windows build and servicing stack, and Microsoft Defender's last security intelligence update. Plain hints say what deserves a look (an update that keeps failing, updates turned off or paused, a restart pending for days). | Open Windows Update or its update history in Settings. Nothing is searched, downloaded, installed or restarted. |
@@ -204,7 +204,9 @@ task created (the Security log only as administrator), Microsoft Defender detect
 subscriptions. Every five minutes, while the BITS service already runs, it also lists background transfer jobs that
 run a program when they finish. A change already reported from the fingerprint is not reported again from a log. An
 item that disappears is remembered for a week, so one that comes back (a service whose permissions hide it from the
-list now and then, a value briefly unreadable) is not reported as new again. Each difference becomes
+list now and then, a value briefly unreadable) is not reported as new again; a startup entry, task, driver, hook
+value or BITS job missing for more than a few minutes that comes back is reported as "came back". What Vigil itself
+removes leaves that memory at once, so if what installed it puts it back, that is reported. Each difference becomes
 an alert on the **Alerts** page and, if you want, a Windows notification, most important first. The fingerprint is saved, so changes
 made while Vigil was closed are reported at the next start. A part that could not be read is skipped, never taken as
 "everything was removed". The watch only reads; it tells you about a change, it does not block it.
@@ -238,8 +240,12 @@ What is offered depends on how the item is present on the system:
   debugger hooks (Image File Execution Options), Winlogon values, AppInit DLLs, logon scripts.
 - Files: quarantine, block network access with Windows Firewall rules, scan with Microsoft Defender.
 - Duplicate files: send chosen copies to the Recycle Bin. Only copies the last search found, never the last copy of
-  a file, and only while each is still byte-identical to a copy that stays (read again without following links).
-  Restore them from the Recycle Bin if needed.
+  a file, and only while each is still byte-identical to a different file that stays. Each copy is read again
+  through a handle that follows no link, and its real path must be the one found: a folder swapped for a link
+  since the search stops the action. Restore them from the Recycle Bin if needed.
+- Every move to the Recycle Bin is checked item by item: what Windows would delete for good instead (too large for
+  the bin, or the bin is turned off for that drive) is left in place and named, and nothing is deleted
+  permanently.
 - Restore points: make one (Windows allows one every 24 hours by default; a recent one is kept instead).
 - Firewall rules: turn on or off, delete (the whole rule definition is saved first, so History can recreate it).
 - Accounts: disable a local account (History enables it again), remove a member from Administrators or Remote
@@ -390,10 +396,11 @@ Scans are saved as `scan-YYYYMMDD-HHMMSS-report.json` (findings and verdicts), `
 `-sent-to-ai.json` (what was sent). **More → Export HTML report** writes a self-contained page. They contain a
 detailed inventory of the computer: treat them as private.
 
-Verifying digital signatures is the slowest part of a scan, so `signature-cache.json` in the data folder keeps each
-result with the file's size, last-write time and file ID. A later scan reuses it only for a file that is still the
-same, verified in the last 7 days on the same Windows build; everything else is verified again. A repeat scan takes
-well under half the time of the first. The elevated copy keeps its own cache where only administrators can write.
+Verifying digital signatures is the slowest part of a scan, so an elevated Vigil keeps each result in
+`signature-cache.json`, in its data folder where only administrators can write. A result is reused only for a file
+whose content is still the same (its SHA-256, besides its size, time and file ID), verified in the last 7 days on the
+same Windows build; everything else is verified again. A repeat scan takes about half the time of the first. Vigil
+running without administrator rights keeps no cache: its data folder can be changed by any program you run.
 
 ## Languages
 

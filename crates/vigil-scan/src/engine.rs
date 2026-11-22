@@ -114,16 +114,21 @@ pub(crate) fn analyze(raw: &mut Value, live: Option<&Live>) -> Analysis {
         && !missing.is_empty()
         && !cancelled()
     {
-        // Files verified recently and unchanged since come from the cache.
-        let mut cache = live.cache.map(crate::sigcache::SigCache::open);
+        // Files verified recently and unchanged since (same content) come from the cache, in an
+        // elevated copy only.
+        let mut cache = live.cache.and_then(crate::sigcache::SigCache::open);
         if let Some(cache) = cache.as_mut() {
-            missing.retain(|path| match cache.get(path) {
-                Some(info) => {
-                    files.insert(lower(path), info);
-                    false
+            let hits = cache.get_many(&missing);
+            let mut still = Vec::with_capacity(missing.len());
+            for (path, hit) in missing.into_iter().zip(hits) {
+                match hit {
+                    Some(info) => {
+                        files.insert(lower(&path), info);
+                    }
+                    None => still.push(path),
                 }
-                None => true,
-            });
+            }
+            missing = still;
         }
         if !missing.is_empty() {
             say(&tr!("  verifying the digital signature of {0} files...", missing.len()));
@@ -141,7 +146,7 @@ pub(crate) fn analyze(raw: &mut Value, live: Option<&Live>) -> Analysis {
             Some(dir) => match crate::collect::collect_signatures(&missing, &dir, live.cancel) {
                 Ok(found) => {
                     if let Some(cache) = cache.as_mut() {
-                        found.values().for_each(|info| cache.put(info));
+                        cache.put_many(found.values());
                     }
                     files.extend(found);
                 }

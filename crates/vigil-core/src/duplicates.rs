@@ -3,9 +3,12 @@
 //!
 //! The page only names copies; the plan accepts a path only when the last search found it, keeps
 //! at least one copy of every group, and hands the action the group's size and SHA-256. The action
-//! reads every file again (without following links) and moves a copy only when it is still
-//! byte-identical to a copy that stays. Nothing is deleted permanently: copies go to the Recycle
-//! Bin, where they can be restored.
+//! reads every file again through one handle opened without following a link, and checks the
+//! real path Windows resolves it to: a folder swapped for a link (a junction to Program Files, say)
+//! changes it, and the copy is refused. The real path must not be Windows', a program's, Vigil's
+//! or another account's. A copy moves only when it is still byte-identical to a different file
+//! that stays (not another hard link of it). Nothing is deleted permanently: copies go to the
+//! Recycle Bin, where they can be restored.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -173,6 +176,44 @@ fn inside(path: &str, folder: &Path) -> bool {
     !folder.is_empty() && (path == folder || path.starts_with(&format!("{folder}\\")))
 }
 
+/// Vigil's data folders, as written and as their real paths.
+fn vigil_folders(store: &Store) -> Vec<PathBuf> {
+    let mut out = vec![store.root().to_path_buf()];
+    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+        out.push(PathBuf::from(local).join("Vigil"));
+    }
+    let real: Vec<PathBuf> = out.iter().filter_map(|f| storage::resolved_path(f)).collect();
+    out.extend(real);
+    out
+}
+
+/// Reads `path` again for the action: its real path must be `path` itself (no link in its
+/// folders) and not Windows', a program's, Vigil's, a drive root or another account's.
+fn verified(path: &str, store: &Store) -> Result<storage::CheckedFile, ActionError> {
+    let file = storage::check_file(Path::new(path))
+        .map_err(|e| ActionError::new(tr!("{0} changed since the search or cannot be read: {1}", path, e)))?;
+    let real = normpath(&file.real_path);
+    if !real.eq_ignore_ascii_case(&normpath(path)) {
+        return Err(ActionError::new(tr!(
+            "{0} is now reached through a link ({1}); nothing was removed",
+            path,
+            real
+        )));
+    }
+    let real_path = Path::new(&real);
+    if real.len() <= 3
+        || storage::in_system_folder(real_path)
+        || storage::in_other_profile(real_path)
+        || vigil_folders(store).iter().any(|folder| inside(&real, folder))
+    {
+        return Err(ActionError::new(tr!(
+            "{0} belongs to Windows, a program, Vigil or another account and is not deleted from here",
+            real
+        )));
+    }
+    Ok(file)
+}
+
 /// Checks one path the action may touch: absolute, local, not Windows' or Vigil's.
 fn checked(path: &str, store: &Store) -> Result<String, ActionError> {
     let path = normpath(path);
@@ -243,19 +284,33 @@ pub fn recycle_copies_with(
         if remove.iter().any(|r| keep.iter().any(|k| k.eq_ignore_ascii_case(r))) {
             return Err(ActionError::new(tr!("a copy cannot be both kept and removed")));
         }
-        let same = |path: &str| storage::file_sha256(Path::new(path)).is_ok_and(|(s, h)| s == size && h == sha);
-        // The copy that stays must still be there, and identical: otherwise removing the others
-        // would lose the content.
-        if !keep.iter().any(|k| same(k)) {
+        let same = |file: &storage::CheckedFile| file.size == size && file.sha256 == sha;
+        // A copy that stays must still be there, identical, and reached without a link: otherwise
+        // removing the others would lose the content.
+        let kept: Vec<storage::CheckedFile> = keep
+            .iter()
+            .filter_map(|k| verified(k, store).ok())
+            .filter(|file| same(file))
+            .collect();
+        if kept.is_empty() {
             return Err(ActionError::new(tr!(
                 "no identical copy of {0} remains; nothing was removed",
                 base_name(&remove[0])
             )));
         }
         for path in &remove {
-            if !same(path) {
+            let file = verified(path, store)?;
+            if !same(&file) {
                 return Err(ActionError::new(tr!(
                     "{0} changed since the search or cannot be read; nothing was removed",
+                    path
+                )));
+            }
+            // Another name of a kept file is the same file: removing it frees nothing, and the
+            // content must stay in a different file.
+            if kept.iter().all(|k| k.file_id == file.file_id) {
+                return Err(ActionError::new(tr!(
+                    "{0} is the same file as the copy that stays (a hard link); nothing was removed",
                     path
                 )));
             }
@@ -400,7 +455,7 @@ mod tests {
         fs::create_dir_all(&target).unwrap();
         let link = temp.base.join(r"files\link");
         let cmd = PathBuf::from(std::env::var("SystemRoot").unwrap()).join(r"System32\cmd.exe");
-        let status = std::process::Command::new(cmd)
+        let status = std::process::Command::new(&cmd)
             .args(["/c", "mklink", "/J"])
             .arg(&link)
             .arg(&target)
@@ -412,6 +467,36 @@ mod tests {
             json!({"groups": [{"size": size, "sha256": sha, "keep": [keep], "remove": [link.to_string_lossy()]}]});
         assert!(recycle_copies_with(&params, &temp.store, &fake).is_err());
         let _ = fs::remove_dir(&link);
+
+        // A parent folder swapped for a junction after the search: the copy's real path changes.
+        let outside = temp.base.join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("same.bin"), &data).unwrap();
+        let swapped = temp.base.join(r"files\swapped");
+        let made = std::process::Command::new(&cmd)
+            .args(["/c", "mklink", "/J"])
+            .arg(&swapped)
+            .arg(&outside)
+            .stdout(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(made.success());
+        let through = swapped.join("same.bin").to_string_lossy().into_owned();
+        let params = json!({"groups": [{"size": size, "sha256": sha, "keep": [keep], "remove": [through]}]});
+        let error = recycle_copies_with(&params, &temp.store, &fake).unwrap_err();
+        assert!(error.to_string().contains("link"), "{error}");
+        let _ = fs::remove_dir(&swapped);
+
+        // Another name (a hard link) of the copy that stays.
+        let linked = temp.base.join(r"files\linked.bin");
+        fs::hard_link(&keep, &linked).unwrap();
+        let params =
+            json!({"groups": [{"size": size, "sha256": sha, "keep": [keep], "remove": [linked.to_string_lossy()]}]});
+        assert!(
+            recycle_copies_with(&params, &temp.store, &fake).is_err(),
+            "a hard link of the kept copy"
+        );
+        let _ = fs::remove_file(&linked);
 
         // Windows' folder, Vigil's data folder and a drive root.
         let windows = PathBuf::from(std::env::var("SystemRoot").unwrap()).join(r"System32\notepad.exe");

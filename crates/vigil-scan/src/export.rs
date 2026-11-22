@@ -176,20 +176,26 @@ pub const CSV_COLUMNS: [&str; 20] = [
     "since_last_scan",
 ];
 
-/// One CSV cell: neutralised when a spreadsheet would read it as a formula (`=`, `+`, `-`, `@`,
-/// tab or carriage return first), quoted when it holds a comma, a quote or a line break
-/// (RFC 4180).
+/// Characters that make a spreadsheet read what follows as a formula.
+const FORMULA_START: [char; 6] = ['=', '+', '-', '@', '\t', '\r'];
+/// Characters a spreadsheet may split cells on: `,`, and `;` in the locales that use a decimal
+/// comma (Spanish, French, Portuguese…), where a cell can be cut in two whatever the quoting.
+const SPLITS: [char; 5] = [',', ';', '\t', '\r', '\n'];
+
+/// One CSV cell, always quoted (RFC 4180). Every place a spreadsheet could start a cell (the
+/// start, and after a `,` or `;`, which some locales split on even inside quotes) is neutralised
+/// with a `'` when a formula character follows.
 pub fn csv_cell(value: &str) -> String {
-    let guarded = if value.starts_with(['=', '+', '-', '@', '\t', '\r']) {
-        format!("'{value}")
-    } else {
-        value.to_string()
-    };
-    if guarded.contains([',', '"', '\n', '\r']) || guarded.starts_with(' ') || guarded.ends_with(' ') {
-        format!("\"{}\"", guarded.replace('"', "\"\""))
-    } else {
-        guarded
+    let mut guarded = String::with_capacity(value.len() + 2);
+    let mut at_start = true;
+    for ch in value.chars() {
+        if at_start && FORMULA_START.contains(&ch) {
+            guarded.push('\'');
+        }
+        guarded.push(ch);
+        at_start = SPLITS.contains(&ch);
     }
+    format!("\"{}\"", guarded.replace('"', "\"\""))
 }
 
 /// The findings as CSV: UTF-8 with a byte order mark (so spreadsheets read accents correctly),
@@ -437,18 +443,39 @@ mod tests {
 
     #[test]
     fn csv_cells_are_quoted_and_formulas_neutralised() {
-        assert_eq!(csv_cell("plain"), "plain");
+        assert_eq!(csv_cell("plain"), "\"plain\"", "every cell is quoted");
         assert_eq!(csv_cell("a,b"), "\"a,b\"");
         assert_eq!(csv_cell("say \"hi\""), "\"say \"\"hi\"\"\"");
         assert_eq!(csv_cell("two\nlines"), "\"two\nlines\"");
         for formula in ["=1+1", "+cmd", "-2", "@SUM(A1)", "\tx", "\rx"] {
             let cell = csv_cell(formula);
-            assert!(
-                cell.starts_with('\'') || cell.starts_with("\"'"),
-                "{formula:?} gave {cell:?}"
-            );
+            assert!(cell.starts_with("\"'"), "{formula:?} gave {cell:?}");
         }
         assert_eq!(csv_cell("=HYPERLINK(\"x\")"), "\"'=HYPERLINK(\"\"x\"\")\"");
+    }
+
+    #[test]
+    fn no_cell_starts_a_formula_in_semicolon_locales() {
+        // Spanish, French or Portuguese Excel splits on ';' (and a ',' cell may be cut too): every
+        // piece a split could start must not begin with a formula character.
+        let payloads = [
+            r#"C:\x\a;=HYPERLINK(CHAR(104)&"ttp://203.0.113.5","x").exe"#,
+            "a,+cmd|' /C calc'!A0",
+            "x;@SUM(1)",
+            "x;-2+3",
+            "x\n=1",
+        ];
+        for payload in payloads {
+            let cell = csv_cell(payload);
+            let inner = &cell[1..cell.len() - 1];
+            for piece in inner.split([',', ';', '\t', '\n', '\r']) {
+                let piece = piece.trim_start_matches('"');
+                assert!(
+                    !piece.starts_with(['=', '+', '-', '@']),
+                    "{payload:?}: a split could start a formula at {piece:?}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -457,14 +484,19 @@ mod tests {
         assert!(out.starts_with('\u{feff}'));
         let body = out.trim_start_matches('\u{feff}');
         let lines: Vec<&str> = body.split("\r\n").filter(|l| !l.is_empty()).collect();
-        assert_eq!(lines[0], CSV_COLUMNS.join(","));
+        let header: Vec<String> = CSV_COLUMNS.iter().map(|c| format!("\"{c}\"")).collect();
+        assert_eq!(lines[0], header.join(","));
         // Trusted left out by default; most severe first.
         assert_eq!(lines.len(), 4, "{body}");
-        assert!(lines[1].starts_with("f1,remove,ai,high,85,critical,exe,winupd.exe"));
-        assert!(lines[2].starts_with("f3,disable"));
-        assert!(lines[3].starts_with("f2,review"));
-        assert!(lines[1].ends_with(",new"));
-        assert!(lines[3].ends_with(",changed"));
+        assert!(
+            lines[1].starts_with(r#""f1","remove","ai","high","85","critical","exe","winupd.exe""#),
+            "{}",
+            lines[1]
+        );
+        assert!(lines[2].starts_with(r#""f3","disable""#));
+        assert!(lines[3].starts_with(r#""f2","review""#));
+        assert!(lines[1].ends_with(r#","new""#));
+        assert!(lines[3].ends_with(r#","changed""#));
         // The AI's reason started with "=": neutralised.
         assert!(lines[1].contains("\"'=HYPERLINK("));
         let all = csv(
