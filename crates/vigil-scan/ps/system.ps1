@@ -58,7 +58,22 @@ try {
         disable_ioav            = [bool]$pref.DisableIOAVProtection
         disable_script_scanning = [bool]$pref.DisableScriptScanning
         pua_protection          = [int]$pref.PUAProtection
+        maps_reporting          = $(if ($null -ne $pref.MAPSReporting) { [int]$pref.MAPSReporting } else { $null })
+        disable_block_at_first_seen = [bool]$pref.DisableBlockAtFirstSeen
+        exclusion_ip            = @($pref.ExclusionIpAddress | Where-Object { $_ })
     }
+    # Per-threat overrides (6 = allow, 9 = no action) and attack surface reduction rules set to
+    # 0 (off) explicitly.
+    $ids = @($pref.ThreatIDDefaultAction_Ids)
+    $actions = @($pref.ThreatIDDefaultAction_Actions)
+    $r.defender_pref.threat_default_actions = @(for ($i = 0; $i -lt [Math]::Min($ids.Count, $actions.Count); $i++) {
+        if ($ids[$i]) { @{ id = [string]$ids[$i]; action = [int]$actions[$i] } }
+    })
+    $asrIds = @($pref.AttackSurfaceReductionRules_Ids)
+    $asrActions = @($pref.AttackSurfaceReductionRules_Actions)
+    $r.defender_pref.asr_disabled = @(for ($i = 0; $i -lt [Math]::Min($asrIds.Count, $asrActions.Count); $i++) {
+        if ($asrIds[$i] -and [int]$asrActions[$i] -eq 0) { [string]$asrIds[$i] }
+    })
 } catch { Add-Note 'defender' ("preferences not available: " + $_.Exception.Message) }
 
 try {

@@ -58,6 +58,7 @@
       <p class="muted">{t("watch.nothingYet")}</p>
     {/if}
     {#if !status.tasksWatched}<p class="faint">{t("watch.tasksNeedAdmin")}</p>{/if}
+    {#if status.logsHidden?.length}<p class="faint">{t("watch.logsNeedAdmin", { logs: status.logsHidden.join(", ") })}</p>{/if}
     <div class="actions">
       <button class="link" onclick={() => onpage("alerts")}>{status.unread ? t("watch.seeAllUnread", { count: status.unread }) : t("watch.seeAll")}</button>
       {#if status.owner}

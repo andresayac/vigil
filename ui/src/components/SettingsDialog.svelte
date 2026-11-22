@@ -321,6 +321,8 @@
               <label><input type="checkbox" bind:checked={watchDraft.notifyTasks} />{t("settings.watch.notifyTasks")}</label>
               <label><input type="checkbox" bind:checked={watchDraft.notifySecurity} />{t("settings.watch.notifySecurity")}</label>
               <label><input type="checkbox" bind:checked={watchDraft.notifyPorts} />{t("settings.watch.notifyPorts")}</label>
+              <label><input type="checkbox" bind:checked={watchDraft.notifyHooks} />{t("settings.watch.notifyHooks")}</label>
+              <label><input type="checkbox" bind:checked={watchDraft.notifyEvents} />{t("settings.watch.notifyEvents")}</label>
             </div>
           </div>
         </div>

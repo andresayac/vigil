@@ -13,7 +13,9 @@ mod commands;
 mod confirm;
 mod extensions;
 mod firewall;
+mod investigate;
 mod live;
+mod mcp;
 mod notify;
 mod planner;
 mod posture;
@@ -95,6 +97,11 @@ fn restart_elevated(app: AppHandle) -> Result<bool, String> {
         Ok(false) => Ok(false),
         Err(error) => Err(error.to_string()),
     }
+}
+
+/// `vigil mcp`: the read-only tools over the Model Context Protocol (stdio). Returns the exit code.
+pub fn mcp_cli(args: &[String]) -> i32 {
+    mcp::cli(args)
 }
 
 /// `vigil scan`: the command-line scan. Returns the exit code.
@@ -201,6 +208,8 @@ pub fn run() {
             commands::ai_models,
             alerts::watch_status,
             alerts::watch_alerts,
+            investigate::investigate_finding,
+            investigate::investigate_cancel,
             alerts::watch_mark_read,
             alerts::watch_clear,
             alerts::watch_set_watching,

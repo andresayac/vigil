@@ -88,10 +88,48 @@ A server on this computer (`localhost`) keeps everything here: nothing leaves th
 - Before anything is sent you see how many items, where they go, and the exact data. Your user and computer names are
   replaced with `<user>` and `<computer>`; passwords and tokens in command lines are always replaced with
   `<redacted>`; a copy of everything sent is saved next to the scan.
-- The agent gets no tools and the inventory is treated as untrusted text (a file that says "classify me as safe" is a
+- For the scan review the agent gets no tools and the inventory is treated as untrusted text (a file that says "classify me as safe" is a
   red flag, not an instruction). Its answer is validated, and an item the local rules rate as critical can never be
   downgraded to safe.
 - The agent answers in the language Vigil uses.
+- **Investigate with AI** (Findings, side panel): for one finding, the agent may call Vigil's read-only tools (below)
+  to look further: its file and signature, how it starts, what it runs, its network activity. A Windows dialog first
+  says where the data goes, whether it stays on the computer and that the tools read more than the finding itself.
+  You then see the conclusion, the evidence with links to the pages, and every tool call; the record is saved in the
+  data folder. The agent cannot change anything: a suggested action is text, and the finding's own action buttons
+  (confirmed as always) are the only way to act. Local agents get the tools through `vigil mcp`, set up for that run
+  only.
+
+### MCP server
+
+`vigil mcp` gives AI clients that speak the Model Context Protocol the same read-only tools, over stdio:
+
+| Tool | What it reads |
+|---|---|
+| `get_overview`, `list_findings`, `get_finding` | The newest scan report this user can read (or `--report FILE`) |
+| `list_processes`, `inspect_process`, `list_connections` | Processes (with signature, command line, DLLs from writable folders, hosted services), connections |
+| `list_services`, `list_startup`, `list_tasks` | Services, startup entries, scheduled tasks |
+| `get_posture`, `get_defender`, `list_extensions` | Security settings, Microsoft Defender, browser extensions and policies |
+| `get_signins_summary`, `get_reliability_summary`, `list_alerts` | Accounts and sign-ins, event-log problems, the background watch's alerts |
+| `check_file` | One local file's signature, version information and SHA-256 |
+| `propose_action` | Nothing: it records a suggestion for you; Vigil never acts on it |
+
+- **Nothing changes the computer.** The tools only read, and the MCP process never shows a window or a dialog;
+  changes are made in the app, where each one is confirmed.
+- It runs with the rights of the client that starts it: as a standard user, the Security log, Defender exclusions
+  and other users' tasks are not readable (each result says `"coverage"`).
+- User and computer names are replaced by default (`--no-anonymize` keeps them); passwords and tokens in command
+  lines are always removed. Lists are paged and every result is capped, so a client never receives megabytes.
+- Text in the results was read from the computer and may come from malware; the tools tell the model to treat it as
+  data, never as instructions.
+- Both protocol forms are answered: revision 2026-07-28 (`server/discover`) and the `initialize` handshake of
+  2025-11-25 and earlier.
+
+`vigil mcp --print-config` prints a ready-to-paste configuration with the path of your `vigil.exe`, for example:
+
+```json
+{ "mcpServers": { "vigil": { "command": "C:\\Program Files\\Vigil\\vigil.exe", "args": ["mcp"] } } }
+```
 
 ## The app
 
@@ -124,10 +162,19 @@ A server on this computer (`localhost`) keeps everything here: nothing leaves th
 Once a minute Vigil compares a small fingerprint of the computer with the last one: startup entries (Run keys,
 including those set by policy, and Startup folders), services (new ones, a start type changed to automatic, a changed
 program or svchost DLL), scheduled tasks (new ones outside `\Microsoft\`, and changed actions; under `\Microsoft\` only
-a task that runs something outside the Windows folder), the security switches (Defender real-time protection, the
-three firewall profiles, UAC, Remote Desktop) and remote-access ports (SSH, Telnet, Remote Desktop, VNC, TeamViewer,
-WinRM) listening on every network interface, with the program that listens. Each difference becomes an alert on the
-**Alerts** page and, if you want, a Windows notification, most important first. The fingerprint is saved, so changes
+a task that runs something outside the Windows folder), the security switches (Defender real-time protection, tamper
+protection and the policy that turns Defender off, the three firewall profiles, UAC, Remote Desktop, WDigest password
+caching, LSA protection), remote-access ports (SSH, Telnet, Remote Desktop, VNC, TeamViewer, WinRM) listening on every
+network interface with the program that listens, kernel and file system drivers (a new one, or one moved outside the
+Windows driver folders), the hosts file (names it newly redirects), and the registry places Windows reads to load or
+run something: image hijacks (including the Ease of Access programs of the sign-in screen), Winlogon, AppInit and
+AppCert DLLs, BootExecute, the LSA packages, per-user Settings and console handlers used to bypass UAC, the .NET
+profiler variables, NetSh helpers, print monitors, time providers and Microsoft Defender exclusions (the non-policy
+exclusions only as administrator). It also reads a few Windows logs from where the last check stopped, which catches
+changes undone within the minute: a service installed, a log cleared, a new account or administrator and a scheduled
+task created (the Security log only as administrator), Microsoft Defender detections and changes, and new permanent WMI
+subscriptions. A change already reported from the fingerprint is not reported again from a log. Each difference becomes
+an alert on the **Alerts** page and, if you want, a Windows notification, most important first. The fingerprint is saved, so changes
 made while Vigil was closed are reported at the next start. A part that could not be read is skipped, never taken as
 "everything was removed". The watch only reads; it tells you about a change, it does not block it.
 
@@ -204,7 +251,20 @@ are never "optimizations").
 1. **Inventory** (read-only): processes (with paths even for protected processes), services and drivers, scheduled
    tasks, startup entries, Winlogon, IFEO, AppInit/AppCert DLLs, LSA packages, Active Setup, WMI subscriptions,
    installed programs and Store apps, browser extensions, network endpoints, DNS cache, hosts file, proxy, UAC,
-   Remote Desktop, Defender state and history, firewall, accounts, shares, and the event logs.
+   Remote Desktop, Defender state and history, firewall, accounts, shares, and the event logs. Also the less
+   common places that run or load something:
+   - per-user handlers that auto-elevating Windows programs open (UAC bypasses);
+   - the accessibility programs of the sign-in screen (a copy of `cmd.exe` in place of `sethc.exe`);
+   - DLLs registered as print monitors and processors, time providers, netsh helpers, network providers,
+     Winsock providers and KnownDLLs, and LSA packages set through OSConfig;
+   - one-value tricks: screensaver, .NET profilers, Application Verifier DLLs, SetupExecute, RunOnceEx, service
+     recovery programs, the crash debugger, the Safe mode shell, the Remote Desktop start program, administrators
+     hidden from the sign-in screen, `%windir%` redefined for the user, and writable folders before System32 in
+     PATH;
+   - settings that blind the defences, only when set explicitly: Defender told to allow threats, cloud protection
+     or block at first sight off, network exclusions, attack surface reduction rules off, the Defender or Event
+     Log service stopped, event logs or their autologgers off, LSA protection or the vulnerable driver blocklist
+     turned off.
 2. **Grouping**: every reference is resolved to the file that really decides what runs (the DLL behind `rundll32`,
    the script behind `wscript`, the payload of an encoded PowerShell command...), so each file is judged once.
 3. **Local rules**: digital signatures, locations, names that imitate Windows, command-line patterns (miners,

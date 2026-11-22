@@ -319,11 +319,23 @@ pub async fn scan_collect(app: AppHandle, days: u32, virustotal: bool) -> CmdRes
 
 /// The provider the settings ask for (the error says why there is none). Blocking: it may start
 /// a CLI to read its options or ask a local server for its models.
-fn pick_ai(app: &AppHandle, settings: &Stored) -> Result<vigil_scan::ai::Provider, String> {
+pub(crate) fn pick_ai(app: &AppHandle, settings: &Stored) -> Result<vigil_scan::ai::Provider, String> {
     let st = state(app);
     let keys = |id: &str| secrets::lookup(&*st.secrets, id);
     let probe = vigil_scan::ai::SystemProbe { keys: &keys };
     vigil_scan::ai::pick_provider(&settings.ai.config(), &probe)
+}
+
+/// What an AI investigation needs from the app: the settings, the loaded report (with its file)
+/// and the data folder.
+pub(crate) fn investigation_inputs(app: &AppHandle) -> (Stored, Option<(Analysis, PathBuf)>, PathBuf) {
+    let st = state(app);
+    let inner = st.lock();
+    let report = match (&inner.analysis, &inner.report_path) {
+        (Some(analysis), Some(path)) => Some((analysis.clone(), path.clone())),
+        _ => None,
+    };
+    (inner.settings.clone(), report, st.root.clone())
 }
 
 fn file_name(path: &Path) -> String {
@@ -948,7 +960,7 @@ async fn build_plan(app: &AppHandle, request: &Request) -> CmdResult<Plan> {
 }
 
 /// Asks on the main thread (the dialog's owner window lives there) and waits for the answer.
-async fn ask(app: &AppHandle, hwnd: isize, prompt: Prompt) -> Answer {
+pub(crate) async fn ask(app: &AppHandle, hwnd: isize, prompt: Prompt) -> Answer {
     let (tx, rx) = std::sync::mpsc::channel();
     let sent = app.run_on_main_thread(move || {
         let parent = windows::Win32::Foundation::HWND(hwnd as *mut core::ffi::c_void);

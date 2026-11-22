@@ -91,10 +91,15 @@ pub(crate) fn analyze(raw: &mut Value, live: Option<&Live>) -> Analysis {
     let cancelled = || live.is_some_and(|l| l.cancel.load(Ordering::Relaxed));
     let (refs, aux) = analyze::build_references(raw);
     let mut files: Files = obj(raw.at("files")).clone();
-    let missing: Vec<String> = analyze::needed_paths(&refs)
+    // The accessibility programs are checked even when nothing references them: a copy of cmd.exe
+    // in their place keeps Microsoft's signature, only its version data tells (posture.rs).
+    let mut missing: Vec<String> = analyze::needed_paths(&refs)
         .into_iter()
+        .chain(crate::hooks::accessibility_paths())
         .filter(|p| !files.contains_key(&lower(p)))
         .collect();
+    missing.sort_by_key(|p| lower(p));
+    missing.dedup_by_key(|p| lower(p));
     if let Some(live) = live
         && !missing.is_empty()
         && !cancelled()

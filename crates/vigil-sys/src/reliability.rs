@@ -439,7 +439,7 @@ fn read_now(days: u32) -> Result<Reliability, SysError> {
 pub(crate) const ERROR_EVT_CHANNEL_NOT_FOUND: i32 = 0x8007_3A9F_u32 as i32;
 
 /// An event log handle closed when dropped.
-struct Handle(EVT_HANDLE);
+pub(crate) struct Handle(pub(crate) EVT_HANDLE);
 
 impl Drop for Handle {
     fn drop(&mut self) {
@@ -559,7 +559,7 @@ fn provider_of(xml: &str) -> String {
         .unwrap_or_default()
 }
 
-fn render_xml(event: EVT_HANDLE) -> Option<String> {
+pub(crate) fn render_xml(event: EVT_HANDLE) -> Option<String> {
     let mut used = 0u32;
     let mut count = 0u32;
     // SAFETY: a size query: no buffer, `used` receives the size needed in bytes.

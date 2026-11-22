@@ -29,6 +29,7 @@ vigil-sys = { path = "../vigil-sys" }
 vigil-actions = { path = "../vigil-actions" }
 vigil-maint = { path = "../vigil-maint" }
 vigil-scan = { path = "../vigil-scan" }
+sha2 = "0.10"
 
 [dependencies.windows]
 version = "0.62"

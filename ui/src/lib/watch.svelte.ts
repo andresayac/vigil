@@ -30,6 +30,10 @@ export const KIND_LABEL: Record<AlertKind, Key> = {
   task: "watch.kind.task",
   security: "watch.kind.security",
   port: "watch.kind.port",
+  hook: "watch.kind.hook",
+  driver: "watch.kind.driver",
+  hosts: "watch.kind.hosts",
+  event: "watch.kind.event",
   watch: "watch.kind.watch",
 };
 
@@ -39,6 +43,10 @@ export const TARGET_LABEL: Record<string, Key> = {
   services: "page.services",
   tasks: "page.tasks",
   network: "page.network",
+  protection: "page.protection",
+  posture: "page.posture",
+  firewall: "page.firewall",
+  accounts: "page.accounts",
 };
 
 /** The glyph and state colour of a severity (info is plain ink). */

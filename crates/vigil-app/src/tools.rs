@@ -21,6 +21,7 @@ Usage:
   vigil services [options]    Windows services
   vigil programs [options]    installed programs
   vigil reliability [options] crashes, blue screens and other problems
+  vigil mcp [options]         read-only tools for AI clients (MCP server)
 
   --no-elevate                open the app without asking for administrator rights
   --lang CODE                 language: auto, en, es, fr, pt or zh

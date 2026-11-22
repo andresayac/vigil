@@ -29,6 +29,7 @@ mod analyze;
 mod collect;
 mod engine;
 mod error;
+mod hooks;
 mod ip;
 mod lenient;
 mod ntpath;

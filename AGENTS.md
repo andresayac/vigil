@@ -86,6 +86,10 @@ Each crate has its tests next to the code (`#[cfg(test)]`) or in `tests/`; recor
    endpoints must be HTTPS (plain HTTP only for localhost). Ollama cloud models are never used, since they would
    send the data off the computer. API keys live in Windows Credential Manager (`vigil-app/src/secrets.rs`),
    never in settings, reports, logs or the UI. Tests reach no real AI service: fake probes and local servers.
+   **AI tools only read.** The tool registry (`vigil-app/src/mcp/registry.rs`), shared by `vigil mcp` and the
+   in-app investigation, never changes the computer, never opens a dialog and never builds an `ActionSpec`. Results
+   are capped, paged and anonymizable, and their text is data inside a JSON envelope, never instructions. A model
+   may only suggest; actions go through `requests.rs` and the native confirmation like any other.
 8. **Never follow links when deleting.** Skip reparse points (junctions, symlinks); open files without
    following links, check the final path is inside the expected root (see `vigil-maint::storage`).
 9. **Honest wording.** Explanations say what really happens (for example: trimming memory is temporary).

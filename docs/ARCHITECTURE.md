@@ -59,6 +59,15 @@ package.json            UI toolchain (npm)
   itself an action (`vigil.autostart`): confirmed, journaled and undoable like any other change.
 - The AI agent's answer is data: validated against a schema, never executed, and it can never lower the verdict of
   an item the local rules rate critical. API keys live in Windows Credential Manager.
+- **AI tools.** One registry of read-only tools (`vigil-app/src/mcp/registry.rs`) serves two callers: `vigil mcp`
+  (`mcp/server.rs`, MCP over stdio, newline-delimited JSON-RPC) and "Investigate with AI" (`investigate.rs`). The
+  investigation loop (`vigil-scan/src/ai/agent.rs`) speaks tool calling in both API standards and gives the local
+  agents the same tools by starting `vigil mcp` for that run (Claude Code `--mcp-config --strict-mcp-config`, Codex
+  `-c mcp_servers.vigil.*`, Gemini CLI project settings plus a policy that allows only those tools). Trust
+  boundaries: tool results are system data wrapped in a `{"tool", "data"}` envelope and capped per call and per
+  investigation; the loop has limits on steps, calls, bytes and time, and can be cancelled; the final answer is
+  validated (`investigate::validate`); the consent dialog is native; nothing a model returns can reach
+  `vigil_actions::execute()`.
 - Two API standards cover every model server: OpenAI Chat Completions (`vigil-scan/src/ai/openai.rs`) and Anthropic
   Messages (`ai/anthropic.rs`), each with any address the user sets. An address on this computer is "local": the
   data stays on the PC. When that server is Ollama (`/api/version`), `ai/ollama.rs` asks `/api/tags` which models

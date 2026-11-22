@@ -1,12 +1,13 @@
 <script lang="ts">
   import FindingDetail from "../components/FindingDetail.svelte";
+  import Investigation from "../components/Investigation.svelte";
   import { changesOf } from "../lib/changes";
   import { t } from "../lib/i18n/index.svelte";
   import { KINDS, VERDICT_ORDER, kindLabel, verdictColor, verdictLabel } from "../lib/labels";
   import { isIgnored, report } from "../lib/report.svelte";
   import type { Item } from "../lib/types";
 
-  let { focus = null, elevated }: { focus?: { ids?: string[]; caption?: string; id?: string; verdict?: string } | null; elevated: boolean } = $props();
+  let { focus = null, elevated, onnavigate }: { focus?: { ids?: string[]; caption?: string; id?: string; verdict?: string } | null; elevated: boolean; onnavigate?: (page: string) => void } = $props();
 
   const RANK: Record<string, number> = Object.fromEntries(VERDICT_ORDER.map((v, i) => [v, i]));
   let verdicts = $state<Record<string, boolean>>(Object.fromEntries(VERDICT_ORDER.map((v) => [v, v !== "trusted"])));
@@ -159,6 +160,7 @@
     <aside class="panel side">
       {#if current}
         <FindingDetail item={current} {elevated} />
+        {#key current.id}<Investigation itemId={current.id} {onnavigate} />{/key}
       {:else}
         <p class="muted empty">{report.analysis ? t("findings.select") : t("findings.runScan")}</p>
       {/if}

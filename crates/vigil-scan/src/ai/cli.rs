@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
+use super::agent::McpLaunch;
 use super::{AiError, Provider, failed, parse_json_text};
 use crate::collect::{ChildError, Finished, run_child};
 use crate::lenient::{Get, as_number, int_of, last, strip, text, truthy};
@@ -311,10 +312,15 @@ pub(super) fn claude_complete(
     command.current_dir(cwd.path());
     let finished = run("Claude Code", command, Some(&user), ANSWER_TIMEOUT)?;
     drop(cwd);
+    claude_answer(provider, &finished)
+}
+
+/// The JSON answer in Claude Code's `--output-format json` result.
+fn claude_answer(provider: &Provider, finished: &Finished) -> Result<Value, AiError> {
     let stdout = String::from_utf8_lossy(&finished.stdout).into_owned();
     let result: Value = match serde_json::from_str::<Value>(&stdout) {
         Ok(value @ Value::Object(_)) => value,
-        _ => return Err(unexpected("Claude Code", &finished)),
+        _ => return Err(unexpected("Claude Code", finished)),
     };
     let usage = result.at("usage");
     provider.record_usage(
@@ -565,6 +571,267 @@ pub(super) fn gemini_complete(
     parse_json_text(&response)
 }
 
+// --------------------------------------------------------------------------- investigations
+
+/// The name of Vigil's MCP server in the agents' configuration (Claude Code then names its tools
+/// `mcp__vigil__<tool>`).
+pub const MCP_NAME: &str = "vigil";
+
+/// `{"mcpServers": {"vigil": {...}}}`, the configuration shape Claude Code and Gemini CLI read.
+pub fn mcp_servers_json(launch: &McpLaunch, gemini: bool) -> Value {
+    let mut server = serde_json::Map::new();
+    if !gemini {
+        server.insert("type".into(), Value::from("stdio"));
+    }
+    server.insert("command".into(), Value::from(launch.exe.to_string_lossy().into_owned()));
+    server.insert("args".into(), Value::from(launch.args.clone()));
+    if gemini {
+        // Only this server's own read-only tools; no confirmation prompts in a headless run.
+        server.insert("trust".into(), Value::Bool(true));
+    }
+    let mut servers = serde_json::Map::new();
+    servers.insert(MCP_NAME.into(), Value::Object(server));
+    serde_json::json!({ "mcpServers": servers })
+}
+
+/// A TOML string for `codex -c key=value`: a literal string, or a basic one when the text holds a
+/// single quote.
+pub fn toml_string(text: &str) -> String {
+    if !text.contains('\'') && !text.contains('\n') {
+        format!("'{text}'")
+    } else {
+        let escaped: String = text
+            .chars()
+            .flat_map(|c| match c {
+                '\\' => vec!['\\', '\\'],
+                '"' => vec!['\\', '"'],
+                '\n' => vec!['\\', 'n'],
+                other => vec![other],
+            })
+            .collect();
+        format!("\"{escaped}\"")
+    }
+}
+
+/// `-c` overrides that add Vigil's MCP server to one Codex run.
+pub fn codex_mcp_overrides(launch: &McpLaunch) -> Vec<String> {
+    let args: Vec<String> = launch.args.iter().map(|a| toml_string(a)).collect();
+    vec![
+        "-c".into(),
+        format!(
+            "mcp_servers.{MCP_NAME}.command={}",
+            toml_string(&launch.exe.to_string_lossy())
+        ),
+        "-c".into(),
+        format!("mcp_servers.{MCP_NAME}.args=[{}]", args.join(", ")),
+    ]
+}
+
+/// Gemini CLI policy for an investigation: Vigil's MCP tools are allowed, every other tool is denied.
+pub const GEMINI_VIGIL_ONLY: &str = "[[rule]]\nmcpName = \"vigil\"\ndecision = \"allow\"\npriority = 1000\n\n[[rule]]\ntoolName = \"*\"\ndecision = \"deny\"\npriority = 999\n";
+
+fn write_in(dir: &Path, name: &str, text: &str) -> Result<PathBuf, AiError> {
+    let path = dir.join(name);
+    std::fs::write(&path, text).map_err(|e| failed(format!("could not prepare the investigation: {e}")))?;
+    Ok(path)
+}
+
+fn run_cancellable(name: &str, command: Command, stdin: &str, cancel: &AtomicBool) -> Result<Finished, AiError> {
+    match run_child(command, Some(stdin), ANSWER_TIMEOUT, cancel) {
+        Ok(finished) => Ok(finished),
+        Err(ChildError::Cancelled) => Err(failed("the investigation was cancelled")),
+        Err(ChildError::Timeout) => Err(failed(format!("{name} did not respond in time"))),
+        Err(ChildError::Spawn(error)) => Err(failed(format!("could not run {name}: {error}"))),
+    }
+}
+
+/// Claude Code with only Vigil's MCP server (`--mcp-config` + `--strict-mcp-config`), its built-in
+/// tools turned off (`--tools ""`) and Vigil's tools allowed without prompts (`--allowedTools mcp__vigil`).
+#[allow(clippy::too_many_arguments)]
+pub(super) fn claude_investigate(
+    provider: &Provider,
+    launcher: &Launcher,
+    flags: &BTreeSet<String>,
+    system: &str,
+    user: &str,
+    schema: &Value,
+    launch: &McpLaunch,
+    cancel: &AtomicBool,
+) -> Result<Value, AiError> {
+    if !flags.contains("--strict-mcp-config") {
+        return Err(failed(
+            "this version of Claude Code cannot be limited to Vigil's tools (no --strict-mcp-config); update it with `claude update`",
+        ));
+    }
+    let config = write_in(
+        &launch.work,
+        "mcp.json",
+        &crate::lenient::dumps_compact(&mcp_servers_json(launch, false)),
+    )?;
+    let mut command = launcher.command();
+    command.args([
+        "--print",
+        "--output-format",
+        "json",
+        "--system-prompt",
+        system,
+        "--tools",
+        "",
+    ]);
+    command.arg("--mcp-config").arg(&config).arg("--strict-mcp-config");
+    command.args(["--allowedTools", &format!("mcp__{MCP_NAME}")]);
+    let mut prompt = user.to_string();
+    if flags.contains("--json-schema") {
+        command.arg("--json-schema").arg(dumps_compact_spaced(schema));
+    } else {
+        prompt.push_str("\n\nRespond only with a JSON object that conforms to this schema:\n");
+        prompt.push_str(&dumps_compact_spaced(schema));
+    }
+    for flag in ["--safe-mode", "--no-session-persistence"] {
+        if flags.contains(flag) {
+            command.arg(flag);
+        }
+    }
+    if flags.contains("--model") && !provider.model.is_empty() {
+        command.arg("--model").arg(&provider.model);
+    }
+    if flags.contains("--effort") && !provider.effort.is_empty() {
+        command.arg("--effort").arg(&provider.effort);
+    }
+    clean_env(&mut command);
+    command.current_dir(&launch.work);
+    let finished = run_cancellable("Claude Code", command, &prompt, cancel)?;
+    claude_answer(provider, &finished)
+}
+
+/// Codex CLI with Vigil's MCP server added for this run (`-c mcp_servers.vigil.*`), read-only
+/// sandbox, no approvals, no web search.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn codex_investigate(
+    provider: &Provider,
+    launcher: &Launcher,
+    support: &CodexSupport,
+    system: &str,
+    user: &str,
+    schema: &Value,
+    launch: &McpLaunch,
+    cancel: &AtomicBool,
+) -> Result<Value, AiError> {
+    let schema_file = write_in(
+        &launch.work,
+        "answer-schema.json",
+        &crate::lenient::dumps_compact(schema),
+    )?;
+    let answer_file = launch.work.join("answer.txt");
+    let mut prompt = format!("{system}\n\n{user}");
+    let mut command = launcher.command();
+    command.arg("exec");
+    command.args(["--sandbox", "read-only", "--skip-git-repo-check"]);
+    command.args(["-c", "approval_policy=\"never\"", "-c", "web_search=\"disabled\""]);
+    command.args(codex_mcp_overrides(launch));
+    for flag in ["--ephemeral", "--ignore-user-config", "--ignore-rules"] {
+        if support.flags.contains(flag) {
+            command.arg(flag);
+        }
+    }
+    if support.flags.contains("--disable") {
+        // The shell and the other built-in tools go; MCP support stays.
+        for feature in support.tool_features.iter().filter(|f| !f.contains("mcp")) {
+            command.arg("--disable").arg(feature);
+        }
+    }
+    if support.flags.contains("--color") {
+        command.args(["--color", "never"]);
+    }
+    if support.flags.contains("--output-schema") {
+        command.arg("--output-schema").arg(&schema_file);
+    } else {
+        prompt.push_str("\n\nRespond only with a JSON object that conforms to this schema:\n");
+        prompt.push_str(&dumps_compact_spaced(schema));
+    }
+    command.arg("--output-last-message").arg(&answer_file);
+    if support.flags.contains("--model") && !provider.model.is_empty() {
+        command.arg("--model").arg(&provider.model);
+    }
+    command.arg("-");
+    clean_env(&mut command);
+    command.current_dir(&launch.work);
+    let finished = run_cancellable("Codex CLI", command, &prompt, cancel)?;
+    provider.record_usage(0, 0, 0.0);
+    let answer = std::fs::read_to_string(&answer_file).unwrap_or_default();
+    if answer.trim().is_empty() {
+        return Err(unexpected("Codex CLI", &finished));
+    }
+    parse_json_text(&answer)
+}
+
+/// Gemini CLI started in a work folder whose `.gemini/settings.json` names Vigil's MCP server
+/// (project settings), with a policy that allows only that server's tools.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn gemini_investigate(
+    provider: &Provider,
+    launcher: &Launcher,
+    flags: &BTreeSet<String>,
+    system: &str,
+    user: &str,
+    schema: &Value,
+    launch: &McpLaunch,
+    cancel: &AtomicBool,
+) -> Result<Value, AiError> {
+    let settings_dir = launch.work.join(".gemini");
+    std::fs::create_dir_all(&settings_dir).map_err(|e| failed(format!("could not prepare the investigation: {e}")))?;
+    write_in(
+        &settings_dir,
+        "settings.json",
+        &crate::lenient::dumps_compact(&mcp_servers_json(launch, true)),
+    )?;
+    let policy = write_in(&launch.work, "vigil-tools-only.toml", GEMINI_VIGIL_ONLY)?;
+    let stdin = format!(
+        "{system}\n\n{user}\n\nRespond only with a JSON object that conforms to this schema:\n{}",
+        dumps_compact_spaced(schema)
+    );
+    let mut command = launcher.command();
+    command.args([
+        "--prompt",
+        "Answer the request above as instructed.",
+        "--output-format",
+        "json",
+    ]);
+    if flags.contains("--approval-mode") {
+        command.args(["--approval-mode", "default"]);
+    }
+    for flag in ["--admin-policy", "--policy"] {
+        if flags.contains(flag) {
+            command.arg(flag).arg(&policy);
+        }
+    }
+    command.args(["--allowed-mcp-server-names", MCP_NAME]);
+    if flags.contains("--model") && !provider.model.is_empty() {
+        command.arg("--model").arg(&provider.model);
+    }
+    clean_env(&mut command);
+    command.current_dir(&launch.work);
+    let finished = run_cancellable("Gemini CLI", command, &stdin, cancel)?;
+    provider.record_usage(0, 0, 0.0);
+    let stdout = String::from_utf8_lossy(&finished.stdout).into_owned();
+    let start = stdout.find('{').unwrap_or(0);
+    let result: Value = match serde_json::from_str::<Value>(&stdout[start..]) {
+        Ok(value @ Value::Object(_)) => value,
+        _ => return Err(unexpected("Gemini CLI", &finished)),
+    };
+    if !result.at("error").is_null() {
+        return Err(failed(format!(
+            "Gemini CLI reported an error: {}",
+            clip(&crate::lenient::str_of(result.at("error")), 300)
+        )));
+    }
+    let response = text(result.at("response"));
+    if response.trim().is_empty() {
+        return Err(unexpected("Gemini CLI", &finished));
+    }
+    parse_json_text(&response)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -594,6 +861,48 @@ mod tests {
             dumps_compact_spaced(&serde_json::json!({"a": [1, 2], "b": "x,y: z"})),
             "{\"a\": [1, 2], \"b\": \"x,y: z\"}"
         );
+    }
+
+    fn launch() -> McpLaunch {
+        McpLaunch {
+            exe: PathBuf::from(r"C:\Program Files\Vigil\vigil.exe"),
+            args: vec![
+                "mcp".into(),
+                "--report".into(),
+                r"C:\ProgramData\Vigil\scans\scan-20260101-100000-report.json".into(),
+                "--log".into(),
+                r"C:\ProgramData\Vigil\investigations\run-1\calls.jsonl".into(),
+            ],
+            log: PathBuf::from(r"C:\ProgramData\Vigil\investigations\run-1\calls.jsonl"),
+            work: PathBuf::from(r"C:\ProgramData\Vigil\investigations\run-1"),
+        }
+    }
+
+    #[test]
+    fn mcp_configuration_for_claude_code_and_gemini() {
+        let claude = mcp_servers_json(&launch(), false);
+        let server = &claude["mcpServers"]["vigil"];
+        assert_eq!(server["type"], "stdio");
+        assert_eq!(server["command"], r"C:\Program Files\Vigil\vigil.exe");
+        assert_eq!(server["args"][0], "mcp");
+        assert!(server.get("trust").is_none());
+        let gemini = mcp_servers_json(&launch(), true);
+        assert_eq!(gemini["mcpServers"]["vigil"]["trust"], true);
+        assert!(gemini["mcpServers"]["vigil"].get("type").is_none());
+        assert!(GEMINI_VIGIL_ONLY.contains("mcpName = \"vigil\"") && GEMINI_VIGIL_ONLY.contains("decision = \"deny\""));
+    }
+
+    #[test]
+    fn codex_overrides_are_valid_toml_values() {
+        let overrides = codex_mcp_overrides(&launch());
+        assert_eq!(overrides[0], "-c");
+        assert_eq!(
+            overrides[1],
+            r"mcp_servers.vigil.command='C:\Program Files\Vigil\vigil.exe'"
+        );
+        assert!(overrides[3].starts_with("mcp_servers.vigil.args=['mcp', '--report', 'C:\\ProgramData"));
+        assert_eq!(toml_string(r"C:\it's\x.exe"), r#""C:\\it's\\x.exe""#);
+        assert_eq!(toml_string("say \"hi\""), r#"'say "hi"'"#);
     }
 
     #[test]
