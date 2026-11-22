@@ -425,7 +425,10 @@ pub struct AiProviderView {
 pub fn ai_providers(st: &AppState) -> Vec<AiProviderView> {
     let config = st.lock().settings.ai.config();
     let keys = |id: &str| secrets::lookup(&*st.secrets, id);
-    let probe = vigil_scan::ai::SystemProbe { keys: &keys };
+    let probe = vigil_scan::ai::SystemProbe {
+        keys: &keys,
+        signer: &crate::programs::valid_signer,
+    };
     vigil_scan::ai::statuses(&config, &probe)
         .into_iter()
         .map(|status| AiProviderView {

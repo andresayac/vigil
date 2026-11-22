@@ -200,6 +200,14 @@ pub fn hint_text(hint: &Hint) -> (String, String) {
                 hint.detail
             ),
         ),
+        "store_retry" => (
+            tr!("Store apps couldn't update for now"),
+            tr!(
+                "{0} Store app updates did not finish because the app was open, was already updating or was already current ({1}). Windows retries on its own; nothing needs doing.",
+                n,
+                subject
+            ),
+        ),
         "service_repeat" => (
             tr!("A service keeps stopping"),
             tr!(
@@ -427,7 +435,8 @@ mod tests {
             hint("power_button", "info", "", 1, ""),
             hint("shared_module", "warn", "contoso.dll", 4, "2"),
             hint("app_repeat", "info", "notes.exe", 6, ""),
-            hint("update_repeat", "info", "Contoso Notes 1.2", 9, "0x80073D02"),
+            hint("update_repeat", "info", "Contoso Notes 1.2", 9, "0x80073701"),
+            hint("store_retry", "info", "OpenAI.Codex, Contoso.Notes", 4, ""),
             hint("service_repeat", "info", "Contoso Updater", 3, ""),
         ];
         for hint in &hints {

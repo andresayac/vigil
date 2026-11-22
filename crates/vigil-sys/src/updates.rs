@@ -57,6 +57,9 @@ pub struct UpdateEntry {
     pub result: String,
     /// The error, as `0x80070643` ("" when it succeeded).
     pub code: String,
+    /// A Store app that could not update for now (open, already updating, already current): Windows
+    /// retries on its own, so it is no warning (see [`store_retry`]).
+    pub store_retry: bool,
 }
 
 /// Failures of one update.
@@ -72,6 +75,8 @@ pub struct FailureGroup {
     pub code: String,
     /// The same update installed later.
     pub fixed_later: bool,
+    /// The last failure is a Store app that could not update for now (see [`store_retry`]).
+    pub store_retry: bool,
 }
 
 /// Policies that change how updates arrive (Group Policy or MDM written to the registry).
@@ -449,6 +454,7 @@ pub fn entry_from(time_ms: i64, title: String, operation: i32, result: i32, hres
     } else {
         String::new()
     };
+    let title = readable_title(&title);
     UpdateEntry {
         time: local_time(time_ms),
         time_ms,
@@ -456,8 +462,38 @@ pub fn entry_from(time_ms: i64, title: String, operation: i32, result: i32, hres
         title,
         operation: if operation == 2 { "uninstall" } else { "install" }.into(),
         result: result.into(),
+        store_retry: store_retry(&code),
         code,
     }
+}
+
+/// Store (AppX deployment) errors that only mean "not now": the app was open
+/// (`ERROR_PACKAGES_IN_USE`), was already being updated (`ERROR_PACKAGE_UPDATING`), or the same or a
+/// newer version is already there (`ERROR_PACKAGE_ALREADY_EXISTS`, `ERROR_INSTALL_PACKAGE_DOWNGRADE`).
+/// Windows retries the first two on its own and needs nothing for the last two.
+const STORE_RETRY: [&str; 4] = ["0x80073D02", "0x80073D00", "0x80073CFB", "0x80073D06"];
+
+/// Whether an error code is one of [`STORE_RETRY`].
+pub fn store_retry(code: &str) -> bool {
+    STORE_RETRY.iter().any(|c| c.eq_ignore_ascii_case(code.trim()))
+}
+
+/// A Store update's title without its product ID: `9PLM9XGG6VKS-OpenAI.Codex` -> `OpenAI.Codex`
+/// (the package family name, without the publisher hash). Other titles stay as they are.
+pub fn readable_title(title: &str) -> String {
+    let trimmed = title.trim();
+    let Some((id, rest)) = trimmed.split_once('-') else {
+        return title.to_string();
+    };
+    let product_id = (12..=14).contains(&id.len())
+        && id.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+        && id.bytes().any(|b| b.is_ascii_digit());
+    let package = rest.trim();
+    if !product_id || package.is_empty() || package.contains(' ') || !package.contains('.') {
+        return title.to_string();
+    }
+    // `Publisher.App_8wekyb3d8bbwe` (family name) or a full name: keep the part before the hash.
+    package.split('_').next().unwrap_or(package).to_string()
 }
 
 /// The history from the System log: Windows Update events 19 (installed) and 20 (failed).
@@ -474,7 +510,7 @@ fn event_history(max: usize) -> Option<Vec<UpdateEntry>> {
 /// A Windows Update event 19 or 20 as a history entry.
 pub fn entry_from_event(xml: &str) -> Option<UpdateEntry> {
     let record = Record::parse(xml)?;
-    let title = record.get("updateTitle", usize::MAX).to_string();
+    let title = readable_title(record.get("updateTitle", usize::MAX));
     if title.is_empty() {
         return None;
     }
@@ -493,6 +529,7 @@ pub fn entry_from_event(xml: &str) -> Option<UpdateEntry> {
         title,
         operation: "install".into(),
         result: result.into(),
+        store_retry: store_retry(&code),
         code,
     })
 }
@@ -579,6 +616,7 @@ pub fn group_failures(history: &[UpdateEntry]) -> Vec<FailureGroup> {
             group.last_time = e.time.clone();
             group.code = e.code.clone();
             group.title = e.title.clone();
+            group.store_retry = e.store_retry;
         }
     }
     let mut out: Vec<FailureGroup> = groups
@@ -615,7 +653,12 @@ pub fn hints(u: &Updates, now_ms: i64) -> Vec<UpdateHint> {
     } else if u.service_start == "disabled" {
         out.push(hint("service_disabled", "warn", "", 0, ""));
     }
-    for group in u.failures.iter().filter(|g| g.count >= 2 && !g.fixed_later).take(3) {
+    for group in u
+        .failures
+        .iter()
+        .filter(|g| g.count >= 2 && !g.fixed_later && !g.store_retry)
+        .take(3)
+    {
         out.push(hint(
             "failing_repeatedly",
             "warn",
@@ -623,6 +666,12 @@ pub fn hints(u: &Updates, now_ms: i64) -> Vec<UpdateHint> {
             group.count as u64,
             &group.code,
         ));
+    }
+    // Store apps that could not update for now: one quiet line, never a warning.
+    let retried: Vec<&FailureGroup> = u.failures.iter().filter(|g| g.store_retry && !g.fixed_later).collect();
+    if !retried.is_empty() {
+        let names: Vec<&str> = retried.iter().take(3).map(|g| g.title.as_str()).collect();
+        out.push(hint("store_retry", "info", &names.join(", "), retried.len() as u64, ""));
     }
     if let Some(since) = u.reboot_since_ms
         && u.reboot_reasons.iter().any(|r| r != "file_rename")
@@ -672,8 +721,54 @@ mod tests {
             kb: kb_of(title),
             operation: "install".into(),
             result: result.into(),
+            store_retry: store_retry(code),
             code: code.into(),
         }
+    }
+
+    #[test]
+    fn store_apps_that_could_not_update_for_now_are_quiet() {
+        assert_eq!(readable_title("9PLM9XGG6VKS-OpenAI.Codex"), "OpenAI.Codex");
+        assert_eq!(
+            readable_title("9NBLGGH4NNS1-Microsoft.DesktopAppInstaller_8wekyb3d8bbwe"),
+            "Microsoft.DesktopAppInstaller"
+        );
+        assert_eq!(readable_title("XPDC2RH70K22MN-Contoso.Notes"), "Contoso.Notes");
+        for kept in [
+            "2026-01 Cumulative Update for Windows 11 (KB5040442)",
+            "Contoso driver 1.2",
+            "SOMETHINGLONG-not a package",
+            "abcdefghijkl-Contoso.Notes",
+        ] {
+            assert_eq!(readable_title(kept), kept);
+        }
+        assert!(store_retry("0x80073D02") && store_retry("0x80073d00") && store_retry("0x80073CFB"));
+        assert!(
+            !store_retry("0x80073D0A"),
+            "the firewall service not running is no retry"
+        );
+        assert!(!store_retry("0x80070643") && !store_retry(""));
+
+        let mut u = Updates {
+            history: vec![
+                entry(1, "OpenAI.Codex", "failed", "0x80073D02"),
+                entry(2, "OpenAI.Codex", "failed", "0x80073D02"),
+                entry(3, "Contoso.Notes", "failed", "0x80073CFB"),
+                entry(4, "Contoso driver 1.2", "failed", "0x80073701"),
+                entry(5, "Contoso driver 1.2", "failed", "0x80073701"),
+                entry(6, "Cumulative Update (KB5040001)", "succeeded", ""),
+            ],
+            ..Updates::default()
+        };
+        finish(&mut u, NOW);
+        let codes: Vec<&str> = u.hints.iter().map(|h| h.code).collect();
+        assert_eq!(codes, ["failing_repeatedly", "store_retry"], "{:?}", u.hints);
+        assert_eq!(u.hints[0].subject, "Contoso driver 1.2");
+        let quiet = &u.hints[1];
+        assert_eq!((quiet.severity, quiet.count), ("info", 2));
+        assert_eq!(quiet.subject, "OpenAI.Codex, Contoso.Notes");
+        let event = entry_from(NOW, "9PLM9XGG6VKS-OpenAI.Codex".into(), 1, 4, 0x8007_3D02_u32 as i32);
+        assert_eq!((event.title.as_str(), event.store_retry), ("OpenAI.Codex", true));
     }
 
     #[test]

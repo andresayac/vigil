@@ -325,10 +325,18 @@ impl Render for PosturePage {
                         .child(
                             div()
                                 .text_size(px(44.))
+                                .line_height(px(52.))
                                 .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                                 .child(num(score.n("percent"), 0)),
                         )
-                        .child(div().pb(px(10.)).text_size(px(20.)).text_color(tk.ink2).child("%")),
+                        .child(
+                            div()
+                                .pb(px(10.))
+                                .text_size(px(20.))
+                                .line_height(px(28.))
+                                .text_color(tk.ink2)
+                                .child("%"),
+                        ),
                 )
                 .child(kit::h2(tn(
                     "posture.scoreTitle",

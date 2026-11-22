@@ -1,8 +1,8 @@
 //! How the background watch is shown: its state line, relative times, the alerts' look, and the
-//! Watching card of Overview.
+//! Watching section of Overview.
 
 use gpui_kit::prelude::FluentBuilder as _;
-use gpui_kit::{App, ElementId, FontWeight, Hsla, IntoElement, ParentElement, Styled, Window, div, px};
+use gpui_kit::{AnyElement, App, ElementId, FontWeight, Hsla, IntoElement, ParentElement, Styled, Window, div, px};
 use serde_json::Value;
 
 use crate::app::Ctx;
@@ -94,42 +94,47 @@ pub fn kind_label(kind: &str) -> String {
     crate::i18n::t_or(&format!("watch.kind.{kind}"), kind)
 }
 
-/// The Watching card: the state, the recent alerts and the watch's switches.
+/// The Watching section: the state in its header, then one group with the recent alerts, the
+/// notes and the watch's switches.
 pub fn watch_card(ctx: &Ctx, status: &Value, tk: &Tokens) -> impl IntoElement {
     let tk = *tk;
     let recent = status.a("recent").iter().take(4).cloned().collect::<Vec<_>>();
     let unread = status.i("unread");
     let owner = status.b("owner");
     let watching = status.b("watching");
-    let mut card = kit::panel(&tk)
+    let head = kit::section_head(t("watch.title"), &tk)
+        .child(div().flex_1())
+        .child(kit::dot(Some(state_color(status, &tk))))
         .child(
-            kit::row()
-                .child(kit::h2(t("watch.title")))
-                .child(div().flex_1())
-                .child(kit::dot(Some(state_color(status, &tk))))
-                .child(kit::muted(state_line(status), &tk)),
-        )
-        .when(status.has("notifyPausedUntil"), |this| {
-            let c = ctx.clone();
-            this.child(
-                kit::row()
-                    .child(kit::faint(
-                        tf(
-                            "watch.notificationsPausedUntil",
-                            &[("time", &clock(status.i("notifyPausedUntil")))],
-                        ),
-                        &tk,
-                    ))
-                    .child(kit::link(
-                        "wc-resume",
-                        t("watch.resumeNotifications"),
-                        move |_, cx| c.pause_notifications(false, cx),
-                        &tk,
-                    )),
+            div()
+                .font_weight(FontWeight::NORMAL)
+                .text_size(px(12.))
+                .text_color(tk.ink2)
+                .child(state_line(status)),
+        );
+    let mut rows: Vec<AnyElement> = Vec::new();
+    if status.has("notifyPausedUntil") {
+        let c = ctx.clone();
+        rows.push(kit::footer_row(vec![
+            kit::faint(
+                tf(
+                    "watch.notificationsPausedUntil",
+                    &[("time", &clock(status.i("notifyPausedUntil")))],
+                ),
+                &tk,
             )
-        });
+            .into_any_element(),
+            kit::link(
+                "wc-resume",
+                t("watch.resumeNotifications"),
+                move |_, cx| c.pause_notifications(false, cx),
+                &tk,
+            )
+            .into_any_element(),
+        ]));
+    }
     if recent.is_empty() {
-        card = card.child(kit::muted(t("watch.nothingYet"), &tk));
+        rows.push(kit::note_row(t("watch.nothingYet"), &tk));
     }
     for (i, alert) in recent.into_iter().enumerate() {
         let (g, color) = severity_look(alert.s("severity"), &tk);
@@ -138,11 +143,15 @@ pub fn watch_card(ctx: &Ctx, status: &Value, tk: &Tokens) -> impl IntoElement {
         let id = alert.at("id").as_u64();
         let target = alert.s("target").to_string();
         let scan = alert.s("kind") == "scan";
-        card = card.child(
-            kit::list_row(
+        rows.push(
+            kit::NavRow::new(
                 ElementId::NamedInteger("wc-alert".into(), i as u64),
                 alert.s("title").to_string(),
-                false,
+            )
+            .lead(kit::lead_glyph(g, color))
+            .trail(since(alert.i("time")), tk.ink3)
+            .strong(unread)
+            .build(
                 move |window: &mut Window, cx: &mut App| {
                     if unread && let Some(id) = id {
                         c.mark_read(Some(vec![id]), cx);
@@ -159,30 +168,18 @@ pub fn watch_card(ctx: &Ctx, status: &Value, tk: &Tokens) -> impl IntoElement {
                     c.go(page, window, cx);
                 },
                 &tk,
-            )
-            .child(kit::glyph(g, 14., color))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .text_ellipsis()
-                    .whitespace_nowrap()
-                    .when(unread, |this| this.font_weight(FontWeight::SEMIBOLD))
-                    .child(kit::plain(alert.s("title").to_string())),
-            )
-            .child(kit::faint(since(alert.i("time")), &tk)),
+            ),
         );
     }
     if let Some(row) = auto_scan_row(ctx, status, "wc-auto-open", &tk) {
-        card = card.child(row);
+        rows.push(div().px(px(16.)).py(px(10.)).child(row).into_any_element());
     }
     if !status.b("tasksWatched") {
-        card = card.child(kit::faint(t("watch.tasksNeedAdmin"), &tk));
+        rows.push(kit::note_row(t("watch.tasksNeedAdmin"), &tk));
     }
     let hidden = status.strs("logsHidden");
     if !hidden.is_empty() {
-        card = card.child(kit::faint(
+        rows.push(kit::note_row(
             tf("watch.logsNeedAdmin", &[("logs", &hidden.join(", "))]),
             &tk,
         ));
@@ -194,25 +191,21 @@ pub fn watch_card(ctx: &Ctx, status: &Value, tk: &Tokens) -> impl IntoElement {
     };
     let all = ctx.clone();
     let toggle = ctx.clone();
-    card.child(
-        kit::row()
-            .pt_1()
-            .child(kit::link(
-                "wc-all",
-                see,
-                move |window, cx| all.go("alerts", window, cx),
+    let mut footer =
+        vec![kit::link("wc-all", see, move |window, cx| all.go("alerts", window, cx), &tk).into_any_element()];
+    if owner {
+        footer.push(
+            kit::link(
+                "wc-toggle",
+                t(if watching { "watch.pause" } else { "watch.resume" }),
+                move |_, cx| toggle.set_watching(!watching, cx),
                 &tk,
-            ))
-            .when(owner, |this| {
-                this.child(kit::link(
-                    "wc-toggle",
-                    t(if watching { "watch.pause" } else { "watch.resume" }),
-                    move |_, cx| toggle.set_watching(!watching, cx),
-                    &tk,
-                ))
-            }),
-    )
-    .min_w(px(0.))
+            )
+            .into_any_element(),
+        );
+    }
+    rows.push(kit::footer_row(footer));
+    kit::section(head, kit::group(rows, &tk))
 }
 
 /// One line about automatic scans (Overview card, Alerts page); "" when they are off and never ran.

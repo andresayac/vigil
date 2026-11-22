@@ -26,12 +26,20 @@ action engine are one language and one process.
   maximize button, native caption-button behaviour, the system menu and part of accessibility. Over Mica the
   native title bar already blends with the window. Vigil paints it dark or light with
   `DWMWA_USE_IMMERSIVE_DARK_MODE`, so "Dark" in Settings gives a dark title bar even when Windows is light.
-- **Tokens** (`crates/vigil-app/src/theme.rs`). WinUI 3 values for light and dark: layer, card and control fills,
-  strokes with a darker bottom edge, subtle hover and pressed fills. The accent is Windows' accent colour in the
-  theme's shade (`UISettings`); the demo keeps Fluent's default `#005FB8` / `#60CDFF`. Radii are 4 (controls) and
-  8 (cards, flyouts, dialogs). Type ramp: Title 28, Subtitle 20, Body 14, Caption 12, in Segoe UI Variable;
-  monospace text in Cascadia Mono; icons from Segoe Fluent Icons. The tokens are also projected onto
-  gpui-component's theme, so its table, inputs, menus and scroll bars draw with the same values.
+- **Tokens** (`crates/vigil-app/src/theme.rs`). WinUI 3 metrics and roles in the palette of Vigil's logo: deep
+  teal `#035568`, emerald `#03C488` and mint `#7DFABD`, with teal-tinted neutrals for the layers, cards, controls
+  and strokes. The accent is the deep teal on light and the emerald on dark; `brand` (emerald on light, mint on
+  dark) marks the selected page and the logo only. Vigil does not take the Windows accent colour: the window looks
+  the same on every computer and no accent can clash with the verdict colours. Over Mica the bases stay nearly
+  opaque, so the wallpaper does not tint the palette. Radii are 4 (controls) and 8 (cards, flyouts, dialogs).
+  Type ramp: Title 28, Subtitle 20, Body 14, Caption 12, in Segoe UI Variable; monospace text in Cascadia Mono;
+  icons from Segoe Fluent Icons. The tokens are also projected onto gpui-component's theme, so its table, inputs,
+  menus and scroll bars draw with the same values.
+- **Layout.** Pages read like Windows Settings, not like a web page: a page title, then sections whose title sits
+  above a group of rows in one card (`kit::section`, `kit::group`). A row that opens something is a whole-row
+  button with a leading glyph, a title, a line under it and a chevron (`kit::NavRow`); links are WinUI
+  HyperlinkButtons (accent text, a faint fill under the pointer, no underline) for secondary commands only.
+  Notices (InfoBars) sit above the page and push it down; they never float over it.
 - **Colour still carries meaning.** Verdict colours only for verdicts, and `ok`, `warn` and `bad` only for state.
   Each resource has its own hue for live measurements: CPU blue, memory purple, disk green, network orange, GPU
   teal, as in Task Manager. The accent is used only for interactive elements.

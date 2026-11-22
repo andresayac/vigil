@@ -67,8 +67,12 @@ impl Runner for SystemRunner {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .creation_flags(CREATE_NO_WINDOW);
-        if let Some(env) = env {
-            command.env_clear().envs(env);
+        match env {
+            // A complete environment, already built from the child environment (`ps_command`).
+            Some(env) => {
+                command.env_clear().envs(env);
+            }
+            None => vigil_sys::paths::apply_child_env(&mut command),
         }
         let mut child = command
             .spawn()
@@ -223,7 +227,11 @@ pub fn powershell_path() -> String {
 
 /// The arguments and environment of a PowerShell snippet. Values become `$env:PC_<NAME>`.
 pub(crate) fn ps_command(script: &str, values: &[(&str, &str)]) -> (Vec<String>, BTreeMap<String, String>) {
-    let mut env: BTreeMap<String, String> = std::env::vars()
+    // The child environment: elevated, only what Windows reports (never the user's own
+    // environment, which could load a profiler DLL into PowerShell); otherwise Vigil's own minus
+    // the loader variables. Then Windows' module folder and Vigil's `PC_*` values.
+    let mut env: BTreeMap<String, String> = vigil_sys::paths::child_env()
+        .into_iter()
         .filter(|(key, _)| !key.to_uppercase().starts_with("PC_"))
         .collect();
     // Windows' own module folder and folders, whatever the user's environment says: a module in
@@ -303,7 +311,9 @@ pub(crate) fn basename(path: &str) -> &str {
 /// Starts a program and returns at once (uninstallers, Explorer, consoles).
 pub(crate) fn launch(program: &str, args: &[&str]) -> Result<()> {
     const DETACHED: u32 = 0x0000_0008 | 0x0000_0200; // DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
-    Command::new(program)
+    let mut command = Command::new(program);
+    vigil_sys::paths::apply_child_env(&mut command);
+    command
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -324,6 +334,7 @@ pub(crate) fn launch(program: &str, args: &[&str]) -> Result<()> {
 pub(crate) fn launch_raw(program: &str, raw_args: &str) -> Result<()> {
     const DETACHED: u32 = 0x0000_0008 | 0x0000_0200;
     let mut command = Command::new(program);
+    vigil_sys::paths::apply_child_env(&mut command);
     if !raw_args.trim().is_empty() {
         command.raw_arg(raw_args.trim());
     }

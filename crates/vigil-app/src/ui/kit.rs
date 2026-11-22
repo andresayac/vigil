@@ -1,5 +1,5 @@
 //! The building blocks of the report and maintenance pages: headings, muted and faint text,
-//! selectable text, panels, chips, links, badges, read-outs, label/value grids, list rows, meters,
+//! selectable text, panels, sections and grouped rows, chips, links, badges, read-outs, label/value grids, list rows, meters,
 //! an indeterminate progress bar and a stacked bar chart. Everything draws plain text, and every
 //! text helper shows hidden or direction-changing characters as visible markers ([`plain`]): names
 //! and paths come from the computer, and `invoice\u{202E}fdp.exe` must not read "invoiceexe.pdf".
@@ -125,18 +125,13 @@ pub fn chart_top(max: f64) -> f64 {
     if c as i64 % 2 == 1 { (c + 1.0).max(2.0) } else { c }
 }
 
-pub fn h1(text: impl Into<SharedString>) -> Div {
-    let text = plain(text);
-    div()
-        .font_family(crate::theme::FONT_DISPLAY)
-        .text_size(px(24.))
-        .font_weight(FontWeight::SEMIBOLD)
-        .child(text)
-}
-
 pub fn h2(text: impl Into<SharedString>) -> Div {
     let text = plain(text);
-    div().text_size(px(16.)).font_weight(FontWeight::SEMIBOLD).child(text)
+    div()
+        .text_size(px(16.))
+        .line_height(px(22.))
+        .font_weight(FontWeight::SEMIBOLD)
+        .child(text)
 }
 
 pub fn h3(text: impl Into<SharedString>) -> Div {
@@ -216,10 +211,10 @@ pub fn page(id: &'static str) -> Stateful<Div> {
         .overflow_y_scroll()
         .flex()
         .flex_col()
-        .gap_3()
-        .px(px(20.))
-        .pt(px(12.))
-        .pb(px(20.))
+        .gap_4()
+        .px(px(28.))
+        .pt(px(16.))
+        .pb(px(28.))
 }
 
 /// Two columns sharing the width (`left` share of it), stacked when the window is narrow.
@@ -228,12 +223,12 @@ pub fn columns(left: f32, a: impl IntoElement, b: impl IntoElement, window: &Win
     if wide {
         div()
             .flex()
-            .gap_3()
+            .gap(px(20.))
             .items_start()
             .child(div().flex_basis(relative(left)).flex_grow(1.).min_w_0().child(a))
             .child(div().flex_basis(relative(1. - left)).flex_grow(1.).min_w_0().child(b))
     } else {
-        div().flex().flex_col().gap_3().child(a).child(b)
+        div().flex().flex_col().gap_4().child(a).child(b)
     }
 }
 
@@ -281,11 +276,15 @@ pub fn chip(
         .rounded(px(14.))
         .text_size(px(13.))
         .border_1()
-        .border_color(if on { tk.accent } else { tk.control_stroke })
+        // On: a check and a faint accent wash (several filters can be on without a wall of colour).
+        .border_color(if on { tk.accent.opacity(0.45) } else { tk.control_stroke })
         .bg(if on { tk.table_select } else { tk.control })
         .text_color(if disabled { tk.ink_disabled } else { tk.ink })
-        .when(!disabled, |this| this.hover(move |s| s.bg(tk.control_hover)))
+        .when(!disabled, |this| {
+            this.hover(move |s| s.bg(if on { tk.accent.opacity(0.22) } else { tk.control_hover }))
+        })
         .on_click(move |_, window, cx| on_click(window, cx))
+        .when(on, |this| this.child(icons::icon(icons::CHECK, 10.0, tk.accent)))
         .child(label)
         .when_some(count, |this, n| {
             this.child(div().text_color(tk.ink3).child(n.to_string()))
@@ -293,7 +292,8 @@ pub fn chip(
         .into_any_element()
 }
 
-/// A text link (accent colour) that runs `on_click`.
+/// WinUI's HyperlinkButton: accent text that gets a faint fill under the pointer (no underline),
+/// its text aligned with the text around it.
 pub fn link(
     id: impl Into<ElementId>,
     label: impl Into<SharedString>,
@@ -301,17 +301,247 @@ pub fn link(
     tk: &Tokens,
 ) -> Div {
     let label = label.into();
-    let accent = tk.accent;
+    let tk = *tk;
     div().flex().flex_none().child(
         BaseButton::new(id)
             .role(Role::Link)
             .accessibility_label(label.clone())
+            .ml(px(-6.))
+            .px(px(6.))
+            .py(px(2.))
+            .rounded(RADIUS)
             .text_size(px(13.))
-            .text_color(accent)
-            .hover(|s| s.underline())
+            .text_color(tk.accent)
+            .hover(move |s| s.bg(tk.hover))
+            .active(move |s| s.bg(tk.pressed))
             .on_click(move |_, window, cx| on_click(window, cx))
             .child(label),
     )
+}
+
+/// The header of a section: its title above the cards, as Windows Settings groups its cards.
+/// More elements can follow it on the right (after a `div().flex_1()`).
+pub fn section_head(title: impl Into<SharedString>, tk: &Tokens) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap_2()
+        .min_h(px(24.))
+        .px_1()
+        .text_size(px(14.))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(tk.ink)
+        .child(div().flex_none().child(plain(title)))
+}
+
+/// A section: its header and what follows it.
+pub fn section(head: Div, body: impl IntoElement) -> Div {
+    div().flex().flex_col().gap_2().min_w_0().child(head).child(body)
+}
+
+/// A group of rows in one card, a hairline between them (Windows Settings' grouped cards).
+pub fn group(rows: Vec<AnyElement>, tk: &Tokens) -> Div {
+    let tk = *tk;
+    div()
+        .flex()
+        .flex_col()
+        .min_w_0()
+        .bg(tk.surface)
+        .border_1()
+        .border_color(tk.rule)
+        .rounded(RADIUS_CARD)
+        .overflow_hidden()
+        .children(rows.into_iter().enumerate().map(move |(i, row)| {
+            div()
+                .when(i > 0, |this| this.border_t_1().border_color(tk.rule))
+                .child(row)
+        }))
+}
+
+/// The leading mark of a row: a glyph in a colour, centred in a fixed box so titles line up.
+pub fn lead_glyph(g: char, color: Hsla) -> AnyElement {
+    div()
+        .w(px(20.))
+        .flex_none()
+        .flex()
+        .justify_center()
+        .child(icons::icon(g, 16.0, color))
+        .into_any_element()
+}
+
+/// A number in a small circle (the order of a step).
+pub fn lead_number(n: usize, tk: &Tokens) -> AnyElement {
+    div()
+        .w(px(20.))
+        .h(px(20.))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_full()
+        .bg(tk.brand_soft)
+        .text_size(px(11.))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(tk.ink)
+        .child(n.to_string())
+        .into_any_element()
+}
+
+/// The text of a row: a title and an optional line under it, both cut with an ellipsis.
+fn row_text(title: SharedString, subtitle: Option<String>, strong: bool, tk: &Tokens) -> Div {
+    div()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .child(
+            div()
+                .text_size(px(14.))
+                .overflow_hidden()
+                .text_ellipsis()
+                .whitespace_nowrap()
+                .when(strong, |this| this.font_weight(FontWeight::SEMIBOLD))
+                .child(title),
+        )
+        .when_some(subtitle.filter(|s| !s.is_empty()), |this, sub| {
+            this.child(
+                div()
+                    .text_size(px(12.))
+                    .line_height(px(16.))
+                    .text_color(tk.ink2)
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .whitespace_nowrap()
+                    .child(plain(sub)),
+            )
+        })
+}
+
+/// A row of a group that opens something: a leading mark, a title, a line under it, a note on the
+/// right and a chevron. The whole row is the button (keyboard reachable, named by its title).
+pub struct NavRow {
+    id: ElementId,
+    title: SharedString,
+    subtitle: Option<String>,
+    lead: Option<AnyElement>,
+    trail: Option<(String, Hsla)>,
+    strong: bool,
+}
+
+impl NavRow {
+    pub fn new(id: impl Into<ElementId>, title: impl Into<SharedString>) -> Self {
+        Self {
+            id: id.into(),
+            title: plain(title),
+            subtitle: None,
+            lead: None,
+            trail: None,
+            strong: false,
+        }
+    }
+
+    pub fn subtitle(mut self, text: impl Into<String>) -> Self {
+        self.subtitle = Some(text.into());
+        self
+    }
+
+    pub fn lead(mut self, lead: AnyElement) -> Self {
+        self.lead = Some(lead);
+        self
+    }
+
+    /// A short note before the chevron (a count, a time, a verdict) in `color`.
+    pub fn trail(mut self, text: impl Into<String>, color: Hsla) -> Self {
+        self.trail = Some((text.into(), color));
+        self
+    }
+
+    /// A semibold title (an unread alert).
+    pub fn strong(mut self, strong: bool) -> Self {
+        self.strong = strong;
+        self
+    }
+
+    pub fn build(self, on_click: impl Fn(&mut Window, &mut App) + 'static, tk: &Tokens) -> AnyElement {
+        let tk = *tk;
+        let name: SharedString = match &self.subtitle {
+            Some(sub) if !sub.is_empty() => format!("{}. {}", self.title, plain(sub.clone())).into(),
+            _ => self.title.clone(),
+        };
+        let tall = self.subtitle.as_deref().is_some_and(|s| !s.is_empty());
+        BaseButton::new(self.id)
+            .role(Role::Button)
+            .accessibility_label(name)
+            .w_full()
+            .flex()
+            .items_center()
+            .justify_start()
+            .gap_3()
+            .min_h(px(if tall { 56. } else { 44. }))
+            .px(px(16.))
+            .py(px(8.))
+            .text_color(tk.ink)
+            .hover(move |s| s.bg(tk.hover))
+            .active(move |s| s.bg(tk.pressed))
+            .on_click(move |_, window, cx| on_click(window, cx))
+            .children(self.lead)
+            .child(row_text(self.title, self.subtitle, self.strong, &tk))
+            .when_some(self.trail, |this, (text, color)| {
+                this.child(
+                    div()
+                        .flex_none()
+                        .text_size(px(12.))
+                        .text_color(color)
+                        .whitespace_nowrap()
+                        .child(plain(text)),
+                )
+            })
+            .child(icons::icon(icons::CHEVRON_RIGHT, 12.0, tk.ink3))
+            .into_any_element()
+    }
+}
+
+/// A row of a group that only informs: a leading mark, a title and a line under it.
+pub fn info_row(
+    lead: Option<AnyElement>,
+    title: impl Into<SharedString>,
+    subtitle: Option<String>,
+    tk: &Tokens,
+) -> AnyElement {
+    div()
+        .flex()
+        .items_center()
+        .gap_3()
+        .min_h(px(44.))
+        .px(px(16.))
+        .py(px(8.))
+        .children(lead)
+        .child(row_text(plain(title), subtitle, false, tk))
+        .into_any_element()
+}
+
+/// A row of a group that holds text that may wrap (a note), muted.
+pub fn note_row(text: impl Into<SharedString>, tk: &Tokens) -> AnyElement {
+    div()
+        .px(px(16.))
+        .py(px(10.))
+        .text_size(px(13.))
+        .text_color(tk.ink2)
+        .child(plain(text))
+        .into_any_element()
+}
+
+/// The last row of a group: links or buttons in a line.
+pub fn footer_row(children: Vec<AnyElement>) -> AnyElement {
+    div()
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .gap_4()
+        .px(px(16.))
+        .py(px(8.))
+        .children(children)
+        .into_any_element()
 }
 
 /// A small label in a border (a badge in a list row).
@@ -376,32 +606,44 @@ impl Readout {
     }
 }
 
-/// Read-outs: a column of state dots, names and selectable values.
+/// The glyph of a state colour: a check for `ok`, a warning for `warn`, an error for `bad`
+/// (meaning never rests on the colour alone); any other colour is a dot.
+pub fn state_glyph(color: Option<Hsla>, tk: &Tokens) -> Div {
+    let glyph = match color {
+        Some(c) if c == tk.ok => Some(icons::SUCCESS),
+        Some(c) if c == tk.warn => Some(icons::WARNING),
+        Some(c) if c == tk.bad => Some(icons::ERROR),
+        _ => None,
+    };
+    div()
+        .w(px(16.))
+        .flex_none()
+        .flex()
+        .justify_center()
+        .when_some(glyph.zip(color), |this, (g, c)| this.child(icons::icon(g, 14.0, c)))
+        .when(glyph.is_none() && color.is_some(), |this| this.child(dot(color)))
+}
+
+/// Read-outs: lines of a state glyph, a name and a selectable value, a hairline between them.
 pub fn readouts(id: &'static str, rows: Vec<Readout>, name_width: f32, tk: &Tokens) -> Div {
     let tk = *tk;
     div()
         .flex()
         .flex_col()
-        .gap(px(2.))
         .children(rows.into_iter().enumerate().map(move |(i, r)| {
             let tip = r.tip.clone().unwrap_or_else(|| r.value.clone());
             div()
                 .id(ElementId::NamedInteger(id.into(), i as u64))
                 .flex()
                 .items_center()
-                .gap_2()
-                .min_h(px(24.))
+                .gap_3()
+                .min_h(px(36.))
+                .py(px(6.))
                 .text_size(px(13.))
+                .when(i > 0, |this| this.border_t_1().border_color(tk.rule))
                 .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
-                .child(dot(r.status))
-                .child(
-                    div()
-                        .w(px(name_width))
-                        .flex_none()
-                        .text_size(px(12.))
-                        .text_color(tk.ink3)
-                        .child(r.name),
-                )
+                .child(state_glyph(r.status, &tk))
+                .child(div().w(px(name_width)).flex_none().text_color(tk.ink2).child(r.name))
                 .child(sel(ElementId::NamedInteger(format!("{id}-v").into(), i as u64), r.value).flex_1())
         }))
 }

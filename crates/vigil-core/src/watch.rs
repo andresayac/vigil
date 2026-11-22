@@ -221,6 +221,11 @@ pub struct Alert {
     /// user's `watch.json` (see [`split_private`]).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub private: bool,
+    /// A copy, kept by an elevated copy in its administrators-only state, of an alert it also wrote
+    /// to the user's `watch.json`. The window shows this copy instead of the user's, so a program
+    /// running as the user cannot hide an alert about itself by editing that file.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mirror: bool,
 }
 
 pub(crate) fn alert(kind: &str, severity: &str, target: &str, title: String, detail: String) -> Alert {
@@ -234,6 +239,7 @@ pub(crate) fn alert(kind: &str, severity: &str, target: &str, title: String, det
         target: target.into(),
         read: false,
         private: false,
+        mirror: false,
     }
 }
 
@@ -283,6 +289,11 @@ pub struct TaskPrint {
     pub actions: String,
     /// The first program or DLL it runs outside the Windows folder ("" when there is none).
     pub outside: String,
+    /// A task outside `\Microsoft\` whose every action runs a Microsoft-signed program or COM DLL in
+    /// the Windows folder, none of them a host that runs whatever its command line names (rundll32,
+    /// PowerShell...): Windows' own (like the `\SoftLanding\` tips tasks). It is shown quietly.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub windows_own: bool,
 }
 
 /// What the watch compares. A section is `None` when it was not read (no rights, or an error):
@@ -413,6 +424,11 @@ fn policy_location(location: &str) -> bool {
 
 fn microsoft_task(key: &str) -> bool {
     key.starts_with(r"\microsoft\")
+}
+
+/// An alert the window lists without a notification: a new task Windows itself created.
+fn quiet(alert: &Alert) -> bool {
+    alert.kind == "task" && alert.severity == "info"
 }
 
 fn last_part(path: &str) -> &str {
@@ -675,9 +691,25 @@ fn diff_items(old: &Fingerprint, new: &Fingerprint) -> Vec<Alert> {
             }
         }
     }
-    if let (Some(old), Some(new)) = (&old.tasks, &new.tasks) {
-        for (key, path) in new {
-            if !old.contains_key(key) {
+    if let (Some(old_tasks), Some(new_tasks)) = (&old.tasks, &new.tasks) {
+        for (key, path) in new_tasks {
+            if old_tasks.contains_key(key) {
+                continue;
+            }
+            let windows_own = new
+                .task_files
+                .as_ref()
+                .and_then(|files| files.get(key))
+                .is_some_and(|task| task.windows_own);
+            if windows_own {
+                out.push(alert(
+                    "task",
+                    "info",
+                    "tasks",
+                    tr!("New Windows scheduled task: {0}", last_part(path)),
+                    tr!("{0} runs only Microsoft-signed programs from the Windows folder", path),
+                ));
+            } else {
                 out.push(alert(
                     "task",
                     "warning",
@@ -1226,6 +1258,8 @@ fn read_tasks(
     let windows = format!("{}\\", windows_folder().display()).to_lowercase();
     let mut names = BTreeMap::new();
     let mut files = BTreeMap::new();
+    // Freshly read task files outside \Microsoft\ that run only Windows programs: key -> programs.
+    let mut candidates: Vec<(String, Vec<String>)> = Vec::new();
     std::fs::read_dir(root).ok()?;
     let mut pending = vec![(root.to_path_buf(), String::new())];
     while let Some((folder, prefix)) = pending.pop() {
@@ -1264,19 +1298,54 @@ fn read_tasks(
                         .find(|p| !p.to_lowercase().starts_with(&windows))
                         .cloned()
                         .unwrap_or_default();
+                    if !microsoft_task(&key)
+                        && outside.is_empty()
+                        && !actions.programs.is_empty()
+                        && actions.programs.len() == actions.summary.lines().count()
+                        && !actions.programs.iter().any(|p| vigil_sys::startup::is_host(p))
+                    {
+                        candidates.push((key.clone(), actions.programs.clone()));
+                    }
                     TaskPrint {
                         path: path.clone(),
                         size,
                         modified,
                         actions: actions.summary,
                         outside,
+                        windows_own: false,
                     }
                 }
             };
             files.insert(key, print);
         }
     }
+    mark_windows_own(&mut files, &candidates);
     Some((names, files))
+}
+
+/// Sets `windows_own` on the candidates whose programs are all Microsoft-signed.
+fn mark_windows_own(files: &mut BTreeMap<String, TaskPrint>, candidates: &[(String, Vec<String>)]) {
+    let mut programs: Vec<String> = candidates.iter().flat_map(|(_, p)| p.iter().cloned()).collect();
+    programs.sort_by_key(|p| p.to_lowercase());
+    programs.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+    if programs.is_empty() {
+        return;
+    }
+    let checked = vigil_actions::verify_signatures(&programs);
+    let signed = |program: &String| {
+        programs
+            .iter()
+            .position(|p| p.eq_ignore_ascii_case(program))
+            .and_then(|i| checked.get(i))
+            .is_some_and(|info| vigil_actions::is_microsoft_signed(info.as_ref()))
+    };
+    for (key, list) in candidates {
+        if list.iter().all(signed)
+            && let Some(print) = files.get_mut(key)
+        {
+            print.windows_own = true;
+        }
+    }
 }
 
 const POLICY_FIREWALL: &str = r"HKLM\SOFTWARE\Policies\Microsoft\WindowsFirewall";
@@ -2681,6 +2750,23 @@ fn newest_first(alerts: &mut [Alert]) {
     alerts.sort_by(|a, b| b.time.cmp(&a.time).then(b.id.cmp(&a.id)));
 }
 
+/// What an elevated window shows: its administrators-only alerts and its own copies of the alerts
+/// it wrote to the user's file (`mirror`), plus the user's file's other alerts (those the copy
+/// without rights raised). A user's-file alert that has a copy here is dropped in favour of the
+/// copy, so editing, deleting or marking read the user's file never hides what the elevated copy
+/// recorded.
+pub fn merge_alerts(shared: Vec<Alert>, private: Vec<Alert>) -> Vec<Alert> {
+    let copies: std::collections::HashSet<(u64, i64)> =
+        private.iter().filter(|a| a.mirror).map(|a| (a.id, a.time)).collect();
+    let mut all: Vec<Alert> = shared
+        .into_iter()
+        .filter(|a| !copies.contains(&(a.id, a.time)))
+        .collect();
+    all.extend(private);
+    newest_first(&mut all);
+    all
+}
+
 /// What an elevated check saves (see `Watcher::check_elevated`): `previous` is its own baseline
 /// from the administrators-only `private` state, `current` what it read now. Returns the new alerts
 /// (most severe first) and the problem to show, if a state could not be saved.
@@ -2713,6 +2799,15 @@ pub(crate) fn record_elevated(
         Err(problem) => (Vec::new(), Vec::new(), Some(problem)),
     };
     let unsaved = if problem.is_some() { shared_alerts } else { Vec::new() };
+    // Every alert written to the user's file is also kept here: that file can be edited by any
+    // program the user runs, this one cannot.
+    let mirrors: Vec<Alert> = out
+        .iter()
+        .map(|alert| Alert {
+            mirror: true,
+            ..alert.clone()
+        })
+        .collect();
     let result = private.update(|file| {
         file.baseline = next;
         file.next_id = file.next_id.max(PRIVATE_IDS);
@@ -2720,7 +2815,9 @@ pub(crate) fn record_elevated(
             alert.private = true;
             file.alerts.push(alert);
         }
+        file.alerts.extend(mirrors);
         newest_first(&mut file.alerts);
+        keep_alerts(&mut file.alerts);
         let mut all = private_alerts;
         all.extend(unsaved);
         file.add_alerts(all, now)
@@ -2770,16 +2867,108 @@ pub fn claim_watch() -> bool {
         return false;
     }
     eprintln!("the watch's name is held by a program that is not Vigil; watching under a fallback name");
-    let fallback = if vigil_sys::elevation::is_elevated() {
-        w!("Local\\Vigil.Watch.Elevated")
+    let elevated = vigil_sys::elevation::is_elevated();
+    let private = if elevated { create_private_watch_mutex() } else { None };
+    let standard = if elevated {
+        Claim::Taken
     } else {
-        w!("Local\\Vigil.Watch.Standard")
+        create_watch_mutex(w!("Local\\Vigil.Watch.Standard"))
     };
-    let created = create_watch_mutex(fallback) == Claim::Created;
-    if created {
+    let watching = watch_after_squat(elevated, private, standard);
+    if watching {
         HELD.store(true, Ordering::Release);
     }
-    created
+    watching
+}
+
+/// After the shared name turned out to be held by another program: whether this copy watches.
+/// An elevated copy uses a mutex in a private namespace only administrators can create (`private`;
+/// a program without rights cannot take that name first), and watches anyway when even that can't
+/// be made (`None`): a squatter never stops the elevated watch. A copy without rights uses its own
+/// fallback name (`standard`).
+pub fn watch_after_squat(elevated: bool, private: Option<Claim>, standard: Claim) -> bool {
+    if elevated {
+        private != Some(Claim::Taken)
+    } else {
+        standard == Claim::Created
+    }
+}
+
+/// The elevated copy's watch mutex, inside a private namespace whose boundary is the
+/// Administrators group: only a process with that group enabled can create or open it, so a
+/// program running with the user's normal rights cannot create the name first. `None` when the
+/// namespace can't be made. The namespace and the mutex stay open for the life of the process.
+fn create_private_watch_mutex() -> Option<Claim> {
+    use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError, HLOCAL, LocalFree};
+    use windows::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
+    use windows::Win32::Security::{
+        CreateWellKnownSid, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES, WinBuiltinAdministratorsSid,
+    };
+    use windows::Win32::System::Threading::{
+        AddSIDToBoundaryDescriptor, CreateBoundaryDescriptorW, CreateMutexW, CreatePrivateNamespaceW,
+        OpenPrivateNamespaceW,
+    };
+    use windows::core::w;
+    // SECURITY_MAX_SID_SIZE.
+    let mut sid = [0u8; 68];
+    let mut size = sid.len() as u32;
+    // SAFETY: `sid` is writable for `size` bytes; a built-in group needs no domain SID.
+    unsafe {
+        CreateWellKnownSid(
+            WinBuiltinAdministratorsSid,
+            None,
+            Some(PSID(sid.as_mut_ptr().cast())),
+            &mut size,
+        )
+    }
+    .ok()?;
+    // SAFETY: a static NUL-terminated name. The descriptor is kept for the life of the process,
+    // which the namespace needs.
+    let mut boundary = unsafe { CreateBoundaryDescriptorW(w!("Vigil.Watch"), 0) };
+    if boundary.is_invalid() {
+        return None;
+    }
+    // SAFETY: `boundary` is the descriptor just created; the API copies the SID from `sid`.
+    unsafe { AddSIDToBoundaryDescriptor(&mut boundary, PSID(sid.as_mut_ptr().cast())) }.ok()?;
+    let text: Vec<u16> = "D:P(A;;GA;;;SY)(A;;GA;;;BA)"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let mut sd = PSECURITY_DESCRIPTOR::default();
+    // SAFETY: `text` is NUL-terminated; the descriptor is LocalAlloc'd and freed below.
+    unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(windows::core::PCWSTR(text.as_ptr()), 1, &mut sd, None)
+    }
+    .ok()?;
+    let attributes = SECURITY_ATTRIBUTES {
+        nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: sd.0,
+        bInheritHandle: false.into(),
+    };
+    // SAFETY: `attributes` and the boundary live for the call; the alias is static.
+    let mut namespace =
+        unsafe { CreatePrivateNamespaceW(Some(&attributes), boundary.0.cast_const(), w!("VigilWatch")) };
+    if namespace.is_invalid() {
+        // Another elevated copy made it first (the same boundary): open it.
+        // SAFETY: as above.
+        namespace = unsafe { OpenPrivateNamespaceW(boundary.0.cast_const(), w!("VigilWatch")) };
+    }
+    // SAFETY: the descriptor came from the conversion above and is freed once.
+    unsafe {
+        let _ = LocalFree(Some(HLOCAL(sd.0)));
+    }
+    if namespace.is_invalid() {
+        return None;
+    }
+    // SAFETY: a static name in the private namespace; the handle is kept when the mutex is created.
+    let handle = unsafe { CreateMutexW(None, false, w!("VigilWatch\\Watch")) };
+    // SAFETY: reads this thread's last error, set by CreateMutexW above.
+    let existed = unsafe { GetLastError() } == ERROR_ALREADY_EXISTS;
+    match handle {
+        Ok(handle) if !handle.is_invalid() && !existed => Some(Claim::Created),
+        Ok(_) => Some(Claim::Taken),
+        Err(_) => None,
+    }
 }
 
 /// Creates the named mutex with a DACL for SYSTEM, Administrators and this user; the handle is
@@ -2963,14 +3152,13 @@ impl Watcher {
     }
 
     /// Every alert this copy may show, newest first: the shared ones, plus the administrators-only
-    /// ones for an elevated copy.
+    /// ones for an elevated copy (whose own copies replace the user's file's, see [`merge_alerts`]).
     pub fn alerts(&self) -> Vec<Alert> {
-        let mut all = self.store.load().alerts;
-        if let Some(private) = self.private_store() {
-            all.extend(private.load().alerts);
-            newest_first(&mut all);
+        let shared = self.store.load().alerts;
+        match self.private_store() {
+            Some(private) => merge_alerts(shared, private.load().alerts),
+            None => shared,
         }
-        all
     }
 
     /// Marks alerts read (`None`: all of them), in both states.
@@ -3156,7 +3344,10 @@ impl Watcher {
             limiter.clear();
             return Vec::new();
         }
-        let wanted = alerts.into_iter().filter(|a| file.settings.notifies(&a.kind)).collect();
+        let wanted = alerts
+            .into_iter()
+            .filter(|a| file.settings.notifies(&a.kind) && !quiet(a))
+            .collect();
         limiter.offer(wanted, monotonic_ms())
     }
 
@@ -3418,6 +3609,7 @@ mod tests {
             modified: 1,
             actions: actions.into(),
             outside: outside.into(),
+            windows_own: false,
         }
     }
 
@@ -3541,6 +3733,87 @@ mod tests {
         assert_eq!(again[r"\updater"].actions, "kept");
         assert!(task_files(&root.join("missing")).is_none());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn new_windows_own_tasks_are_quiet_info() {
+        vigil_i18n::with_language("en", || {
+            let old = Fingerprint {
+                tasks: Some(BTreeMap::new()),
+                task_files: Some(BTreeMap::new()),
+                ..Fingerprint::default()
+            };
+            let mut new = old.clone();
+            let soft = r"\SoftLanding\S-1-5-21-1000\ActionCenterTask";
+            let mut own = task_print(soft, "com {00000000-0000-0000-0000-000000000000}", "");
+            own.windows_own = true;
+            let other = r"\Vendor\Updater";
+            new.tasks = Some(BTreeMap::from([
+                (soft.to_lowercase(), soft.to_string()),
+                (other.to_lowercase(), other.to_string()),
+            ]));
+            new.task_files = Some(BTreeMap::from([
+                (soft.to_lowercase(), own),
+                (
+                    other.to_lowercase(),
+                    task_print(other, "exec updater.exe", r"C:\Program Files\Vendor\updater.exe"),
+                ),
+            ]));
+            let alerts = diff(&old, &new);
+            assert_eq!(alerts.len(), 2, "{alerts:?}");
+            let quiet_one = alerts
+                .iter()
+                .find(|a| a.title.contains("ActionCenterTask"))
+                .expect("own");
+            assert_eq!(quiet_one.severity, "info");
+            assert_eq!(quiet_one.title, "New Windows scheduled task: ActionCenterTask");
+            assert!(quiet(quiet_one), "no notification for Windows' own task");
+            let loud = alerts.iter().find(|a| a.title.contains("Updater")).expect("vendor");
+            assert_eq!(loud.severity, "warning");
+            assert!(!quiet(loud));
+        });
+    }
+
+    #[test]
+    fn windows_own_needs_microsoft_signed_programs_and_no_host() {
+        use std::rc::Rc;
+        let root = std::env::temp_dir().join(format!("vigil-watch-own-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join(r"SoftLanding\S-1-5-21-1000")).ok();
+        let task = |command: &str, arguments: &str| {
+            format!(
+                r#"<?xml version="1.0"?><Task><Actions><Exec><Command>{command}</Command><Arguments>{arguments}</Arguments></Exec></Actions></Task>"#
+            )
+        };
+        std::fs::write(
+            root.join(r"SoftLanding\S-1-5-21-1000\ActionCenterTask"),
+            task(r"%windir%\system32\defrag.exe", ""),
+        )
+        .ok();
+        // A Microsoft-signed host that runs whatever it is given is never Windows' own.
+        std::fs::write(
+            root.join("Planted"),
+            task(r"%windir%\system32\rundll32.exe", r"C:\Users\Public\x.dll,Run"),
+        )
+        .ok();
+        std::fs::write(root.join("Unsigned"), task(r"%windir%\system32\odd.exe", "")).ok();
+        vigil_actions::testing::set_signature(Some(Rc::new(|path: &str| {
+            let microsoft = path.to_lowercase().ends_with("defrag.exe");
+            Some(vigil_actions::SignatureInfo {
+                path: path.into(),
+                sig_status: Some(if microsoft { "Valid" } else { "NotSigned" }.into()),
+                signer: Some("Microsoft Windows".into()),
+                issuer: Some("Microsoft Windows Production PCA 2011".into()),
+                ..vigil_actions::SignatureInfo::default()
+            })
+        })));
+        let read = read_tasks(&root, None);
+        vigil_actions::testing::set_signature(None);
+        let _ = std::fs::remove_dir_all(&root);
+        let (_, files) = read.expect("readable");
+        assert!(files[r"\softlanding\s-1-5-21-1000\actioncentertask"].windows_own);
+        assert!(!files[r"\planted"].windows_own);
+        assert!(!files[r"\unsigned"].windows_own);
     }
 
     #[test]
@@ -5146,6 +5419,58 @@ mod more_tests {
         assert!(alerts.iter().any(|a| a.kind == "service"), "{alerts:?}");
         assert!(private.load().alerts.iter().any(|a| a.kind == "service"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn editing_the_users_file_never_hides_an_alert_the_elevated_copy_raised() {
+        let (dir, shared, private) = temp_stores("mirror");
+        let mut now = private_fixture();
+        now.services
+            .as_mut()
+            .expect("services")
+            .insert("evil".into(), svc("Evil", "auto", r"C:\Users\jdoe\evil.exe"));
+        let (alerts, problem) = record_elevated(&shared, &private, private_fixture(), now, 400);
+        assert!(problem.is_none());
+        let raised = alerts
+            .iter()
+            .find(|a| a.kind == "service")
+            .expect("service alert")
+            .clone();
+        assert!(!raised.private, "an ordinary alert goes to the user's file too");
+        assert!(shared.load().alerts.iter().any(|a| a.id == raised.id));
+        // Malware running as the user marks it read, then deletes it from the user's file.
+        shared
+            .update(|file| file.alerts.iter_mut().for_each(|a| a.read = true))
+            .expect("mark");
+        shared.update(|file| file.alerts.clear()).expect("delete");
+        let shown = merge_alerts(shared.load().alerts, private.load().alerts);
+        let kept = shown.iter().find(|a| a.id == raised.id).expect("still shown");
+        assert!(!kept.read && kept.mirror, "{kept:?}");
+        // Shown once when both copies are there.
+        let (_, _) = record_elevated(&shared, &private, private.load().baseline, private.load().baseline, 500);
+        let both = merge_alerts(
+            vec![Alert {
+                mirror: false,
+                ..raised.clone()
+            }],
+            private.load().alerts,
+        );
+        assert_eq!(both.iter().filter(|a| a.id == raised.id).count(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_squatter_never_stops_the_elevated_watch() {
+        // The elevated copy watches in its private namespace, or anyway when that can't be made.
+        assert!(watch_after_squat(true, Some(Claim::Created), Claim::Taken));
+        assert!(watch_after_squat(true, None, Claim::Taken));
+        assert!(
+            !watch_after_squat(true, Some(Claim::Taken), Claim::Taken),
+            "another elevated Vigil watches"
+        );
+        // A copy without rights uses its own fallback name.
+        assert!(watch_after_squat(false, None, Claim::Created));
+        assert!(!watch_after_squat(false, None, Claim::Taken));
     }
 
     #[test]

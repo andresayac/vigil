@@ -7508,14 +7508,14 @@
     "id": "System:1025",
     "category": "update",
     "kind": "install_failed",
-    "severity": "warning",
+    "severity": "info",
     "timeMs": 1795076052000,
     "time": "2026-11-19T03:14:12",
     "log": "System",
     "provider": "Microsoft-Windows-WindowsUpdateClient",
     "eventId": 20,
     "recordId": 1025,
-    "subject": "Contoso Notes 4.2 - Store update",
+    "subject": "Contoso.Notes",
     "version": "",
     "module": "",
     "moduleVersion": "",
@@ -7526,7 +7526,7 @@
     "pathExists": null,
     "publisher": "",
     "count": 0,
-    "message": "Installation Failure: Windows failed to install the following update with error 0x80073D02: Contoso Notes 4.2 - Store update."
+    "message": "Installation Failure: Windows failed to install the following update with error 0x80073D02: 9NCONTOSO123-Contoso.Notes."
    },
    {
     "id": "Application:1012",
@@ -7796,14 +7796,14 @@
     "id": "System:1026",
     "category": "update",
     "kind": "install_failed",
-    "severity": "warning",
+    "severity": "info",
     "timeMs": 1794470592000,
     "time": "2026-11-12T03:03:12",
     "log": "System",
     "provider": "Microsoft-Windows-WindowsUpdateClient",
     "eventId": 20,
     "recordId": 1026,
-    "subject": "Contoso Notes 4.2 - Store update",
+    "subject": "Contoso.Notes",
     "version": "",
     "module": "",
     "moduleVersion": "",
@@ -7814,7 +7814,7 @@
     "pathExists": null,
     "publisher": "",
     "count": 0,
-    "message": "Installation Failure: Windows failed to install the following update with error 0x80073D02: Contoso Notes 4.2 - Store update."
+    "message": "Installation Failure: Windows failed to install the following update with error 0x80073D02: 9NCONTOSO123-Contoso.Notes."
    },
    {
     "id": "Application:1013",
@@ -7964,14 +7964,14 @@
     "id": "System:1027",
     "category": "update",
     "kind": "install_failed",
-    "severity": "warning",
+    "severity": "info",
     "timeMs": 1793868732000,
     "time": "2026-11-05T03:52:12",
     "log": "System",
     "provider": "Microsoft-Windows-WindowsUpdateClient",
     "eventId": 20,
     "recordId": 1027,
-    "subject": "Contoso Notes 4.2 - Store update",
+    "subject": "Contoso.Notes",
     "version": "",
     "module": "",
     "moduleVersion": "",
@@ -7982,7 +7982,7 @@
     "pathExists": null,
     "publisher": "",
     "count": 0,
-    "message": "Installation Failure: Windows failed to install the following update with error 0x80073D02: Contoso Notes 4.2 - Store update."
+    "message": "Installation Failure: Windows failed to install the following update with error 0x80073D02: 9NCONTOSO123-Contoso.Notes."
    },
    {
     "id": "Application:1030",
@@ -8036,14 +8036,14 @@
     "id": "System:1028",
     "category": "update",
     "kind": "install_failed",
-    "severity": "warning",
+    "severity": "info",
     "timeMs": 1793263272000,
     "time": "2026-10-29T03:41:12",
     "log": "System",
     "provider": "Microsoft-Windows-WindowsUpdateClient",
     "eventId": 20,
     "recordId": 1028,
-    "subject": "Contoso Notes 4.2 - Store update",
+    "subject": "Contoso.Notes",
     "version": "",
     "module": "",
     "moduleVersion": "",
@@ -8054,7 +8054,7 @@
     "pathExists": null,
     "publisher": "",
     "count": 0,
-    "message": "Installation Failure: Windows failed to install the following update with error 0x80073D02: Contoso Notes 4.2 - Store update."
+    "message": "Installation Failure: Windows failed to install the following update with error 0x80073D02: 9NCONTOSO123-Contoso.Notes."
    },
    {
     "id": "Application:1031",
@@ -8262,12 +8262,12 @@
     ]
    },
    {
-    "code": "update_repeat",
+    "code": "store_retry",
     "severity": "info",
-    "subject": "Contoso Notes 4.2 - Store update",
-    "detail": "0x80073D02",
-    "title": "An update keeps failing",
-    "text": "Contoso Notes 4.2 - Store update failed to install 4 times (error 0x80073D02). Windows tries again on its own; if it keeps failing, the Windows Update troubleshooter in Settings can repair the update components.",
+    "subject": "Contoso.Notes",
+    "detail": "",
+    "title": "Store apps couldn't update for now",
+    "text": "4 Store app updates did not finish because the app was open, was already updating or was already current (Contoso.Notes). Windows retries on its own; nothing needs doing.",
     "count": 4,
     "events": [
      "System:1025",
@@ -8511,6 +8511,16 @@
     "code": ""
    },
    {
+    "timeMs": 1795150800000,
+    "time": "2026-11-20T05:00:00",
+    "title": "Contoso.Notes",
+    "kb": "",
+    "operation": "install",
+    "result": "failed",
+    "code": "0x80073D02",
+    "storeRetry": true
+   },
+   {
     "timeMs": 1795069800000,
     "time": "2026-11-19T06:30:00",
     "title": "2026-11 Cumulative Update for Windows 11 Version 24H2 for x64-based Systems (KB5050009)",
@@ -8612,6 +8622,16 @@
   ],
   "failures": [
    {
+    "title": "Contoso.Notes",
+    "kb": "",
+    "count": 2,
+    "lastMs": 1795150800000,
+    "lastTime": "2026-11-20T05:00:00",
+    "code": "0x80073D02",
+    "fixedLater": false,
+    "storeRetry": true
+   },
+   {
     "title": "Contoso Ltd. - Display - 31.0.15.4001",
     "kb": "",
     "count": 2,
@@ -8678,6 +8698,13 @@
     "subject": "Contoso Ltd. - Display - 31.0.15.4001",
     "count": 2,
     "detail": "0x80073701"
+   },
+   {
+    "code": "store_retry",
+    "severity": "info",
+    "subject": "Contoso.Notes",
+    "count": 1,
+    "detail": ""
    },
    {
     "code": "restart_pending",

@@ -225,7 +225,10 @@ impl AppState {
     /// start a CLI to read its options or ask a local server for its models.
     pub fn pick_ai(&self, settings: &Stored) -> Result<vigil_scan::ai::Provider, String> {
         let keys = |id: &str| crate::secrets::lookup(&*self.secrets, id);
-        let probe = vigil_scan::ai::SystemProbe { keys: &keys };
+        let probe = vigil_scan::ai::SystemProbe {
+            keys: &keys,
+            signer: &crate::programs::valid_signer,
+        };
         vigil_scan::ai::pick_provider(&settings.ai.config(), &probe)
     }
 

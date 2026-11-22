@@ -12,6 +12,7 @@ use crate::ntpath::{SYSTEM32, SYSWOW64, WINDIR, basename, ext, isabs, join, norm
 
 const EXEC_EXT: &str = "exe|com|scr|bat|cmd|pif|msi|dll|sys|cpl|ocx|vbs|vbe|js|jse|wsf|ps1|hta|jar";
 
+#[cfg(not(windows))]
 rx!(ENV_RE, r"%([A-Za-z0-9_(). -]+)%");
 rx!(FIRST_EXT_RE, &format!(r"(?i)^(.+?\.(?:{EXEC_EXT}))(?:[\s,]|$)"));
 rx!(URL_RE, r"(?i)^(https?|ftp)://");
@@ -177,13 +178,22 @@ fn nonempty(value: &Option<String>) -> bool {
     value.as_deref().is_some_and(|v| !v.is_empty())
 }
 
-/// Expands `%VARIABLE%` references (unknown variables stay as they are).
+/// Expands `%VARIABLE%` references (unknown variables stay as they are). On Windows the values are
+/// the folders Windows reports (`vigil_sys::paths::known_variables`), never the environment: the
+/// user's own environment (HKCU\Environment) could make a planted file look like a Windows one.
 pub fn expand_env(text: &str) -> String {
-    ENV_RE
-        .replace_all(text, |caps: &regex::Captures| {
-            std::env::var(&caps[1]).unwrap_or_else(|_| caps[0].to_string())
-        })
-        .into_owned()
+    #[cfg(windows)]
+    {
+        vigil_sys::paths::expand_known(text).0
+    }
+    #[cfg(not(windows))]
+    {
+        ENV_RE
+            .replace_all(text, |caps: &regex::Captures| {
+                std::env::var(&caps[1]).unwrap_or_else(|_| caps[0].to_string())
+            })
+            .into_owned()
+    }
 }
 
 /// Normalizes a path from the system: quotes, variables, `\??\`, `\SystemRoot\`, separators.

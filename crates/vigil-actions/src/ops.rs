@@ -13,7 +13,7 @@ use windows::Win32::System::Services::{
 };
 use windows::core::{HSTRING, PCWSTR};
 
-use crate::cmdline::{basename, expand_env, in_dir, is_abs, normalize_path, split_command};
+use crate::cmdline::{basename, expand_env, in_dir, is_abs, normalize_path, split_command, unknown_variables};
 use crate::engine::{Builtin, Outcome, run_fn, undo_fn};
 use crate::error::{ActionError, Result, fail};
 use crate::guards::{guard_file, guard_service};
@@ -1009,6 +1009,17 @@ fn op_program_uninstall(p: Params<'_>, _store: &Store, _id: &str) -> Result<Outc
             "started the Windows Installer uninstall of \"{0}\"",
             name
         )));
+    }
+    // With administrator rights, a variable Vigil does not take from Windows' own folders would
+    // get its value from the user's environment: nothing is started.
+    if !as_user && crate::is_admin() {
+        let unknown = unknown_variables(&command);
+        if !unknown.is_empty() {
+            return fail(tr!(
+                "the uninstall command uses %{0}%, which Vigil does not expand while it runs as administrator; nothing was started",
+                unknown.join("%, %")
+            ));
+        }
     }
     let (program, args, _certain) = split_command(&command);
     let program = program.unwrap_or_default();

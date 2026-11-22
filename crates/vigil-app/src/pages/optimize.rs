@@ -330,6 +330,7 @@ impl OptimizePage {
                     )),
                 ));
         }
+        let mut group = ui::radio_group("op-plans", t("optimize.power"));
         for (i, p) in plans.iter().enumerate() {
             let guid = p.s("guid").to_string();
             let weak = cx.entity().downgrade();
@@ -340,13 +341,13 @@ impl OptimizePage {
                 _ if p.s("name").to_lowercase().contains("ultimate") => Some("optimize.planUltimate"),
                 _ => None,
             };
-            card = card
-                .child(ui::check_box(
+            group = group
+                .child(ui::radio(
                     ElementId::NamedInteger("op-plan".into(), i as u64),
                     self.plan == guid,
                     false,
                     p.s("name").to_string(),
-                    move |_, _, cx| {
+                    move |_, cx| {
                         let _ = weak.update(cx, |this, cx| {
                             this.plan = guid.clone();
                             cx.notify();
@@ -354,7 +355,10 @@ impl OptimizePage {
                     },
                     tk,
                 ))
-                .children(note.map(|n| kit::faint(t(n), tk).pl(px(28.))));
+                .children(note.map(|n| kit::faint(t(n), tk).pl(px(28.)).pb(px(4.))));
+        }
+        if !plans.is_empty() {
+            card = card.child(group);
         }
         let chosen = plans.iter().find(|p| p.s("guid") == self.plan).cloned();
         let active_guid = active.as_ref().map(|p| p.s("guid").to_string()).unwrap_or_default();

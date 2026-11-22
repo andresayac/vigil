@@ -398,6 +398,9 @@ pub(crate) fn run_hidden(
     timeout: Duration,
 ) -> Result<Output, MaintError> {
     let mut command = Command::new(program);
+    // The child environment first: elevated, only what Windows reports, so a profiler DLL the
+    // user's environment names never loads into the tool with administrator rights.
+    vigil_sys::paths::apply_child_env(&mut command);
     command
         .args(args)
         .creation_flags(CREATE_NO_WINDOW)

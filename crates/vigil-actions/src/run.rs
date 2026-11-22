@@ -14,7 +14,7 @@ use windows::Win32::UI::Shell::{SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELL
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 use windows::core::{HSTRING, PCWSTR, w};
 
-use crate::cmdline::{expand_env, in_dir, is_abs, normpath};
+use crate::cmdline::{expand_env, in_dir, is_abs, normpath, unknown_variables};
 use crate::engine::Outcome;
 use crate::error::{Result, fail};
 use crate::params::Params;
@@ -49,8 +49,13 @@ fn existing_program(path: &str) -> Result<String> {
     Ok(path)
 }
 
-/// The folders of PATH, full paths only (a relative entry would mean "the current folder").
-fn path_dirs() -> Vec<String> {
+/// The folders a bare name is looked for in. For a program that will run with administrator
+/// rights, System32 only: PATH is the user's to change. Otherwise the folders of PATH, full paths
+/// only (a relative entry would mean "the current folder").
+fn path_dirs(admin: bool) -> Vec<String> {
+    if admin {
+        return vec![crate::runner::system32().to_string_lossy().into_owned()];
+    }
     std::env::var("PATH")
         .unwrap_or_default()
         .split(';')
@@ -60,8 +65,9 @@ fn path_dirs() -> Vec<String> {
 }
 
 /// The names to try for a bare name: itself when it has a runnable extension, else the name with each
-/// runnable extension of PATHEXT, in that order.
-fn candidate_names(name: &str) -> Result<Vec<String>> {
+/// runnable extension of PATHEXT, in that order (Windows' default order for a program that will run
+/// with administrator rights: PATHEXT is the user's to change).
+fn candidate_names(name: &str, admin: bool) -> Result<Vec<String>> {
     let path = Path::new(name);
     if path.extension().is_some() && runnable(path) {
         return Ok(vec![name.to_string()]);
@@ -69,7 +75,12 @@ fn candidate_names(name: &str) -> Result<Vec<String>> {
     if path.extension().is_some() && !name.ends_with('.') {
         return fail(only_programs());
     }
-    let pathext = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());
+    let default = ".COM;.EXE;.BAT;.CMD";
+    let pathext = if admin {
+        default.to_string()
+    } else {
+        std::env::var("PATHEXT").unwrap_or_else(|_| default.into())
+    };
     let mut names: Vec<String> = pathext
         .split(';')
         .map(|e| e.trim().trim_start_matches('.').to_ascii_lowercase())
@@ -80,14 +91,17 @@ fn candidate_names(name: &str) -> Result<Vec<String>> {
     Ok(names)
 }
 
-/// The program registered for a name under App Paths (how "chrome" or "winword" are found).
-fn app_path(name: &str) -> Option<String> {
+/// The program registered for a name under App Paths (how "chrome" or "winword" are found). For a
+/// program that will run with administrator rights only the machine's registrations count (HKLM),
+/// never the user's own (HKCU), and a value naming a variable Vigil does not know is refused.
+fn app_path(name: &str, admin: bool) -> Option<String> {
     let file = if Path::new(name).extension().is_some() {
         name.to_string()
     } else {
         format!("{name}.exe")
     };
-    for hive in ["HKCU", "HKLM"] {
+    let hives: &[&str] = if admin { &["HKLM"] } else { &["HKCU", "HKLM"] };
+    for hive in hives {
         let key = format!(r"{hive}\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{file}");
         let Ok(Some(value)) = reg_read(&key, "") else {
             continue;
@@ -95,6 +109,9 @@ fn app_path(name: &str) -> Option<String> {
         let Some(text) = value.get("data").and_then(|d| d.as_str()) else {
             continue;
         };
+        if admin && !unknown_variables(text).is_empty() {
+            continue;
+        }
         let path = expand_env(text.trim().trim_matches('"'));
         if is_abs(&path) && !path.starts_with(r"\\") && runnable(Path::new(&path)) && Path::new(&path).is_file() {
             return Some(normpath(&path));
@@ -105,8 +122,10 @@ fn app_path(name: &str) -> Option<String> {
 
 /// The one file `input` names: a full path to an existing program, or a bare name ("notepad",
 /// "services.msc") found on PATH or in App Paths. Network and device paths, relative paths and the
-/// current folder are refused.
-pub fn resolve_program(input: &str) -> Result<String> {
+/// current folder are refused. With `admin` (it will run with administrator rights) a bare name is
+/// found only in System32 and the machine's App Paths: the user's PATH and App Paths could point it
+/// at a program of theirs.
+pub fn resolve_program(input: &str, admin: bool) -> Result<String> {
     let text = input.trim();
     let text = text
         .strip_prefix('"')
@@ -140,8 +159,8 @@ pub fn resolve_program(input: &str) -> Result<String> {
             "Type the full path of the program, or the name of a program such as notepad."
         ));
     }
-    let names = candidate_names(text)?;
-    let dirs = path_dirs();
+    let names = candidate_names(text, admin)?;
+    let dirs = path_dirs(admin);
     for name in &names {
         for dir in &dirs {
             let path = Path::new(dir).join(name);
@@ -150,7 +169,7 @@ pub fn resolve_program(input: &str) -> Result<String> {
             }
         }
     }
-    if let Some(found) = app_path(text) {
+    if let Some(found) = app_path(text, admin) {
         return Ok(found);
     }
     fail(tr!("Windows cannot find {0}.", text))
@@ -354,8 +373,12 @@ fn start_direct(program: &str, args: &str, folder: &str) -> Result<Option<u32>> 
         ..Default::default()
     };
     let mut info = PROCESS_INFORMATION::default();
+    // The child environment, not Vigil's own: elevated, a profiler DLL named by the user's
+    // environment would otherwise load into mmc.exe or the program with administrator rights.
+    let environment = vigil_sys::paths::child_env_block();
     // SAFETY: every string outlives the call; the command line buffer is writable and
-    // NUL-terminated as CreateProcessW requires; `info` receives the handles, closed below.
+    // NUL-terminated as CreateProcessW requires; the environment block is a complete UTF-16 block
+    // (CREATE_UNICODE_ENVIRONMENT) that outlives the call; `info` receives the handles, closed below.
     unsafe {
         CreateProcessW(
             &application,
@@ -364,7 +387,7 @@ fn start_direct(program: &str, args: &str, folder: &str) -> Result<Option<u32>> 
             None,
             false,
             CREATE_NEW_CONSOLE | CREATE_UNICODE_ENVIRONMENT,
-            None,
+            Some(environment.as_ptr().cast()),
             if folder.is_empty() {
                 PCWSTR::null()
             } else {
@@ -439,7 +462,7 @@ pub(crate) fn op_run(p: Params<'_>, _store: &Store, _id: &str) -> Result<Outcome
             "Type the full path of the program, or the name of a program such as notepad."
         ));
     }
-    let program = resolve_program(&path)?;
+    let program = resolve_program(&path, p.flag("admin"))?;
     let args = p.str_or_empty("args");
     check_args(&args)?;
     let plan = plan(&program, &args, p.flag("admin"), crate::is_admin())?;
@@ -481,25 +504,46 @@ mod tests {
 
     #[test]
     fn bare_names_are_found_on_path() {
-        let notepad = resolve_program("notepad").expect("notepad");
+        let notepad = resolve_program("notepad", false).expect("notepad");
         assert!(notepad.to_lowercase().ends_with(r"\notepad.exe"), "{notepad}");
         assert!(Path::new(&notepad).is_file());
-        let services = resolve_program("services.msc").expect("services.msc");
+        let services = resolve_program("services.msc", false).expect("services.msc");
         assert!(services.to_lowercase().ends_with(r"\services.msc"), "{services}");
-        let cmd = resolve_program("  \"cmd\"  ").expect("cmd");
+        let cmd = resolve_program("  \"cmd\"  ", false).expect("cmd");
         assert!(cmd.to_lowercase().ends_with(r"\cmd.exe"), "{cmd}");
+    }
+
+    #[test]
+    fn with_administrator_rights_bare_names_come_only_from_system32_and_the_machine() {
+        let system32 = crate::runner::system32().to_string_lossy().to_lowercase();
+        for name in ["cmd", "services.msc", "whoami"] {
+            let found = resolve_program(name, true).expect(name).to_lowercase();
+            assert!(found.starts_with(&format!("{system32}\\")), "{found}");
+        }
+        // The user's PATH and PATHEXT are not consulted.
+        assert_eq!(
+            path_dirs(true),
+            [crate::runner::system32().to_string_lossy().into_owned()]
+        );
+        assert_eq!(
+            candidate_names("tool", true).expect("names"),
+            ["tool.com", "tool.exe", "tool.bat", "tool.cmd"]
+        );
+        // A program reachable only through the user's PATH (here: a folder only PATH can name) is
+        // not found for an administrator launch.
+        assert!(resolve_program("vigil-test-not-in-system32", true).is_err());
     }
 
     #[test]
     fn full_paths_must_exist_and_be_programs() {
         let notepad = format!(r"{}\System32\notepad.exe", windir());
         assert_eq!(
-            resolve_program(&notepad).map(|p| p.to_lowercase()).ok(),
+            resolve_program(&notepad, false).map(|p| p.to_lowercase()).ok(),
             Some(notepad.to_lowercase())
         );
         let win_ini = format!(r"{}\win.ini", windir());
-        assert!(resolve_program(&win_ini).is_err(), "not a program");
-        assert!(resolve_program(r"C:\Vigil-does-not-exist\nothing.exe").is_err());
+        assert!(resolve_program(&win_ini, false).is_err(), "not a program");
+        assert!(resolve_program(r"C:\Vigil-does-not-exist\nothing.exe", false).is_err());
         let messages: Vec<String> = [
             "",
             "   ",
@@ -514,7 +558,7 @@ mod tests {
         ]
         .iter()
         .map(|input| {
-            resolve_program(input)
+            resolve_program(input, false)
                 .map_err(|e| e.to_string())
                 .err()
                 .unwrap_or_default()

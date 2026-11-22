@@ -823,3 +823,76 @@ fn only_recycling_is_allowed_never_a_permanent_delete() {
     let missing = std::env::temp_dir().join("vigil-missing-for-the-recycle-test.bin");
     assert!(send_to_recycle_bin(&[missing]).is_err());
 }
+
+// --------------------------------------------------------------------------- root policy
+
+#[test]
+fn cleanup_never_deletes_outside_the_folders_windows_names() {
+    let mut tree = TempTree::new("vigil-roots-");
+    let allowed = tree.base.join("Profile");
+    let protected = allowed.join(r"AppData\Local\Vigil");
+    let elsewhere = tree.base.join("ProgramFiles");
+    let policy = RootPolicy::new(std::slice::from_ref(&allowed), std::slice::from_ref(&protected));
+    // A root redirected (through a changed environment, say) into a protected folder or out of
+    // every allowed one is refused; the files there stay.
+    let kept_protected = tree.file(&protected.join("journal.jsonl"), 10);
+    let kept_elsewhere = tree.file(&elsewhere.join("agent.exe"), 10);
+    let cleaned = tree.file(&allowed.join(r"AppData\Local\Temp\old.tmp"), 10);
+    // A root that is a junction to a protected folder is refused before the policy is asked.
+    let link = allowed.join(r"AppData\Local\LinkedTemp");
+    tree.junction(&link, &protected);
+    let text = |p: &Path| p.to_string_lossy().into_owned();
+    let targets = vec![
+        forced("protected", vec![text(&protected)]),
+        forced("elsewhere", vec![text(&elsewhere)]),
+        forced("link", vec![text(&link)]),
+        forced("temp", vec![text(&allowed.join(r"AppData\Local\Temp"))]),
+    ];
+    let result = clean_with(
+        &targets,
+        now_seconds() + 72.0 * HOUR,
+        &policy,
+        &no_progress,
+        &NeverCancel,
+    );
+    assert!(kept_protected.exists() && kept_elsewhere.exists());
+    assert!(!cleaned.exists(), "the allowed root is still cleaned");
+    assert_eq!(result.deleted, 1);
+    assert!(
+        result.errors.iter().filter(|e| e.contains("outside")).count() >= 2,
+        "{:?}",
+        result.errors
+    );
+    assert!(result.errors.iter().any(|e| e.contains("link")), "{:?}", result.errors);
+}
+
+#[test]
+fn the_real_policy_protects_vigil_and_program_files() {
+    let policy = RootPolicy::from_windows();
+    let real = |p: PathBuf| crate::win::normcase(&p.to_string_lossy());
+    assert!(!policy.allows(&real(vigil_sys::paths::program_data().join(r"Vigil\journal"))));
+    assert!(!policy.allows(&real(vigil_sys::paths::program_files().join("Vendor"))));
+    assert!(!policy.allows(&real(vigil_sys::paths::system_dir())));
+    assert!(policy.allows(&real(vigil_sys::paths::windows_dir().join("Temp"))));
+    assert!(!policy.allows(&real(vigil_sys::paths::windows_dir().join("Fonts"))));
+    if let Some(local) = vigil_sys::paths::local_app_data() {
+        assert!(!policy.allows(&real(local.join(r"Vigil\watch"))));
+    }
+}
+
+#[test]
+fn real_targets_take_their_folders_from_windows_not_the_environment() {
+    // The user's temporary folder is LocalAppData\Temp, whatever TEMP says.
+    let targets = cleanup_targets(None);
+    if let (Some(temp), Some(local)) = (
+        targets.iter().find(|t| t.key == "user_temp"),
+        vigil_sys::paths::local_app_data(),
+    ) {
+        let expected = local.join("Temp").to_string_lossy().to_lowercase();
+        assert!(
+            temp.roots.iter().all(|r| r.to_lowercase() == expected),
+            "{:?}",
+            temp.roots
+        );
+    }
+}

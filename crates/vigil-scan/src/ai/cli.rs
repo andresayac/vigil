@@ -54,6 +54,10 @@ pub struct Launcher {
 impl Launcher {
     fn command(&self) -> Command {
         let mut command = Command::new(&self.program);
+        // Agents run only while Vigil is not elevated; they keep the user's environment, minus
+        // the variables that load a profiler or startup hook into a program.
+        #[cfg(windows)]
+        vigil_sys::paths::apply_child_env(&mut command);
         if let Some(script) = &self.script {
             command.arg(script);
         }

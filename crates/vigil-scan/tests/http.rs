@@ -550,7 +550,10 @@ fn ollama_server() -> Server {
 
 /// The real computer probe, without any stored key (the fake server is on 127.0.0.1).
 fn local_probe() -> ai::SystemProbe<'static> {
-    ai::SystemProbe { keys: &|_| None }
+    ai::SystemProbe {
+        keys: &|_| None,
+        signer: &|_| None,
+    }
 }
 
 #[test]
@@ -680,7 +683,10 @@ fn critical_items_never_become_safe_whatever_the_provider() {
 #[ignore]
 fn installed_agents_are_detected() {
     let keys = |_: &str| None;
-    let probe = ai::SystemProbe { keys: &keys };
+    let probe = ai::SystemProbe {
+        keys: &keys,
+        signer: &|_| None,
+    };
     for id in ["claude-code", "codex-cli", "gemini-cli"] {
         let config = ai::AiConfig {
             provider: id.into(),

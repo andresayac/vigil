@@ -8,6 +8,8 @@ pub const HAMBURGER: char = '\u{E700}';
 pub const SEARCH: char = '\u{E721}';
 pub const SCAN: char = '\u{E721}';
 pub const SHIELD: char = '\u{E7EF}';
+/// A plain shield (the verdict of a scan).
+pub const SHIELD_PLAIN: char = '\u{EA18}';
 pub const MORE: char = '\u{E712}';
 pub const SETTINGS: char = '\u{E713}';
 pub const END_TASK: char = '\u{E733}';

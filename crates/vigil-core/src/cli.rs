@@ -44,7 +44,8 @@ Usage: vigil scan [options]
 
 API keys come from the Windows Credential Manager (saved in the app's Settings) or from the
 environment: OPENAI_API_KEY, ANTHROPIC_API_KEY, VT_API_KEY. OPENAI_BASE_URL and
-ANTHROPIC_BASE_URL set the default address of each standard.
+ANTHROPIC_BASE_URL set the default address of each standard. Run as administrator, Vigil ignores
+these variables and uses only the stored settings and keys.
 
 The scan changes nothing on the computer; it only writes the reports. Act on the findings from the
 Vigil app.");
@@ -215,7 +216,10 @@ fn run_ai(analysis: &mut Analysis, options: &Options, base: &std::path::Path) {
     }
     let store = CredentialStore::default();
     let keys = |id: &str| secrets::lookup(&store, id);
-    let probe = vigil_scan::ai::SystemProbe { keys: &keys };
+    let probe = vigil_scan::ai::SystemProbe {
+        keys: &keys,
+        signer: &crate::programs::valid_signer,
+    };
     let config = vigil_scan::ai::AiConfig {
         provider: options.ai.clone(),
         model: options.model.clone(),
@@ -497,13 +501,24 @@ pub fn run(args: &[String]) -> i32 {
     0
 }
 
-/// Opens our own report with the default browser (Explorer by absolute path, argument list).
+/// Opens our own report with the default browser: through Explorer by absolute path, as the
+/// signed-in user when this runs as administrator (never an elevated Explorer or browser).
 fn open_with_default_app(path: &std::path::Path) -> std::io::Result<()> {
-    let windir = vigil_sys::paths::windows_dir();
-    std::process::Command::new(windir.join("explorer.exe"))
-        .arg(path)
-        .spawn()
-        .map(|_| ())
+    let explorer = vigil_sys::paths::windows_dir().join("explorer.exe");
+    let explorer = explorer.to_string_lossy().into_owned();
+    let text = path.to_string_lossy().into_owned();
+    if text.contains('"') || text.chars().any(char::is_control) {
+        return Err(std::io::Error::other("unsafe path"));
+    }
+    let direct = text.clone();
+    vigil_actions::desktop::launch_unelevated(&explorer, &format!("\"{text}\""), "", || {
+        std::process::Command::new(&explorer)
+            .arg(&direct)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| vigil_actions::ActionError::new(e.to_string()))
+    })
+    .map_err(|e| std::io::Error::other(e.to_string()))
 }
 
 #[cfg(test)]

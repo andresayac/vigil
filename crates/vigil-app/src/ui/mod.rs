@@ -352,6 +352,67 @@ pub fn check_box(
         )
 }
 
+/// A group of radio buttons (screen readers announce it with its name).
+pub fn radio_group(id: &'static str, name: impl Into<SharedString>) -> gpui_kit::Stateful<gpui_kit::Div> {
+    div()
+        .id(id)
+        .role(Role::RadioGroup)
+        .aria_label(name.into())
+        .flex()
+        .flex_col()
+        .gap(px(2.))
+}
+
+/// The WinUI radio button: a circle (filled with the accent and a dot when chosen) and its label.
+pub fn radio(
+    id: impl Into<ElementId>,
+    selected: bool,
+    disabled: bool,
+    label: impl Into<SharedString>,
+    on_pick: impl Fn(&mut Window, &mut App) + 'static,
+    tk: &Tokens,
+) -> impl IntoElement {
+    let label = label.into();
+    let tk = *tk;
+    let (fill, stroke) = match (selected, disabled) {
+        (true, true) => (tk.ink_disabled, tk.ink_disabled),
+        (false, true) => (tk.surface.opacity(0.), tk.ink_disabled),
+        (true, false) => (tk.accent, tk.accent),
+        (false, false) => (tk.control, tk.ink2),
+    };
+    BaseButton::new(id)
+        .role(Role::RadioButton)
+        .accessibility_label(label.clone())
+        .aria_toggled(if selected { Toggled::True } else { Toggled::False })
+        .disabled(disabled)
+        .flex()
+        .items_center()
+        .gap_2()
+        .min_h(px(28.))
+        .on_click(move |_, window, cx| on_pick(window, cx))
+        .child(
+            div()
+                .w(px(20.))
+                .h(px(20.))
+                .flex_none()
+                .rounded_full()
+                .border_1()
+                .border_color(stroke)
+                .bg(fill)
+                .flex()
+                .items_center()
+                .justify_center()
+                .when(selected, |this| {
+                    this.child(div().w(px(8.)).h(px(8.)).rounded_full().bg(tk.on_accent))
+                }),
+        )
+        .child(
+            div()
+                .text_color(if disabled { tk.ink_disabled } else { tk.ink })
+                .child(label),
+        )
+}
+
 /// A segmented control: one option out of a few, each a radio button.
 pub fn segmented<T: Copy + PartialEq + 'static>(
     id: &'static str,
@@ -488,6 +549,7 @@ pub fn page_title(text: impl Into<SharedString>) -> impl IntoElement {
         .pl_1()
         .font_family(crate::theme::FONT_DISPLAY)
         .text_size(px(20.))
+        .line_height(px(28.))
         .font_weight(FontWeight::SEMIBOLD)
         .child(text.into())
 }

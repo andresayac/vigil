@@ -318,17 +318,13 @@ impl Shell {
                 gpui_kit::WindowAppearance::Dark | gpui_kit::WindowAppearance::VibrantDark
             ),
         };
-        let mut tokens = if dark {
+        // Vigil's own palette (its logo's), not the Windows accent: the window looks the same on every
+        // computer, and a wallpaper or accent colour cannot clash with the verdict colours.
+        let tokens = if dark {
             Tokens::dark(self.mica)
         } else {
             Tokens::light(self.mica)
         };
-        // The demo keeps Fluent's default accent, so its screenshots look the same everywhere.
-        if !self.demo
-            && let Some(accent) = crate::platform::accent(dark)
-        {
-            tokens.set_accent(accent);
-        }
         theme::apply(tokens, cx);
         crate::win::set_dark_title_bar(window, dark);
         window.refresh();
@@ -579,7 +575,8 @@ impl Shell {
         cx.spawn_in(window, async move |this, cx| {
             let Ok(Ok(Some(path))) = picked.await else { return };
             let shown = path.display().to_string();
-            let result = std::fs::write(&path, html).map_err(|e| format!("Could not write the report: {e}"));
+            let result = vigil_core::export::write_user_file(&path, html.as_bytes())
+                .map_err(|e| format!("Could not write the report: {e}"));
             let _ = this.update(cx, |shell, cx| {
                 shell.notice = Some(match result {
                     Ok(()) => (Severity::Success, tf("menu.exported", &[("path", &shown)])),
@@ -911,7 +908,7 @@ impl Shell {
                         .w(px(3.))
                         .h(px(16.))
                         .rounded(px(2.))
-                        .bg(tk.accent),
+                        .bg(tk.brand),
                 )
             })
         };
@@ -980,14 +977,17 @@ impl Shell {
                     .child(div().w(px(8.)).h(px(8.)).rounded(px(4.)).bg(dot))
                     .child(text)
             });
+            // One compact line for the state (its explanation is the tooltip), so the page list keeps
+            // its room on short windows.
+            let shell = cx.entity().downgrade();
+            let tip_note: gpui_kit::SharedString = note.into();
             div()
                 .flex()
                 .flex_col()
-                .gap(px(6.))
+                .gap(px(4.))
                 .px(px(14.))
-                .pt(px(8.))
-                .pb(px(10.))
-                .mb_1()
+                .pt(px(6.))
+                .pb(px(6.))
                 .border_t_1()
                 .border_color(tk.rule)
                 .child(
@@ -995,22 +995,47 @@ impl Shell {
                         .flex()
                         .items_center()
                         .gap_2()
-                        .text_size(px(13.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(color)
-                        .child(icons::icon(icons::SHIELD, 14.0, color))
-                        .child(title),
+                        .child(
+                            div()
+                                .id("nav-state")
+                                .flex()
+                                .flex_none()
+                                .items_center()
+                                .gap_2()
+                                .text_size(px(13.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(color)
+                                .tooltip(move |window, cx| {
+                                    gpui_kit::component::tooltip::Tooltip::new(tip_note.clone()).build(window, cx)
+                                })
+                                .child(icons::icon(icons::SHIELD, 14.0, color))
+                                .child(title),
+                        )
+                        .child(div().flex_1())
+                        .when(!self.elevated && !self.demo, |this| {
+                            this.child(ui::kit::link(
+                                "restart-elevated",
+                                t("nav.restartShort"),
+                                move |_, cx| {
+                                    let _ = shell.update(cx, |this, cx| this.restart_elevated(cx));
+                                },
+                                &tk,
+                            ))
+                        }),
                 )
-                .child(div().text_size(px(12.)).text_color(tk.ink3).child(note))
-                .when(!self.elevated && !self.demo, |this| {
-                    this.child(
-                        ui::button("restart-elevated", t("nav.restartElevated"))
-                            .on_click(cx.listener(|this, _, _, cx| this.restart_elevated(cx))),
-                    )
-                })
                 .children(watch_line)
                 .when(self.demo, |this| {
-                    this.child(div().text_size(px(12.)).text_color(tk.ink3).child(t("app.demo")))
+                    let demo_note: gpui_kit::SharedString = t("app.demo").into();
+                    this.child(
+                        div()
+                            .id("nav-demo")
+                            .text_size(px(12.))
+                            .text_color(tk.ink3)
+                            .tooltip(move |window, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new(demo_note.clone()).build(window, cx)
+                            })
+                            .child(t("app.demoShort")),
+                    )
                 })
         });
 
@@ -1041,7 +1066,14 @@ impl Shell {
                         })),
                     )
                     .when(!compact, |this| {
-                        this.child(div().text_size(px(12.)).text_color(tk.ink2).child("Vigil"))
+                        this.child(gpui_kit::img(logo()).w(px(18.)).h(px(18.)).flex_none())
+                            .child(
+                                div()
+                                    .text_size(px(14.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(tk.ink)
+                                    .child("Vigil"),
+                            )
                             .child(div().flex_1())
                             .child(
                                 ui::icon_button("nav-search", icons::SEARCH, t("palette.button"))
@@ -1107,6 +1139,18 @@ impl Shell {
     }
 }
 
+/// Vigil's logo, decoded once (the window's own file, built into the program).
+fn logo() -> std::sync::Arc<gpui_kit::Image> {
+    static LOGO: std::sync::OnceLock<std::sync::Arc<gpui_kit::Image>> = std::sync::OnceLock::new();
+    LOGO.get_or_init(|| {
+        std::sync::Arc::new(gpui_kit::Image::from_bytes(
+            gpui_kit::ImageFormat::Png,
+            include_bytes!("../icons/icon.png").to_vec(),
+        ))
+    })
+    .clone()
+}
+
 impl Render for Shell {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let tk = *tokens(cx);
@@ -1114,27 +1158,23 @@ impl Render for Shell {
             Some(view) => view.clone().into_any_element(),
             None => div().into_any_element(),
         };
+        // Notices sit above the page and push it down: they never cover what the page shows.
         let notice = self.notice.clone().map(|(severity, text)| {
-            div()
-                .absolute()
-                .top(px(12.))
-                .right(px(20.))
-                .w(px(560.))
-                .child(ui::info_bar(
-                    "shell-notice",
-                    severity,
-                    text,
-                    Some(Box::new({
-                        let shell = cx.entity().downgrade();
-                        move |_, cx: &mut App| {
-                            let _ = shell.update(cx, |shell, cx| {
-                                shell.notice = None;
-                                cx.notify();
-                            });
-                        }
-                    })),
-                    &tk,
-                ))
+            div().child(ui::info_bar(
+                "shell-notice",
+                severity,
+                text,
+                Some(Box::new({
+                    let shell = cx.entity().downgrade();
+                    move |_, cx: &mut App| {
+                        let _ = shell.update(cx, |shell, cx| {
+                            shell.notice = None;
+                            cx.notify();
+                        });
+                    }
+                })),
+                &tk,
+            ))
         });
         // A newer Vigil: its version, a link to the release page, and a close button.
         let update = self.update.clone().map(|latest| {
@@ -1146,24 +1186,19 @@ impl Render for Shell {
                     let _ = shell.update(cx, |shell, cx| shell.open_release(&url, window, cx));
                 }) as ui::OnClose
             };
-            div()
-                .absolute()
-                .top(px(if self.notice.is_some() { 76. } else { 12. }))
-                .right(px(20.))
-                .w(px(560.))
-                .child(ui::info_bar_with(
-                    "shell-update",
-                    Severity::Info,
-                    tf("update.available", &[("version", &latest.version)]),
-                    Some((t("update.openRelease").into(), open)),
-                    Some(Box::new(move |_, cx: &mut App| {
-                        let _ = shell.update(cx, |shell, cx| {
-                            shell.update = None;
-                            cx.notify();
-                        });
-                    })),
-                    &tk,
-                ))
+            div().child(ui::info_bar_with(
+                "shell-update",
+                Severity::Info,
+                tf("update.available", &[("version", &latest.version)]),
+                Some((t("update.openRelease").into(), open)),
+                Some(Box::new(move |_, cx: &mut App| {
+                    let _ = shell.update(cx, |shell, cx| {
+                        shell.update = None;
+                        cx.notify();
+                    });
+                })),
+                &tk,
+            ))
         });
         let acting = self
             .acting
@@ -1192,9 +1227,22 @@ impl Render for Shell {
                     .border_color(tk.layer_stroke)
                     .rounded_tl(px(8.))
                     .overflow_hidden()
-                    .child(body)
-                    .children(notice)
-                    .children(update)
+                    .flex()
+                    .flex_col()
+                    .when(notice.is_some() || update.is_some(), |this| {
+                        this.child(
+                            div()
+                                .flex_none()
+                                .flex()
+                                .flex_col()
+                                .gap_2()
+                                .px(px(28.))
+                                .pt(px(12.))
+                                .children(notice)
+                                .children(update),
+                        )
+                    })
+                    .child(div().flex_1().min_h_0().child(body))
                     .children(acting),
             )
             .children(palette)

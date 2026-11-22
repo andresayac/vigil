@@ -3,15 +3,69 @@
 # remote access and account changes over the last $Days days.
 param(
     [int]$Days = 30,
-    # The collectors' own PowerShell activity is left out: SelfDir is where earlier versions ran
-    # them from (a folder), SelfMark is the mark this version's command line and scripts carry.
-    [string]$SelfDir = '',
-    [string]$SelfMark = ''
+    # The collectors' own PowerShell activity is left out, but only when it is exactly Vigil's:
+    # - SelfPowerShell + SelfTail: the exact command line Vigil starts its collectors with (event
+    #   400). Copying it only runs Vigil's own bootstrap; whatever script is fed to it is its own
+    #   script block (4104), judged below.
+    # - SelfHashes: SHA-256 of the exact text of Vigil's bootstrap and collector scripts (4104),
+    #   reassembled when Windows split it over several events. A mark inside some other script
+    #   no longer hides it.
+    #   The value of `$VigilMark` changes with every version; the rest must match exactly.
+    # - LegacyBefore: earlier versions' collectors (files from %TEMP%\vigil-scan, or scripts with
+    #   an earlier mark) are left out only when they ran before this version existed (events
+    #   cannot be backdated).
+    [string]$SelfPowerShell = '',
+    [string]$SelfTail = '',
+    [string]$SelfHashes = '',
+    [string]$LegacyBefore = ''
 )
 . "$PSScriptRoot\_common.ps1"
 
 $since = (Get-Date).AddDays(-$Days)
 $r = @{ days = $Days }
+
+# <self-filter> (the tests run this block on its own)
+$selfHashSet = @{}
+foreach ($h in ($SelfHashes -split ',')) { if ($h) { $selfHashSet[$h.Trim().ToLowerInvariant()] = 1 } }
+$legacyUntil = $null
+if ($LegacyBefore) { try { $legacyUntil = [DateTime]::Parse($LegacyBefore, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AdjustToUniversal) } catch { } }
+$legacyCollector = '(?i)\\vigil-scan\\ps-[0-9a-f]{8,}\\(events|network|processes|services|signatures|system|tasks)\.ps1'
+
+function Test-OwnText {
+    # True when the text is exactly one of Vigil's own scripts (line ends and trailing blanks
+    # aside).
+    param([string]$Text)
+    if (-not $selfHashSet.Count -or -not $Text) { return $false }
+    $norm = $Text.Replace("`r`n", "`n").TrimEnd()
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        $hash = [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($norm))).Replace('-', '').ToLowerInvariant()
+    } finally { $sha.Dispose() }
+    return $selfHashSet.ContainsKey($hash)
+}
+
+function Test-OwnCommand {
+    # True when the command line is exactly the one Vigil starts its collectors with.
+    param([string]$Cmd)
+    if (-not $SelfTail -or -not $SelfPowerShell) { return $false }
+    # The mark's value differs between Vigil versions; the bootstrap around it does not.
+    $markValue = "\`$VigilMark='VigilCollector-[0-9a-f]+'"
+    $c = ($Cmd.Replace('"', '').Trim()) -replace $markValue, "`$VigilMark=''"
+    $tail = $SelfTail.Replace('"', '') -replace $markValue, "`$VigilMark=''"
+    if (-not $c.EndsWith($tail, [StringComparison]::Ordinal)) { return $false }
+    $head = $c.Substring(0, $c.Length - $tail.Length).Trim()
+    return [string]::Equals($head, $SelfPowerShell.Replace('"', ''), [StringComparison]::OrdinalIgnoreCase)
+}
+
+function Test-Legacy {
+    # An earlier version's collector (run as a file, or a script carrying an earlier mark),
+    # from before this version existed.
+    param([string]$Text, $Time)
+    if (-not $legacyUntil -or -not $Text -or -not $Time) { return $false }
+    if ($Time.ToUniversalTime() -ge $legacyUntil) { return $false }
+    return ($Text -match $legacyCollector) -or $Text.StartsWith('# VigilCollector-', [StringComparison]::Ordinal)
+}
+# </self-filter>
 
 function Get-EventList {
     param([hashtable]$Filter, [int]$Max = 500)
@@ -128,8 +182,8 @@ foreach ($e in @(Get-EventList -Filter @{ LogName = 'Windows PowerShell'; Id = 4
     if (-not $m.Success) { continue }
     $cmd = $m.Groups[1].Value.Trim()
     if (-not $cmd) { continue }
-    if ($SelfDir -and ($cmd.IndexOf($SelfDir, [StringComparison]::OrdinalIgnoreCase) -ge 0)) { continue }
-    if ($SelfMark -and ($cmd.IndexOf($SelfMark, [StringComparison]::Ordinal) -ge 0)) { continue }
+    if (Test-OwnCommand $cmd) { continue }
+    if (Test-Legacy $cmd $e.TimeCreated) { continue }
     $cmd = Limit-Text $cmd 8000
     if ($cmds.ContainsKey($cmd)) {
         $cmds[$cmd]['n'] = $cmds[$cmd]['n'] + 1
@@ -142,13 +196,36 @@ $r.ps_commands = @($cmds.Values | Sort-Object { $_['last'] } -Descending | Selec
 
 # --- PowerShell: script blocks the engine itself flagged as suspicious (4104, Warning level) ---
 $seen = @{}
-$r.ps_scriptblocks = @(Get-EventList -Filter @{ LogName = 'Microsoft-Windows-PowerShell/Operational'; Id = 4104; Level = 3; StartTime = $since } -Max 600 | ForEach-Object {
+$blockEvents = @(Get-EventList -Filter @{ LogName = 'Microsoft-Windows-PowerShell/Operational'; Id = 4104; Level = 3; StartTime = $since } -Max 600)
+# A long script block is split over several events (MessageNumber of MessageTotal): its parts,
+# by block id, so the whole text can be compared with Vigil's own scripts.
+$parts = @{}
+foreach ($e in $blockEvents) {
+    $f = Get-EventFields $e
+    $id = [string]$f['ScriptBlockId']
+    if (-not $id) { continue }
+    if (-not $parts.ContainsKey($id)) { $parts[$id] = @{} }
+    $parts[$id][[string]$f['MessageNumber']] = [string]$f['ScriptBlockText']
+}
+$r.ps_scriptblocks = @($blockEvents | ForEach-Object {
     $f = Get-EventFields $_
     if ($f['MessageNumber'] -ne '1') { return }
     $path = [string]$f['Path']
-    if ($SelfDir -and $path -and $path.StartsWith($SelfDir, [StringComparison]::OrdinalIgnoreCase)) { return }
     $text = [string]$f['ScriptBlockText']
-    if ($SelfMark -and ($text.IndexOf($SelfMark, [StringComparison]::Ordinal) -ge 0)) { return }
+    if ((Test-Legacy $path $_.TimeCreated) -or (Test-Legacy $text $_.TimeCreated)) { return }
+    $whole = $text
+    $total = 0
+    [void][int]::TryParse([string]$f['MessageTotal'], [ref]$total)
+    $id = [string]$f['ScriptBlockId']
+    if ($total -gt 1) {
+        $whole = $null
+        if ($id -and $parts.ContainsKey($id) -and $parts[$id].Count -eq $total) {
+            $sb = New-Object Text.StringBuilder
+            for ($i = 1; $i -le $total; $i++) { [void]$sb.Append($parts[$id][[string]$i]) }
+            $whole = $sb.ToString()
+        }
+    }
+    if ($whole -and (Test-OwnText $whole)) { return }
     $key = $path + '|' + (Limit-Text $text 200)
     if ($seen.ContainsKey($key)) { return }
     $seen[$key] = 1

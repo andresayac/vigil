@@ -246,38 +246,19 @@ fn same_path(a: &Path, b: &Path) -> bool {
     a.to_string_lossy().eq_ignore_ascii_case(&b.to_string_lossy())
 }
 
-/// `%SystemDrive%\Users\jdoe` -> `C:\Users\jdoe`.
+/// `%SystemDrive%\Users\jdoe` -> `C:\Users\jdoe` (the scan's own expansion: Windows' folders, not
+/// the environment).
 fn expand_env(text: &str) -> String {
-    let mut out = String::new();
-    let mut rest = text;
-    while let Some(start) = rest.find('%') {
-        out.push_str(&rest[..start]);
-        let after = &rest[start + 1..];
-        match after.find('%') {
-            Some(end) => {
-                let name = &after[..end];
-                match std::env::var(name) {
-                    Ok(value) if !name.is_empty() => out.push_str(&value),
-                    _ => {
-                        out.push('%');
-                        out.push_str(name);
-                        out.push('%');
-                    }
-                }
-                rest = &after[end + 1..];
-            }
-            None => {
-                out.push('%');
-                rest = after;
-            }
-        }
-    }
-    out.push_str(rest);
-    out
+    crate::cmdline::expand_env(text)
 }
 
 /// The profile folders of the other accounts of this computer (from ProfileList).
 pub fn other_homes() -> Vec<Home> {
+    #[cfg(windows)]
+    let own = vigil_sys::paths::profile()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
+    #[cfg(not(windows))]
     let own = std::env::var("USERPROFILE").unwrap_or_default();
     let list_key = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList";
     let mut out = Vec::new();

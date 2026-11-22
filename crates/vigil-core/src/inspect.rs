@@ -66,17 +66,12 @@ fn task_writable(task: &vigil_sys::tasks::ScheduledTask) -> bool {
     })
 }
 
-/// The absolute paths (`C:\...`, `%LOCALAPPDATA%\...`) a command line's arguments name.
+/// The absolute paths (`C:\...`, `%LOCALAPPDATA%\...`) a command line's arguments name. Variables
+/// are expanded with Windows' own folders, never the environment (which the user can change).
 fn argument_paths(arguments: &str) -> Vec<String> {
     arguments
         .split(['"', '\'', ' ', '\t', '=', ','])
-        .map(|word| {
-            let expanded = word
-                .strip_prefix('%')
-                .and_then(|rest| rest.split_once('%'))
-                .and_then(|(name, tail)| std::env::var(name).ok().map(|value| format!("{value}{tail}")));
-            expanded.unwrap_or_else(|| word.to_string())
-        })
+        .map(|word| vigil_sys::paths::expand_known(word).0)
         .filter(|word| {
             let bytes = word.as_bytes();
             bytes.len() > 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'\\'
@@ -84,24 +79,28 @@ fn argument_paths(arguments: &str) -> Vec<String> {
         .collect()
 }
 
-/// A path inside a folder a standard user can write to (the profile, ProgramData, temp), and
-/// outside the Windows and Program Files folders.
+/// A path inside a folder a standard user can write to (the profiles, ProgramData, the user's temp),
+/// and outside the Windows and Program Files folders. The folders come from Windows' known-folder
+/// calls, never from environment variables, which the user's own environment can change.
 pub fn user_writable(path: &str) -> bool {
+    use std::path::PathBuf;
+    use vigil_sys::paths;
     let low = path.to_lowercase();
-    let under = |var: &str| {
-        std::env::var(var)
-            .ok()
-            .map(|dir| dir.trim_end_matches('\\').to_lowercase())
-            .filter(|dir| !dir.is_empty())
-            .is_some_and(|dir| low.starts_with(&format!("{dir}\\")))
+    let under = |dir: Option<PathBuf>| {
+        dir.map(|d| d.to_string_lossy().trim_end_matches('\\').to_lowercase())
+            .filter(|d| !d.is_empty())
+            .is_some_and(|d| low.starts_with(&format!("{d}\\")))
     };
-    let users = std::env::var("SystemDrive")
-        .map(|d| format!(r"{}\users\", d.to_lowercase()))
-        .unwrap_or_default();
-    (under("USERPROFILE") || under("ProgramData") || under("TEMP") || (!users.is_empty() && low.starts_with(&users)))
-        && !under("SystemRoot")
-        && !under("ProgramFiles")
-        && !under("ProgramFiles(x86)")
+    let windows = paths::windows_dir();
+    // Every profile (C:\Users), not only this account's.
+    let users = paths::profile()
+        .and_then(|p| p.parent().map(PathBuf::from))
+        .or_else(|| windows.ancestors().last().map(|root| root.join("Users")));
+    let temp = paths::local_app_data().map(|local| local.join("Temp"));
+    (under(paths::profile()) || under(Some(paths::program_data())) || under(temp) || under(users))
+        && !under(Some(windows))
+        && !under(Some(paths::program_files()))
+        && !under(Some(paths::program_files_x86()))
 }
 
 // ------------------------------------------------------------------------------------ startup signatures
@@ -205,16 +204,26 @@ mod tests {
 
     #[test]
     fn writable_folders_are_flagged() {
-        let profile = std::env::var("USERPROFILE").unwrap_or_default();
-        let root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+        let profile = vigil_sys::paths::profile().expect("profile").display().to_string();
+        let root = vigil_sys::paths::windows_dir().display().to_string();
+        let program_files = vigil_sys::paths::program_files().display().to_string();
+        let program_data = vigil_sys::paths::program_data().display().to_string();
         assert!(user_writable(&format!(r"{profile}\AppData\Local\Temp\x.dll")));
+        assert!(user_writable(&format!(r"{program_data}\Vendor\x.dll")));
         assert!(!user_writable(&format!(r"{root}\System32\ntdll.dll")));
-        assert!(!user_writable(r"C:\Program Files\App\app.dll"));
+        assert!(!user_writable(&format!(r"{program_files}\App\app.dll")));
+        // Another account's profile is writable by that user too.
+        let users = std::path::Path::new(&profile)
+            .parent()
+            .expect("users")
+            .display()
+            .to_string();
+        assert!(user_writable(&format!(r"{users}\jdoe\AppData\Roaming\x.exe")));
     }
 
     #[test]
     fn tasks_that_run_files_from_writable_folders_are_flagged() {
-        let root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+        let root = vigil_sys::paths::windows_dir().display().to_string();
         let action = |program: &str, arguments: &str| vigil_sys::tasks::TaskAction {
             kind: "exec".into(),
             program: program.into(),
@@ -230,7 +239,7 @@ mod tests {
             &powershell,
             r#"-NoProfile -File "%LOCALAPPDATA%\Vendor\sync.ps1""#
         )])));
-        let profile = std::env::var("USERPROFILE").unwrap_or_default();
+        let profile = vigil_sys::paths::profile().expect("profile").display().to_string();
         assert!(task_writable(&task(vec![action(
             &format!(r"{profile}\AppData\Local\Temp\x.exe"),
             ""

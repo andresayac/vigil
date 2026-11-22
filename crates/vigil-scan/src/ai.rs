@@ -276,13 +276,42 @@ pub fn env_names(secret: &str) -> &'static [&'static str] {
     }
 }
 
-/// A secret from the environment (the fallback of the credential store).
+/// A secret from the environment (the fallback of the credential store). Never while Vigil runs as
+/// administrator: a standard user's program can set the user's environment (HKCU\Environment), so
+/// the elevated copy uses only the keys stored in the Credential Manager.
 pub fn env_key(secret: &str) -> Option<String> {
-    env_names(secret)
+    from_env(env_names(secret), cli::running_elevated(), &|name| {
+        std::env::var(name).ok()
+    })
+}
+
+/// The first non-blank value of `names` read through `read`, or `None` when elevated (see
+/// [`env_key`]).
+fn from_env(names: &[&str], elevated: bool, read: &dyn Fn(&str) -> Option<String>) -> Option<String> {
+    if elevated {
+        return None;
+    }
+    names
         .iter()
-        .filter_map(|name| std::env::var(name).ok())
+        .filter_map(|name| read(name))
         .map(|v| v.trim().to_string())
         .find(|v| !v.is_empty())
+}
+
+/// The environment variables that can stand in for a stored secret, as a hint for the user: none
+/// while Vigil runs as administrator, which ignores them.
+fn env_hint(secret: &str, elevated: bool) -> &'static [&'static str] {
+    if elevated { &[] } else { env_names(secret) }
+}
+
+/// The program that answers at an endpoint on this computer (the owner of the listening socket).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocalServer {
+    pub pid: u32,
+    /// Its image path; empty when it cannot be read (a protected process, or HTTP.sys's System).
+    pub program: String,
+    /// Who signed it, when it has a valid signature.
+    pub signer: Option<String>,
 }
 
 /// What the user configured for the AI review.
@@ -291,8 +320,8 @@ pub struct AiConfig {
     pub provider: String,
     /// Empty: the provider's default.
     pub model: String,
-    /// Empty: the provider's default endpoint (`OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL`, then the
-    /// standard's own address).
+    /// Empty: the provider's default endpoint (`OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL` when Vigil
+    /// does not run as administrator, then the standard's own address).
     pub endpoint: String,
     pub effort: String,
 }
@@ -317,26 +346,32 @@ pub trait Probe {
         ollama::is_ollama(endpoint).then(|| ollama::local_models(endpoint))
     }
     /// The address an environment variable sets for a standard (`OPENAI_BASE_URL`,
-    /// `ANTHROPIC_BASE_URL`), if any.
+    /// `ANTHROPIC_BASE_URL`), if any. Ignored while Vigil runs as administrator: only the stored
+    /// settings choose where the findings go.
     fn base_url(&self, provider: &str) -> Option<String> {
         let name = match provider {
             "openai-compatible" => "OPENAI_BASE_URL",
             "anthropic-compatible" => "ANTHROPIC_BASE_URL",
             _ => return None,
         };
-        std::env::var(name).ok().filter(|v| !v.trim().is_empty())
+        from_env(&[name], self.elevated(), &|n| std::env::var(n).ok())
     }
-    /// A bearer token for the Anthropic standard (`ANTHROPIC_AUTH_TOKEN`).
+    /// A bearer token for the Anthropic standard (`ANTHROPIC_AUTH_TOKEN`); never while Vigil runs
+    /// as administrator.
     fn bearer_token(&self) -> Option<String> {
-        std::env::var("ANTHROPIC_AUTH_TOKEN")
-            .ok()
-            .filter(|t| !t.trim().is_empty())
+        from_env(&["ANTHROPIC_AUTH_TOKEN"], self.elevated(), &|n| std::env::var(n).ok())
     }
+    /// For an endpoint on this computer: the programs listening at its port, with their signers.
+    /// `None` when they could not be read.
+    fn local_servers(&self, endpoint: &str) -> Option<Vec<LocalServer>>;
 }
 
 /// The real computer: CLIs on PATH, secrets from the given lookup, servers on the network.
 pub struct SystemProbe<'a> {
     pub keys: &'a dyn Fn(&str) -> Option<String>,
+    /// Who signed a program (a valid signature only), for telling the user which program serves a
+    /// local model.
+    pub signer: &'a dyn Fn(&str) -> Option<String>,
 }
 
 impl Probe for SystemProbe<'_> {
@@ -365,6 +400,116 @@ impl Probe for SystemProbe<'_> {
             _ => false,
         }
     }
+
+    fn local_servers(&self, endpoint: &str) -> Option<Vec<LocalServer>> {
+        #[cfg(windows)]
+        {
+            let (port, v4, v6) = net::loopback_target(endpoint)?;
+            let owners = vigil_sys::net::loopback_listeners(port, v4, v6).ok()?;
+            Some(
+                owners
+                    .into_iter()
+                    .map(|(pid, program)| {
+                        let signer = if program.is_empty() {
+                            None
+                        } else {
+                            (self.signer)(&program)
+                        };
+                        LocalServer { pid, program, signer }
+                    })
+                    .collect(),
+            )
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = endpoint;
+            None
+        }
+    }
+}
+
+/// Whether `path` is inside one of `roots` (case-insensitive, whole folder names, no `..`).
+fn inside_any(path: &str, roots: &[std::path::PathBuf]) -> bool {
+    if path.split(['\\', '/']).any(|part| part == "..") {
+        return false;
+    }
+    let lower = path.to_lowercase();
+    roots.iter().any(|root| {
+        let root = root.display().to_string().trim_end_matches('\\').to_lowercase();
+        !root.is_empty() && lower.strip_prefix(&root).is_some_and(|rest| rest.starts_with('\\'))
+    })
+}
+
+/// The Program Files folders (from the known-folder API), which only administrators can change.
+fn program_files_roots() -> Vec<std::path::PathBuf> {
+    #[cfg(windows)]
+    {
+        vec![vigil_sys::paths::program_files(), vigil_sys::paths::program_files_x86()]
+    }
+    #[cfg(not(windows))]
+    {
+        Vec::new()
+    }
+}
+
+/// Who answers at an endpoint on this computer, to show in the consent dialog. While Vigil runs as
+/// administrator, a server a standard user's program could have started gets nothing: one Vigil
+/// cannot identify, or an unsigned program outside Program Files (a folder the user can write).
+fn check_local_server(endpoint: &str, probe: &dyn Probe) -> Result<Vec<LocalServer>, String> {
+    let servers = probe.local_servers(endpoint);
+    if !probe.elevated() {
+        return Ok(servers.unwrap_or_default());
+    }
+    let unknown = || {
+        tr!(
+            "Vigil cannot tell which program answers at {0}, so while it runs as administrator it sends nothing there. To use a local model, run Vigil without administrator rights.",
+            endpoint
+        )
+    };
+    let servers = servers.ok_or_else(unknown)?;
+    if servers.is_empty() {
+        return Err(tr!("No server answers at {0}.", endpoint));
+    }
+    let admin_only = program_files_roots();
+    for server in &servers {
+        if server.program.is_empty() {
+            return Err(unknown());
+        }
+        if server.signer.is_none() && !inside_any(&server.program, &admin_only) {
+            return Err(tr!(
+                "{0} answers at {1}. It is not signed and is not in Program Files, so any program of yours could have put it there: while Vigil runs as administrator it sends it nothing. To use a local model, run Vigil without administrator rights.",
+                clip(&server.program, 260),
+                endpoint
+            ));
+        }
+    }
+    Ok(servers)
+}
+
+/// The programs serving a local model, for the destination shown in the consent dialog.
+fn served_by(destination: String, servers: &[LocalServer]) -> String {
+    if servers.is_empty() {
+        return destination;
+    }
+    let programs: Vec<String> = servers
+        .iter()
+        .map(|server| {
+            let program = if server.program.is_empty() {
+                tr!("an unknown program (PID {0})", server.pid)
+            } else {
+                clip(&server.program, 260)
+            };
+            match &server.signer {
+                Some(signer) => tr!("{0}, signed by {1}", program, clip(signer, 120)),
+                None => tr!("{0}, not signed", program),
+            }
+        })
+        .collect();
+    tr!(
+        "{0}. The program answering there: {1}",
+        destination,
+        programs.join("; ")
+    )
 }
 
 /// Whether a provider can be used now, and a short note for the user.
@@ -432,8 +577,16 @@ fn status_of(info: &'static ProviderInfo, config: &AiConfig, probe: &dyn Probe) 
             match check_endpoint(&endpoint) {
                 Err(problem) => (false, problem),
                 Ok(endpoint) if is_loopback_url(&endpoint) => {
+                    let refused = || {
+                        probe
+                            .elevated()
+                            .then(|| check_local_server(&endpoint, probe).err())
+                            .flatten()
+                    };
                     if !probe.reachable(info.id, &endpoint) {
                         (false, tr!("No server answers at {0}.", endpoint))
+                    } else if let Some(problem) = refused() {
+                        (false, problem)
                     } else if probe.ollama_models(&endpoint).is_some() {
                         (
                             true,
@@ -455,13 +608,13 @@ fn status_of(info: &'static ProviderInfo, config: &AiConfig, probe: &dyn Probe) 
                             tr!("API key saved. The findings to review go to {0}.", host_of(&endpoint)),
                         )
                     } else {
-                        (
-                            false,
-                            tr!(
-                                "Add an API key in Settings (or set {0}).",
-                                env_names(secret).join(" / ")
-                            ),
-                        )
+                        let names = env_hint(secret, probe.elevated());
+                        let note = if names.is_empty() {
+                            tr!("Add an API key in Settings.")
+                        } else {
+                            tr!("Add an API key in Settings (or set {0}).", names.join(" / "))
+                        };
+                        (false, note)
                     }
                 }
             }
@@ -834,7 +987,7 @@ fn build(info: &'static ProviderInfo, config: &AiConfig, probe: &dyn Probe) -> R
     };
     let key = |secret: &str| probe.key(secret);
     let missing_key = |secret: &str| {
-        let names = env_names(secret);
+        let names = env_hint(secret, probe.elevated());
         if names.is_empty() {
             tr!("no API key is saved for {0}", display_name(info))
         } else {
@@ -870,6 +1023,15 @@ fn build(info: &'static ProviderInfo, config: &AiConfig, probe: &dyn Probe) -> R
             _ => Ok(()),
         }
     };
+    // Who serves a model on this computer: shown with the destination, refused when elevated if a
+    // standard user's program could have started it.
+    let local_servers_of = |endpoint: &str| -> Result<Vec<LocalServer>, String> {
+        if is_loopback_url(endpoint) {
+            check_local_server(endpoint, probe)
+        } else {
+            Ok(Vec::new())
+        }
+    };
     match info.id {
         "openai-compatible" => {
             let endpoint = check_endpoint(&endpoint_for(info, config, probe))?;
@@ -884,11 +1046,10 @@ fn build(info: &'static ProviderInfo, config: &AiConfig, probe: &dyn Probe) -> R
                 model
             };
             keep_local(&endpoint, &model)?;
-            Ok(Provider::openai_compatible(
-                &model,
-                key("openai-compatible").as_deref(),
-                &endpoint,
-            ))
+            let servers = local_servers_of(&endpoint)?;
+            let mut provider = Provider::openai_compatible(&model, key("openai-compatible").as_deref(), &endpoint);
+            provider.destination = served_by(provider.destination, &servers);
+            Ok(provider)
         }
         "anthropic-compatible" => {
             let endpoint = check_endpoint(&endpoint_for(info, config, probe))?;
@@ -897,6 +1058,7 @@ fn build(info: &'static ProviderInfo, config: &AiConfig, probe: &dyn Probe) -> R
                 return Err(tr!("choose the model the server should use"));
             }
             keep_local(&endpoint, &model)?;
+            let servers = local_servers_of(&endpoint)?;
             let auth = match key("anthropic-compatible") {
                 Some(k) => ApiAuth::Key(k),
                 None => match probe.bearer_token() {
@@ -905,7 +1067,9 @@ fn build(info: &'static ProviderInfo, config: &AiConfig, probe: &dyn Probe) -> R
                     None => return Err(missing_key("anthropic-compatible")),
                 },
             };
-            Ok(Provider::anthropic(&model, &effort, auth, &endpoint))
+            let mut provider = Provider::anthropic(&model, &effort, auth, &endpoint);
+            provider.destination = served_by(provider.destination, &servers);
+            Ok(provider)
         }
         "claude-code" => Provider::claude_code(&model, &effort, launcher()?),
         "codex-cli" => Provider::codex_cli(&model, launcher()?),
@@ -926,7 +1090,10 @@ pub fn list_models(
     if info.kind != "api" {
         return suggestions();
     }
-    let probe = SystemProbe { keys };
+    let probe = SystemProbe {
+        keys,
+        signer: &|_| None,
+    };
     let config = AiConfig {
         provider: provider.to_string(),
         endpoint: endpoint.to_string(),
@@ -1550,6 +1717,8 @@ mod tests {
         ollama: Option<Vec<&'static str>>,
         /// Vigil runs as administrator (the CI runner does: never ask Windows here).
         elevated: bool,
+        /// The programs listening at a local endpoint (`None`: they could not be read).
+        listeners: Option<Vec<LocalServer>>,
     }
 
     impl FakeProbe {
@@ -1560,6 +1729,7 @@ mod tests {
                 servers: vec![],
                 ollama: None,
                 elevated: false,
+                listeners: Some(vec![]),
             }
         }
     }
@@ -1589,6 +1759,9 @@ mod tests {
         }
         fn bearer_token(&self) -> Option<String> {
             None
+        }
+        fn local_servers(&self, endpoint: &str) -> Option<Vec<LocalServer>> {
+            self.listeners.clone().filter(|_| is_loopback_url(endpoint))
         }
     }
 
@@ -1626,6 +1799,161 @@ mod tests {
         for removed in ["openai", "anthropic", "gemini", "ollama"] {
             assert!(provider_info(removed).is_none(), "{removed}");
         }
+    }
+
+    #[test]
+    fn the_elevated_copy_ignores_the_environment() {
+        let read = |name: &str| (name == "OPENAI_BASE_URL").then(|| " http://203.0.113.7/v1 ".to_string());
+        assert_eq!(
+            from_env(&["OPENAI_BASE_URL"], false, &read).as_deref(),
+            Some("http://203.0.113.7/v1")
+        );
+        assert_eq!(from_env(&["OPENAI_BASE_URL"], true, &read), None);
+        assert_eq!(env_hint("openai-compatible", false), ["OPENAI_API_KEY"]);
+        assert!(env_hint("openai-compatible", true).is_empty());
+        // Whatever the environment holds, the elevated copy reads no key from it.
+        cli::set_elevated(Some(true));
+        for secret in ["openai-compatible", "anthropic-compatible", "virustotal"] {
+            assert_eq!(env_key(secret), None, "{secret}");
+        }
+        cli::set_elevated(None);
+        // Elevated, the hints name no variable either.
+        let mut probe = FakeProbe::new(vec![], vec![]);
+        probe.elevated = true;
+        let status = statuses(
+            &configured("openai-compatible", "m", "https://api.example.com/v1"),
+            &probe,
+        )
+        .into_iter()
+        .find(|s| s.info.id == "openai-compatible")
+        .expect("status");
+        assert!(
+            !status.available && !status.note.contains("OPENAI_API_KEY"),
+            "{}",
+            status.note
+        );
+    }
+
+    #[test]
+    fn loopback_targets_name_the_port_and_the_address_family() {
+        assert_eq!(
+            net::loopback_target("http://localhost:11434/v1"),
+            Some((11434, true, true))
+        );
+        assert_eq!(net::loopback_target("http://127.0.0.1/v1"), Some((80, true, false)));
+        assert_eq!(net::loopback_target("https://[::1]:8443"), Some((8443, false, true)));
+        assert_eq!(net::loopback_target("https://api.example.com/v1"), None);
+        assert_eq!(net::loopback_target("http://localhost:99999"), None);
+    }
+
+    #[test]
+    fn only_program_files_counts_as_admin_only() {
+        let roots = [std::path::PathBuf::from(r"C:\Program Files")];
+        assert!(inside_any(r"C:\Program Files\Ollama\ollama.exe", &roots));
+        assert!(inside_any(r"c:\program files\Ollama\ollama.exe", &roots));
+        assert!(!inside_any(r"C:\Program FilesX\ollama.exe", &roots));
+        assert!(!inside_any(r"C:\Program Files\..\Users\jdoe\ollama.exe", &roots));
+        assert!(!inside_any(
+            r"C:\Users\jdoe\AppData\Local\Programs\Ollama\ollama.exe",
+            &roots
+        ));
+        assert!(!inside_any(r"C:\Program Files\x.exe", &[std::path::PathBuf::new()]));
+    }
+
+    #[test]
+    fn a_local_model_server_is_named_and_refused_when_a_user_could_have_planted_it() {
+        let endpoint = "http://127.0.0.1:11434/v1";
+        let user_copy = r"C:\Users\jdoe\AppData\Local\Programs\Ollama\ollama.exe";
+        let server = |program: &str, signer: Option<&str>| LocalServer {
+            pid: 4242,
+            program: program.into(),
+            signer: signer.map(str::to_string),
+        };
+        let probe_with = |elevated: bool, listeners: Option<Vec<LocalServer>>| {
+            let mut probe = FakeProbe::new(vec![], vec![]);
+            probe.servers = vec!["openai-compatible", "anthropic-compatible"];
+            probe.elevated = elevated;
+            probe.listeners = listeners;
+            probe
+        };
+        let pick = |probe: &FakeProbe, provider: &str| pick_provider(&configured(provider, "m", endpoint), probe);
+        let status = |probe: &FakeProbe| {
+            statuses(&configured("openai-compatible", "m", endpoint), probe)
+                .into_iter()
+                .find(|s| s.info.id == "openai-compatible")
+                .expect("status")
+        };
+
+        // Without administrator rights it is used, and the consent dialog names the program.
+        let plain = probe_with(false, Some(vec![server(user_copy, None)]));
+        let provider = pick(&plain, "openai-compatible").expect("used");
+        assert!(provider.destination.contains(user_copy), "{}", provider.destination);
+        assert!(provider.destination.contains("not signed"), "{}", provider.destination);
+        assert!(status(&plain).available);
+
+        // As administrator, an unsigned program in a user's folder gets nothing.
+        let elevated = probe_with(true, Some(vec![server(user_copy, None)]));
+        for provider in ["openai-compatible", "anthropic-compatible"] {
+            let problem = pick(&elevated, provider).expect_err("refused");
+            assert!(
+                problem.contains(user_copy) && problem.contains("without administrator"),
+                "{problem}"
+            );
+        }
+        let refused = status(&elevated);
+        assert!(
+            !refused.available && refused.note.contains("without administrator"),
+            "{}",
+            refused.note
+        );
+
+        // A signed program passes, and its signer is shown.
+        let signed = probe_with(true, Some(vec![server(user_copy, Some("Example Models Inc."))]));
+        let provider = pick(&signed, "anthropic-compatible").expect("signed");
+        assert!(
+            provider.destination.contains("signed by Example Models Inc."),
+            "{}",
+            provider.destination
+        );
+        assert!(status(&signed).available);
+
+        // So does an unsigned program in Program Files, which only administrators can change.
+        #[cfg(windows)]
+        {
+            let installed = vigil_sys::paths::program_files()
+                .join(r"Example\server.exe")
+                .display()
+                .to_string();
+            let probe = probe_with(true, Some(vec![server(&installed, None)]));
+            let provider = pick(&probe, "openai-compatible").expect("Program Files");
+            assert!(provider.destination.contains(&installed), "{}", provider.destination);
+        }
+
+        // An unknown owner (HTTP.sys answers as System), an unreadable table, no listener, or a
+        // second, planted listener next to a signed one: refused.
+        let signed_one = server(user_copy, Some("Example Models Inc."));
+        for listeners in [
+            Some(vec![server("", None)]),
+            None,
+            Some(vec![]),
+            Some(vec![
+                signed_one.clone(),
+                server(r"C:\Users\jdoe\Downloads\proxy.exe", None),
+            ]),
+        ] {
+            let probe = probe_with(true, listeners.clone());
+            assert!(pick(&probe, "openai-compatible").is_err(), "{listeners:?}");
+        }
+
+        // A remote endpoint is not about local programs.
+        let mut remote = probe_with(true, None);
+        remote.keys = vec!["openai-compatible"];
+        let provider = pick_provider(
+            &configured("openai-compatible", "m", "https://api.example.com/v1"),
+            &remote,
+        )
+        .expect("remote");
+        assert!(!provider.destination.contains("program"), "{}", provider.destination);
     }
 
     #[test]
@@ -1738,6 +2066,7 @@ mod tests {
             servers: vec!["openai-compatible", "anthropic-compatible"],
             ollama: Some(vec!["llama3.1:8b", "qwen3:14b"]),
             elevated: false,
+            listeners: Some(vec![]),
         };
         let here = "http://localhost:11434/v1";
         let status = statuses(&configured("openai-compatible", "qwen3:14b", here), &ollama)

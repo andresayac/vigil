@@ -9,7 +9,12 @@ use std::sync::LazyLock;
 
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use windows::Win32::Storage::FileSystem::{MOVEFILE_DELAY_UNTIL_REBOOT, MoveFileExW};
+use windows::Wdk::Storage::FileSystem::{FILE_CREATE, FILE_DIRECTORY_FILE, FILE_NON_DIRECTORY_FILE, FILE_OPEN};
+use windows::Win32::Foundation::HANDLE;
+use windows::Win32::Storage::FileSystem::{
+    DELETE, FILE_ADD_FILE, FILE_ADD_SUBDIRECTORY, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_LIST_DIRECTORY,
+    FILE_READ_ATTRIBUTES, FILE_SHARE_MODE, FILE_TRAVERSE, MOVEFILE_DELAY_UNTIL_REBOOT, MoveFileExW,
+};
 use windows::core::{HSTRING, PCWSTR};
 
 use crate::cmdline::{basename, dirname, normalize_path};
@@ -17,6 +22,7 @@ use crate::engine::Outcome;
 use crate::error::{ActionError, Result, fail, io_text};
 use crate::guards::guard_file;
 use crate::json_text;
+use crate::nofollow;
 use crate::procs;
 use crate::store::Store;
 use vigil_i18n::tr;
@@ -222,8 +228,173 @@ pub fn restore_quarantined(qid: &str, store: &Store) -> Result<String> {
     }
     let folder = dirname(&target);
     let held = safe_folder(&folder)?;
-    let mut output = create_in(&held, &target)?;
-    let sha256 = match unmask_into(&blob, &mut output) {
+    if let Err(error) = write_restored(&held, &target, &blob, &meta) {
+        // The file is gone by now (deleted when its handle closed); so are the folders made for it.
+        held.remove_created();
+        return Err(error);
+    }
+    drop(held);
+    let _ = fs::remove_file(&blob);
+    let _ = fs::remove_file(&meta_path);
+    let name = meta.get("name").and_then(Value::as_str).unwrap_or(qid);
+    Ok(format!("restored {name} to {target}"))
+}
+
+/// `C:\...`: a drive letter and an absolute path (no `\\?\`, UNC or device names).
+fn local_absolute(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    bytes.len() > 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'\\'
+}
+
+/// The folders from the drive root to `folder`, each opened relative to the one before
+/// (`NtCreateFile` with a root directory and `OBJ_DONT_REPARSE`), never by path, and held without
+/// delete sharing, so none of them can be renamed or swapped while the file is written. A folder
+/// someone else holds open for deletion is refused (there is no fallback that shares delete
+/// access). A missing folder is created relative to its parent's handle and checked the same way;
+/// any link (junction, symbolic link, mount point) on the way refuses the restore.
+struct HeldFolders {
+    /// Root first, `folder` last, each with whether this restore created it.
+    handles: Vec<(nofollow::Handle, bool)>,
+    /// `folder` as Windows names it (long names, the drive's real letter).
+    real: String,
+}
+
+impl HeldFolders {
+    fn last(&self) -> Option<&nofollow::Handle> {
+        self.handles.last().map(|(handle, _)| handle)
+    }
+
+    /// Removes the folders this restore created, deepest first (empty by then), through their
+    /// handles; the others are only closed.
+    fn remove_created(mut self) {
+        while let Some((handle, created)) = self.handles.pop() {
+            if created {
+                let _ = nofollow::delete_on_close(handle.raw());
+            }
+            drop(handle);
+        }
+    }
+}
+
+fn safe_folder(folder: &str) -> Result<HeldFolders> {
+    let parts: Vec<&str> = folder.trim_end_matches('\\').split('\\').collect();
+    let not_local = || ActionError::new(tr!("the original place is not a local folder: {0}", folder));
+    let (drive, below) = parts.split_first().ok_or_else(not_local)?;
+    if drive.len() != 2 || !below.iter().all(|part| nofollow::plain_name(part)) {
+        return Err(not_local());
+    }
+    let mut held = HeldFolders {
+        handles: Vec::with_capacity(parts.len()),
+        real: String::new(),
+    };
+    match open_folders(&mut held, drive, below, folder) {
+        Ok(()) => Ok(held),
+        Err(error) => {
+            held.remove_created();
+            Err(error)
+        }
+    }
+}
+
+fn open_folders(held: &mut HeldFolders, drive: &str, below: &[&str], folder: &str) -> Result<()> {
+    let walk = FILE_TRAVERSE | FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES;
+    let mut path = format!("{drive}\\");
+    let open_error = |path: &str, e: &std::io::Error| -> ActionError {
+        match e.raw_os_error() {
+            // ERROR_SHARING_VIOLATION: another program holds it open, possibly to move it.
+            Some(32) => ActionError::new(tr!(
+                "{0} is held by another program that could move it; the file was not restored",
+                path
+            )),
+            // A link met by an open that refuses links.
+            Some(681 | 1920 | 4395) => ActionError::new(tr!("{0} is a link; the file was not restored", path)),
+            _ => ActionError::new(tr!("could not open {0}: {1}", path, io_text(e))),
+        }
+    };
+    let root = nofollow::open_path(
+        Path::new(&path),
+        walk | FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY,
+        nofollow::SHARE_NO_DELETE,
+    )
+    .or_else(|_| nofollow::open_path(Path::new(&path), walk, nofollow::SHARE_NO_DELETE))
+    .map_err(|e| open_error(&path, &e))?;
+    check_folder(&root, &path)?;
+    held.handles.push((root, false));
+    for part in below {
+        if !path.ends_with('\\') {
+            path.push('\\');
+        }
+        path.push_str(part);
+        let Some(parent) = held.last() else {
+            return fail(tr!("the original place is not a local folder: {0}", folder));
+        };
+        let open = |access| {
+            nofollow::open_at(
+                parent,
+                part,
+                access,
+                nofollow::SHARE_NO_DELETE,
+                FILE_OPEN,
+                FILE_DIRECTORY_FILE,
+            )
+        };
+        let existing = open(walk | FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY).or_else(|e| match e.kind() {
+            std::io::ErrorKind::PermissionDenied => open(walk),
+            _ => Err(e),
+        });
+        let (handle, created) = match existing {
+            Ok(handle) => (handle, false),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                let access = walk | FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY | DELETE;
+                let made = nofollow::open_at(
+                    parent,
+                    part,
+                    access,
+                    nofollow::SHARE_NO_DELETE,
+                    FILE_CREATE,
+                    FILE_DIRECTORY_FILE,
+                )
+                .map_err(|e| ActionError::new(tr!("could not create {0}: {1}", path, io_text(&e))))?;
+                (made, true)
+            }
+            Err(e) => return Err(open_error(&path, &e)),
+        };
+        // Pushed before the check, so a folder this restore made is removed if the check fails.
+        held.handles.push((handle, created));
+        if let Some(handle) = held.last() {
+            check_folder(handle, &path)?;
+        }
+    }
+    let last = held
+        .last()
+        .ok_or_else(|| ActionError::new(tr!("could not open {0}", folder)))?;
+    let real = nofollow::final_path(last.raw()).ok_or_else(|| ActionError::new(tr!("could not open {0}", folder)))?;
+    if !real.eq_ignore_ascii_case(&nofollow::long_name(folder)) {
+        return fail(tr!(
+            "{0} is reached through a link ({1}); the file was not restored",
+            folder,
+            real
+        ));
+    }
+    held.real = real;
+    Ok(())
+}
+
+/// What was opened is a folder and not a link.
+fn check_folder(handle: &nofollow::Handle, path: &str) -> Result<()> {
+    let found =
+        nofollow::info(handle).map_err(|e| ActionError::new(tr!("could not open {0}: {1}", path, io_text(&e))))?;
+    if nofollow::is_link(&found) || !nofollow::is_dir(&found) {
+        return fail(tr!("{0} is a link; the file was not restored", path));
+    }
+    Ok(())
+}
+
+/// Creates the file (never an existing one) relative to the held folder, fills it from the
+/// quarantined copy and checks its hash. On an error the new file is deleted when it closes.
+fn write_restored(held: &HeldFolders, target: &str, blob: &Path, meta: &Value) -> Result<()> {
+    let mut output = create_in(held, target)?;
+    let sha256 = match unmask_into(blob, &mut output) {
         Ok(sha) => sha,
         Err(e) => {
             discard(&output);
@@ -241,109 +412,32 @@ pub fn restore_quarantined(qid: &str, store: &Store) -> Result<String> {
         let time = std::time::UNIX_EPOCH + std::time::Duration::from_secs_f64(modified.max(0.0));
         let _ = output.set_times(fs::FileTimes::new().set_modified(time).set_accessed(time));
     }
-    drop(output);
-    drop(held);
-    let _ = fs::remove_file(&blob);
-    let _ = fs::remove_file(&meta_path);
-    let name = meta.get("name").and_then(Value::as_str).unwrap_or(qid);
-    Ok(format!("restored {name} to {target}"))
+    Ok(())
 }
 
-/// `C:\...`: a drive letter and an absolute path (no `\\?\`, UNC or device names).
-fn local_absolute(path: &str) -> bool {
-    let bytes = path.as_bytes();
-    bytes.len() > 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'\\'
-}
-
-/// The folders from the drive root to `folder`, each opened without following a link and held
-/// open without delete sharing, so none of them can be renamed or swapped while the file is
-/// written. A missing folder is created (one level at a time, each checked the same way). Any
-/// link (junction, symbolic link, mount point) on the way refuses the restore.
-struct HeldFolders {
-    /// Held open (root first, `folder` last) until the file is written: that is their purpose.
-    _handles: Vec<File>,
-    /// `folder` as Windows names it (long names, the drive's real letter).
-    real: String,
-}
-
-fn safe_folder(folder: &str) -> Result<HeldFolders> {
-    use std::os::windows::fs::OpenOptionsExt;
-    const BACKUP_SEMANTICS: u32 = 0x0200_0000;
-    const OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-    const READ_ATTRIBUTES: u32 = 0x0080;
-    const SHARE_READ_WRITE: u32 = 0x1 | 0x2;
-    let parts: Vec<&str> = folder.trim_end_matches('\\').split('\\').collect();
-    let mut handles = Vec::with_capacity(parts.len());
-    let mut path = String::new();
-    for (i, part) in parts.iter().enumerate() {
-        if part.is_empty() {
-            return fail(tr!("the original place is not a local folder: {0}", folder));
-        }
-        path.push_str(part);
-        if i == 0 {
-            path.push('\\');
-        }
-        if !Path::new(&path).exists() && fs::symlink_metadata(&path).is_err() {
-            fs::create_dir(&path).map_err(|e| ActionError::new(tr!("could not create {0}: {1}", path, io_text(&e))))?;
-        }
-        let open = |share: u32| {
-            fs::OpenOptions::new()
-                .access_mode(READ_ATTRIBUTES)
-                .share_mode(share)
-                .custom_flags(BACKUP_SEMANTICS | OPEN_REPARSE_POINT)
-                .open(&path)
-        };
-        // Without delete sharing, nobody can rename this folder or replace it while it is held; a
-        // program that already holds it for deletion only loses that lock (the real path is
-        // still checked below).
-        let handle = open(SHARE_READ_WRITE)
-            .or_else(|_| open(SHARE_READ_WRITE | 0x4))
-            .map_err(|e| ActionError::new(tr!("could not open {0}: {1}", path, io_text(&e))))?;
-        let meta = handle
-            .metadata()
-            .map_err(|e| ActionError::new(tr!("could not open {0}: {1}", path, io_text(&e))))?;
-        if is_reparse(&meta) || !meta.is_dir() {
-            return fail(tr!("{0} is a link; the file was not restored", path));
-        }
-        handles.push(handle);
-        if i > 0 {
-            path.push('\\');
-        }
-    }
-    let last = handles
-        .last()
-        .ok_or_else(|| ActionError::new(tr!("the original place is not a local folder: {0}", folder)))?;
-    let real = final_path(last).ok_or_else(|| ActionError::new(tr!("could not open {0}", folder)))?;
-    if !real.eq_ignore_ascii_case(&long_name(folder)) {
-        return fail(tr!(
-            "{0} is reached through a link ({1}); the file was not restored",
-            folder,
-            real
-        ));
-    }
-    Ok(HeldFolders {
-        _handles: handles,
-        real,
-    })
-}
-
-/// Creates `target` (a new file, never an existing one) in the held folder and checks Windows
-/// put it there.
+/// Creates `target` (a new file, never an existing one) relative to the held folder's handle and
+/// checks Windows put it there.
 fn create_in(held: &HeldFolders, target: &str) -> Result<File> {
-    use std::os::windows::fs::OpenOptionsExt;
-    const OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-    let file = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create_new(true)
-        .share_mode(0)
-        .access_mode(0x0012_0116 | 0x0001_0000 | 0x0012_0089)
-        .custom_flags(OPEN_REPARSE_POINT)
-        .open(target)
-        .map_err(|e| ActionError::new(tr!("could not restore: {0}", io_text(&e))))?;
+    use std::os::windows::io::AsRawHandle;
     let name = basename(target);
+    let folder = held
+        .last()
+        .ok_or_else(|| ActionError::new(tr!("the original place is not a local folder: {0}", target)))?;
+    let file = nofollow::open_at(
+        folder,
+        name,
+        FILE_GENERIC_READ | FILE_GENERIC_WRITE | DELETE,
+        FILE_SHARE_MODE(0),
+        FILE_CREATE,
+        FILE_NON_DIRECTORY_FILE,
+    )
+    .map_err(|e| match e.kind() {
+        std::io::ErrorKind::AlreadyExists => ActionError::new(tr!("a file already exists at {0}{1}", target, "")),
+        _ => ActionError::new(tr!("could not restore: {0}", io_text(&e))),
+    })?
+    .into_file();
     let expected = format!("{}\\{}", held.real.trim_end_matches('\\'), name);
-    match final_path(&file) {
+    match nofollow::final_path(HANDLE(file.as_raw_handle())) {
         Some(real) if real.eq_ignore_ascii_case(&expected) => Ok(file),
         other => {
             discard(&file);
@@ -359,60 +453,7 @@ fn create_in(held: &HeldFolders, target: &str) -> Result<File> {
 /// Marks a file this restore created for deletion when its handle closes.
 fn discard(file: &File) {
     use std::os::windows::io::AsRawHandle;
-    use windows::Win32::Foundation::HANDLE;
-    use windows::Win32::Storage::FileSystem::{FILE_DISPOSITION_INFO, FileDispositionInfo, SetFileInformationByHandle};
-    let info = FILE_DISPOSITION_INFO { DeleteFile: true };
-    // SAFETY: the handle is open (with DELETE access) for the call; `info` outlives it.
-    let _ = unsafe {
-        SetFileInformationByHandle(
-            HANDLE(file.as_raw_handle()),
-            FileDispositionInfo,
-            std::ptr::from_ref(&info).cast(),
-            size_of::<FILE_DISPOSITION_INFO>() as u32,
-        )
-    };
-}
-
-fn is_reparse(meta: &fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-    meta.file_attributes() & 0x400 != 0
-}
-
-/// The path Windows has for an open file or folder (`C:\...`, long names).
-fn final_path(file: &File) -> Option<String> {
-    use std::os::windows::io::AsRawHandle;
-    use windows::Win32::Foundation::HANDLE;
-    use windows::Win32::Storage::FileSystem::{FILE_NAME_NORMALIZED, GetFinalPathNameByHandleW};
-    let mut buffer = vec![0u16; 1024];
-    for _ in 0..2 {
-        // SAFETY: the handle is open for the call; `buffer` is writable for its whole length.
-        let length =
-            unsafe { GetFinalPathNameByHandleW(HANDLE(file.as_raw_handle()), &mut buffer, FILE_NAME_NORMALIZED) }
-                as usize;
-        if length == 0 {
-            return None;
-        }
-        if length < buffer.len() {
-            let text = String::from_utf16_lossy(&buffer[..length]);
-            let text = text.strip_prefix(r"\\?\").unwrap_or(&text).to_string();
-            return (!text.starts_with(r"UNC\")).then_some(text);
-        }
-        buffer.resize(length + 1, 0);
-    }
-    None
-}
-
-/// `path` with short (8.3) names expanded and nothing else resolved: a junction keeps its name.
-fn long_name(path: &str) -> String {
-    use windows::Win32::Storage::FileSystem::GetLongPathNameW;
-    let wide: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
-    let mut buffer = vec![0u16; 1024];
-    // SAFETY: `wide` is NUL-terminated; `buffer` is writable for its whole length.
-    let length = unsafe { GetLongPathNameW(PCWSTR(wide.as_ptr()), Some(&mut buffer)) } as usize;
-    if length == 0 || length >= buffer.len() {
-        return path.to_string();
-    }
-    String::from_utf16_lossy(&buffer[..length])
+    let _ = nofollow::delete_on_close(HANDLE(file.as_raw_handle()));
 }
 
 /// Copies the quarantined (masked) copy into `output`; returns the SHA-256 of the plain content.

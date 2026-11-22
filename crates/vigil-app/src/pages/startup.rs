@@ -91,6 +91,22 @@ fn impact_of<'a>(impact: &'a Value, executable: &str) -> Option<&'a Value> {
         .or_else(|| programs.iter().find(|p| field(p, "key") == name))
 }
 
+/// The table's columns; the impact column only when it can be read (administrator rights, or
+/// Windows' measurements are readable anyway).
+fn columns(impact: bool) -> Vec<GridCol> {
+    let mut cols = vec![
+        GridCol::new("name", t("startup.colName"), 300.),
+        GridCol::new("publisher", t("startup.colPublisher"), 220.),
+        GridCol::new("status", t("startup.colStatus"), 130.),
+    ];
+    if impact {
+        cols.push(GridCol::new("impact", t("startup.colImpact"), 130.));
+    }
+    cols.push(GridCol::new("signature", t("startup.colSignature"), 150.));
+    cols.push(GridCol::new("location", t("startup.colLocation"), 260.));
+    cols
+}
+
 /// The impact column: text and sort rank.
 fn impact_cell(found: Option<&Value>) -> (String, f64) {
     match found.and_then(|p| p.get("level")).and_then(Value::as_str) {
@@ -172,16 +188,8 @@ impl Acts for StartupPage {
 
 impl StartupPage {
     pub fn new(core: Option<Arc<AppState>>, elevated: bool, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let cols = vec![
-            GridCol::new("name", t("startup.colName"), 300.),
-            GridCol::new("publisher", t("startup.colPublisher"), 220.),
-            GridCol::new("status", t("startup.colStatus"), 130.),
-            GridCol::new("impact", t("startup.colImpact"), 130.),
-            GridCol::new("signature", t("startup.colSignature"), 150.),
-            GridCol::new("location", t("startup.colLocation"), 260.),
-        ];
         let table = cx.new(|cx| {
-            TableState::new(Grid::new(t("startup.empty"), cols), window, cx)
+            TableState::new(Grid::new(t("startup.empty"), columns(elevated)), window, cx)
                 .row_selectable(false)
                 .col_movable(false)
         });
@@ -315,8 +323,14 @@ impl StartupPage {
         );
     }
 
+    /// Whether the impact column has something to show.
+    fn impact_readable(&self) -> bool {
+        self.elevated || self.impact.get("measured").and_then(Value::as_bool).unwrap_or(false)
+    }
+
     fn fill(&mut self, cx: &mut Context<Self>) {
         let tk = *tokens(cx);
+        let with_impact = self.impact_readable();
         let rows: Vec<GridRow> = self
             .rows
             .iter()
@@ -334,14 +348,12 @@ impl StartupPage {
                 if e.own {
                     name.text = format!("{} · {}", name.text, t("startup.own"));
                 }
-                let cells = vec![
-                    name,
-                    GridCell::text(publisher(e)),
-                    GridCell::text(state).ranked(rank),
-                    GridCell::text(impact).ranked(impact_rank),
-                    GridCell::text(sig).ranked(sig_rank).color(color),
-                    GridCell::text(location(e)),
-                ];
+                let mut cells = vec![name, GridCell::text(publisher(e)), GridCell::text(state).ranked(rank)];
+                if with_impact {
+                    cells.push(GridCell::text(impact).ranked(impact_rank));
+                }
+                cells.push(GridCell::text(sig).ranked(sig_rank).color(color));
+                cells.push(GridCell::text(location(e)));
                 let search = format!(
                     "{} {} {} {} {}",
                     e.name, e.description, e.publisher, e.command, e.location
@@ -352,6 +364,7 @@ impl StartupPage {
             })
             .collect();
         self.table.update(cx, |table, cx| {
+            table.delegate_mut().set_cols(columns(with_impact));
             table.delegate_mut().set_rows(rows);
             table.refresh(cx);
             cx.notify();
@@ -509,13 +522,12 @@ impl StartupPage {
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
-        let measured = self.impact.get("measured").and_then(Value::as_bool).unwrap_or(false);
-        let needs_admin = self.impact.get("needsAdmin").and_then(Value::as_bool).unwrap_or(false);
+        // Without the rights the column is hidden and one line says why.
+        if !self.impact_readable() {
+            return t("startup.impactNeedsAdmin");
+        }
         if self.impact.is_null() {
             return t("startup.impactReading");
-        }
-        if !measured && needs_admin && !self.elevated {
-            return t("startup.impactNeedsAdmin");
         }
         let mut line = t("startup.impactNote");
         let ms = |b: &Value| b.get("bootMs").and_then(Value::as_f64).unwrap_or(0.0);

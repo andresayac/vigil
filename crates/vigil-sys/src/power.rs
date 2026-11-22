@@ -597,7 +597,9 @@ fn powercfg(args: &[&str]) -> Option<String> {
         return None;
     }
     let exe = std::path::PathBuf::from(String::from_utf16_lossy(&dir[..length])).join("powercfg.exe");
-    let mut child = Command::new(exe)
+    let mut command = Command::new(exe);
+    crate::paths::apply_child_env(&mut command);
+    let mut child = command
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

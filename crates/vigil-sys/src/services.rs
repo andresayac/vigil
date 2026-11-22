@@ -6,7 +6,6 @@ use std::ffi::c_void;
 
 use serde::Serialize;
 use windows::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, ERROR_MORE_DATA};
-use windows::Win32::System::Environment::ExpandEnvironmentStringsW;
 use windows::Win32::System::Services::{
     CloseServiceHandle, ENUM_SERVICE_STATUS_PROCESSW, EnumServicesStatusExW, OpenSCManagerW, OpenServiceW,
     QUERY_SERVICE_CONFIGW, QueryServiceConfig2W, QueryServiceConfigW, SC_ENUM_PROCESS_INFO, SC_HANDLE,
@@ -89,22 +88,9 @@ unsafe fn wide_text(ptr: PWSTR) -> String {
 }
 
 fn expand(text: &str) -> String {
-    if !text.contains('%') {
-        return text.to_string();
-    }
-    let source = HSTRING::from(text);
-    // SAFETY: a size query (no buffer).
-    let needed = unsafe { ExpandEnvironmentStringsW(&source, None) };
-    if needed == 0 {
-        return text.to_string();
-    }
-    let mut buffer = vec![0u16; needed as usize];
-    // SAFETY: the buffer has the size the first call asked for.
-    let written = unsafe { ExpandEnvironmentStringsW(&source, Some(&mut buffer)) };
-    if written == 0 || written as usize > buffer.len() {
-        return text.to_string();
-    }
-    crate::util::from_wide(&buffer)
+    // Expanded with Windows' own folders, never the process environment (which the user's own
+    // environment, HKCU\Environment, can change): see `paths::known_variables`.
+    crate::paths::expand_known(text).0
 }
 
 /// The executable of a service command line: the quoted part, or everything up to `.exe`.

@@ -609,21 +609,6 @@ pub fn remove_icon() {
     let _ = unsafe { Shell_NotifyIconW(NIM_DELETE, &data) };
 }
 
-/// The Windows accent colour, in the shade WinUI uses for the theme: AccentDark1 on light,
-/// AccentLight2 on dark. `None` when it cannot be read (the Fluent default stays).
-pub fn accent(dark: bool) -> Option<gpui_kit::Hsla> {
-    use windows::UI::ViewManagement::{UIColorType, UISettings};
-    let settings = UISettings::new().ok()?;
-    let kind = if dark {
-        UIColorType::AccentLight2
-    } else {
-        UIColorType::AccentDark1
-    };
-    let c = settings.GetColorValue(kind).ok()?;
-    let rgba = (u32::from(c.R) << 24) | (u32::from(c.G) << 16) | (u32::from(c.B) << 8) | 0xff;
-    Some(gpui_kit::rgba(rgba).into())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

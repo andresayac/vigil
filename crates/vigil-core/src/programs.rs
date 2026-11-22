@@ -135,6 +135,16 @@ pub fn checked_paths(program: &Program) -> Vec<String> {
 /// Checked signatures by lower-case path, for this session.
 static SIGNATURES: LazyLock<Mutex<HashMap<String, ProgramSignature>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// Who signed a program's file, when its signature is valid (checked now, read-only). Used to
+/// tell the user which program serves a local model.
+pub fn valid_signer(path: &str) -> Option<String> {
+    let info = vigil_actions::verify_signature(std::path::Path::new(path)).ok()?;
+    if info.sig_status.as_deref() != Some("Valid") {
+        return None;
+    }
+    info.signer.or(info.signer_subject).filter(|s| !s.trim().is_empty())
+}
+
 /// The Authenticode signatures of programs' files (read-only). Only files of the live list are
 /// checked, in a few PowerShell batches at a time; results are kept for the session. Slow: call it
 /// off the UI thread.

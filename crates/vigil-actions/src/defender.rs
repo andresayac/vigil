@@ -86,7 +86,9 @@ fn start_process(args: &[String]) -> Result<Box<dyn ScanProcess>> {
     if !Path::new(program).is_file() {
         return fail(tr!("Microsoft Defender's command-line tool was not found"));
     }
-    let child = Command::new(program)
+    let mut command = Command::new(program);
+    vigil_sys::paths::apply_child_env(&mut command);
+    let child = command
         .args(&args[1..])
         .stdin(Stdio::null())
         .stdout(Stdio::null())

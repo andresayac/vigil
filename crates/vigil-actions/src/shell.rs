@@ -21,15 +21,34 @@ fn explorer() -> String {
     windir().join("explorer.exe").to_string_lossy().into_owned()
 }
 
+/// Explorer's command line for a path: quoted, so a comma in a file name cannot split it into
+/// switches. Paths with quotes or control characters (which a Windows path cannot hold) are
+/// refused.
+fn explorer_arg(path: &str) -> Result<String> {
+    if path.contains('"') || path.chars().any(char::is_control) {
+        return fail(tr!("Explorer cannot open this path safely"));
+    }
+    Ok(format!("\"{path}\""))
+}
+
+/// Starts Explorer with `arg`: as the signed-in user through the running Explorer when Vigil runs
+/// as administrator (an elevated Explorer would become the shell if the real one had been closed),
+/// directly otherwise.
+fn explorer_with(arg: String) -> Result<()> {
+    let program = explorer();
+    let direct = arg.clone();
+    crate::desktop::launch_unelevated(&program, &arg, "", || launch(&program, &[&direct]))
+}
+
 /// Shows a file selected in Explorer (or its folder when the file is gone).
 pub fn open_location(path: &str) -> Result<()> {
     let path = normalize_path(path);
     if !path.is_empty() && Path::new(&path).exists() {
-        return launch(&explorer(), &[&format!("/select,{path}")]);
+        return explorer_with(format!("/select,{}", explorer_arg(&path)?));
     }
     let folder = dirname(&path);
     if !folder.is_empty() && Path::new(&folder).is_dir() {
-        return launch(&explorer(), &[&folder]);
+        return explorer_with(explorer_arg(&folder)?);
     }
     fail(tr!("neither the file nor its folder exists"))
 }
@@ -40,7 +59,7 @@ pub fn open_folder(path: &str) -> Result<()> {
     if path.is_empty() || !Path::new(&path).is_dir() {
         return fail(tr!("the folder does not exist"));
     }
-    launch(&explorer(), &[&path])
+    explorer_with(explorer_arg(&path)?)
 }
 
 /// The Windows Properties dialog of a file (`hwnd` = owner window, 0 for none).
@@ -262,6 +281,34 @@ mod tests {
             assert!(open_url(bad).is_err(), "{bad}");
         }
         assert_eq!(calls.borrow().len(), 2);
+        crate::testing::reset();
+    }
+
+    #[test]
+    fn explorer_opens_as_the_user_with_the_path_quoted() {
+        let calls: Rc<RefCell<Vec<String>>> = Rc::default();
+        let seen = calls.clone();
+        crate::testing::set_user_launch(Some(Rc::new(move |file: &str, args: &str, _: &str| {
+            seen.borrow_mut().push(format!("{file}|{args}"));
+            Ok(())
+        })));
+        crate::testing::set_admin(Some(true));
+        let dir = std::env::temp_dir().join(format!("vigil-explorer-{}", std::process::id()));
+        let file = dir.join("a,b.txt");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&file, b"x").unwrap();
+        open_location(&file.to_string_lossy()).expect("opened");
+        open_folder(&dir.to_string_lossy()).expect("opened");
+        let calls = calls.borrow().clone();
+        assert_eq!(calls.len(), 2, "{calls:?}");
+        assert!(
+            calls[0].contains(&format!("|/select,\"{}\"", file.display())),
+            "{calls:?}"
+        );
+        assert!(calls[1].ends_with(&format!("|\"{}\"", dir.display())), "{calls:?}");
+        assert!(calls.iter().all(|c| c.to_lowercase().contains("explorer.exe|")));
+        assert!(explorer_arg("C:\\a\"b").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
         crate::testing::reset();
     }
 }

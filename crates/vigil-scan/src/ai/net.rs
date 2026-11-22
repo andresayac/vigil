@@ -34,6 +34,30 @@ pub fn is_loopback_url(url: &str) -> bool {
     matches!(host_of(rest), "localhost" | "127.0.0.1" | "[::1]")
 }
 
+/// For a loopback endpoint: its port (the scheme's default when none is given) and whether a
+/// connection to it goes over IPv4 and/or IPv6 (`localhost` may use either).
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn loopback_target(url: &str) -> Option<(u16, bool, bool)> {
+    let lower = url.trim().to_ascii_lowercase();
+    let (default_port, rest) = match lower.strip_prefix("http://") {
+        Some(rest) => (80, rest),
+        None => (443, lower.strip_prefix("https://")?),
+    };
+    let host = host_of(rest);
+    let (v4, v6) = match host {
+        "localhost" => (true, true),
+        "127.0.0.1" => (true, false),
+        "[::1]" => (false, true),
+        _ => return None,
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let port = match authority.strip_prefix(host).and_then(|p| p.strip_prefix(':')) {
+        Some(port) => port.parse().ok()?,
+        None => default_port,
+    };
+    Some((port, v4, v6))
+}
+
 /// Checks a provider endpoint and returns it without a trailing slash.
 ///
 /// `https://` anywhere; `http://` only on this computer. No credentials in the URL, no spaces,

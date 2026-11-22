@@ -7,21 +7,22 @@ use regex::Regex;
 
 use crate::runner::{system32, windir};
 
-static ENV_RE: LazyLock<Option<Regex>> = LazyLock::new(|| Regex::new(r"%([A-Za-z0-9_(). -]+)%").ok());
 static FIRST_EXT_RE: LazyLock<Option<Regex>> = LazyLock::new(|| {
     Regex::new(r"(?i)^(.+?\.(?:exe|com|scr|bat|cmd|pif|msi|dll|sys|cpl|ocx|vbs|vbe|js|jse|wsf|ps1|hta|jar))(?:[\s,]|$)")
         .ok()
 });
 
-/// `%NAME%` replaced by the environment variable (left as is when it is not set).
+/// `%NAME%` replaced by the folder Windows reports for it (`vigil_sys::paths::known_variables`),
+/// never by the process environment, which the user's own environment (HKCU\Environment) changes
+/// even for an elevated Vigil. An unknown name is left as it is: see [`unknown_variables`].
 pub fn expand_env(text: &str) -> String {
-    let Some(re) = ENV_RE.as_ref() else {
-        return text.to_string();
-    };
-    re.replace_all(text, |caps: &regex::Captures<'_>| {
-        std::env::var(&caps[1]).unwrap_or_else(|_| caps[0].to_string())
-    })
-    .into_owned()
+    vigil_sys::paths::expand_known(text).0
+}
+
+/// The `%NAME%` variables of `text` that [`expand_env`] does not know. Something about to start
+/// with administrator rights is refused when there is one: its value would come from the user.
+pub fn unknown_variables(text: &str) -> Vec<String> {
+    vigil_sys::paths::expand_known(text).1
 }
 
 /// Drive letter plus root (`C:\`) or a UNC path: what Windows treats as a full path.
@@ -212,6 +213,10 @@ fn search_dirs() -> Vec<String> {
         format!("{system32}\\WindowsPowerShell\\v1.0"),
         format!("{windir}\\SysWOW64"),
     ];
+    // PATH is the user's to change: an elevated Vigil looks only in the Windows folders.
+    if crate::is_admin() {
+        return dirs;
+    }
     for entry in std::env::var("PATH").unwrap_or_default().split(';') {
         let entry = expand_env(entry.trim().trim_matches('"'));
         if !entry.is_empty() && is_abs(&entry) && !dirs.contains(&entry) {
@@ -221,7 +226,8 @@ fn search_dirs() -> Vec<String> {
     dirs
 }
 
-/// (path, resolved). Bare names are searched in the system folders and `PATH`.
+/// (path, resolved). Bare names are searched in the system folders, and in `PATH` unless Vigil
+/// runs as administrator.
 pub fn resolve_program(token: &str) -> (String, bool) {
     let token = normalize_path(token);
     if token.is_empty() {

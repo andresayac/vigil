@@ -11,6 +11,12 @@
 //!   right to add, delete or replace what is inside or to change its permissions, was not made by
 //!   Vigil (or was changed since): it is moved aside to `Vigil.untrusted-<time>`, never deleted,
 //!   and a fresh one is created. The window and History say so.
+//! - The folder is opened once, never through a link, and held without delete sharing; every check
+//!   and change goes through that handle: the descriptor is read with `GetSecurityInfo` and set with
+//!   `SetKernelObjectSecurity`, and the move aside is a rename of the handle. What is inside is
+//!   opened relative to its folder's handle (`NtCreateFile`, no reparse) and judged the same way;
+//!   one untrusted entry moves the whole folder aside, and a link inside is refused. Nothing is
+//!   changed by path or recursively (no `icacls /T`).
 //! - When the folder cannot be made private, the elevated copy does not use it: it runs read-only
 //!   (the local folder, no changes to the system) and says why.
 
@@ -23,15 +29,23 @@ use std::sync::{LazyLock, Mutex};
 
 use serde_json::{Map, Value, json};
 use vigil_i18n::tr;
-use vigil_sys::svcsec::{Dacl, Descriptor, Object, file_descriptor, map_generic};
+use vigil_sys::svcsec::{Dacl, Descriptor, Object, handle_descriptor, map_generic};
+use windows::Wdk::Storage::FileSystem::{FILE_CREATE, FILE_NON_DIRECTORY_FILE, FILE_OPEN, NTCREATEFILE_CREATE_OPTIONS};
 use windows::Win32::Foundation::{HLOCAL, LocalFree};
 use windows::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
-use windows::Win32::Security::{PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES};
-use windows::Win32::Storage::FileSystem::CreateDirectoryW;
+use windows::Win32::Security::{
+    DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
+    SECURITY_ATTRIBUTES, SetKernelObjectSecurity,
+};
+use windows::Win32::Storage::FileSystem::{
+    CreateDirectoryW, DELETE, FILE_ADD_FILE, FILE_ATTRIBUTE_DIRECTORY, FILE_GENERIC_WRITE, FILE_LIST_DIRECTORY,
+    FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_MODE, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_TRAVERSE,
+    READ_CONTROL, WRITE_DAC, WRITE_OWNER,
+};
 use windows::core::PCWSTR;
 
 use crate::error::{ActionError, Result, fail, io_text};
-use crate::runner::{self, ToolResult};
+use crate::nofollow;
 use crate::store::{Record, Store};
 
 pub const APP_FOLDER: &str = "Vigil";
@@ -163,23 +177,6 @@ pub fn is_reparse_point(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok_and(|m| m.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0)
 }
 
-fn reparse_points_inside(root: &Path) -> std::io::Result<Vec<PathBuf>> {
-    let mut found = Vec::new();
-    let mut pending = vec![root.to_path_buf()];
-    while let Some(folder) = pending.pop() {
-        for entry in fs::read_dir(&folder)? {
-            let path = entry?.path();
-            let meta = fs::symlink_metadata(&path)?;
-            if meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-                found.push(path);
-            } else if meta.is_dir() {
-                pending.push(path);
-            }
-        }
-    }
-    Ok(found)
-}
-
 pub(crate) fn forget_locked(root: &Path) {
     if let Ok(mut locked) = LOCKED_DIRS.lock() {
         locked.remove(&root.to_string_lossy().to_lowercase());
@@ -235,6 +232,11 @@ pub(crate) fn create_with_sddl(path: &Path, sddl: &str) -> Result<()> {
 /// accounts; `None` when it is. Inheritable entries count too: they would apply to what Vigil
 /// creates inside.
 pub(crate) fn untrusted_reason(descriptor: &Descriptor, owner: &str, grants: &[&str]) -> Option<String> {
+    untrusted_object(descriptor, Object::Folder, owner, grants)
+}
+
+/// [`untrusted_reason`] for a folder or a file inside the data folder.
+fn untrusted_object(descriptor: &Descriptor, object: Object, owner: &str, grants: &[&str]) -> Option<String> {
     let trusted = |sid: &str| {
         sid.eq_ignore_ascii_case(owner)
             || grants.iter().any(|g| g.eq_ignore_ascii_case(sid))
@@ -253,92 +255,288 @@ pub(crate) fn untrusted_reason(descriptor: &Descriptor, owner: &str, grants: &[&
         Dacl::Aces(aces) => aces,
     };
     aces.iter()
-        .find(|ace| ace.allow && !trusted(&ace.sid) && map_generic(ace.mask, Object::Folder) & FOLDER_WRITE != 0)
+        .find(|ace| ace.allow && !trusted(&ace.sid) && map_generic(ace.mask, object) & FOLDER_WRITE != 0)
         .map(|ace| tr!("{0} may add, replace or delete what is inside it", ace.sid))
 }
 
-fn untrusted(root: &Path, owner: &str, grants: &[&str]) -> Option<String> {
-    match file_descriptor(root) {
-        Some(descriptor) => untrusted_reason(&descriptor, owner, grants),
-        None => Some(tr!("its permissions cannot be read")),
+/// How often a data folder another Vigil copy is preparing at the same moment is tried again.
+const BUSY_TRIES: u32 = 40;
+
+/// Errors Windows gives when an open that refuses links meets one.
+fn is_link_error(error: &std::io::Error) -> bool {
+    // ERROR_STOPPED_ON_SYMLINK (681), ERROR_CANT_ACCESS_FILE (1920), ERROR_REPARSE_POINT_ENCOUNTERED (4395).
+    matches!(error.raw_os_error(), Some(681 | 1920 | 4395))
+}
+
+/// Opens the data folder itself once, never following a link, held without delete sharing so it
+/// cannot be renamed or replaced while Vigil checks and changes it. Asks for the rights to change
+/// its permissions and to move it aside; with fewer rights (a folder someone else controls) it is
+/// still opened to be judged.
+fn open_root(root: &Path) -> std::io::Result<nofollow::Handle> {
+    let judge = READ_CONTROL | FILE_READ_ATTRIBUTES;
+    let tiers = [
+        judge | WRITE_DAC | WRITE_OWNER | DELETE | FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_ADD_FILE,
+        judge | DELETE,
+        FILE_READ_ATTRIBUTES | DELETE,
+        FILE_READ_ATTRIBUTES,
+    ];
+    let mut last = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+    for access in tiers {
+        let mut tries = 0;
+        loop {
+            match nofollow::open_path(root, access, nofollow::SHARE_NO_DELETE) {
+                Ok(handle) => return Ok(handle),
+                // A sharing violation: another copy holds it for a moment.
+                Err(error) if error.raw_os_error() == Some(32) && tries < BUSY_TRIES => {
+                    tries += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                    last = error;
+                    break;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+    Err(last)
+}
+
+/// Why the folder held by `dir`, or anything inside it, is not private; `None` when all of it is.
+/// Everything inside is opened relative to its folder's handle and never through a link: a link
+/// inside is an error, not a reason to move the folder.
+fn untrusted_tree(
+    dir: &nofollow::Handle,
+    root: &Path,
+    owner: &str,
+    grants: &[&str],
+    redirect: &str,
+) -> Result<Option<String>> {
+    let Some(descriptor) = handle_descriptor(dir.raw()) else {
+        return Ok(Some(tr!("its permissions cannot be read")));
+    };
+    if let Some(reason) = untrusted_reason(&descriptor, owner, grants) {
+        return Ok(Some(reason));
+    }
+    let inspect = |path: &Path, e: &std::io::Error| {
+        ActionError::new(tr!(
+            "Could not inspect the data folder {0}: {1}",
+            path.display(),
+            io_text(e)
+        ))
+    };
+    let link = |path: &Path| {
+        ActionError::new(tr!(
+            "{0} is a junction or symbolic link inside the data folder. {1}",
+            path.display(),
+            redirect
+        ))
+    };
+    let mut pending: Vec<(Option<nofollow::Handle>, PathBuf)> = vec![(None, PathBuf::new())];
+    while let Some((handle, relative)) = pending.pop() {
+        let folder = handle.as_ref().unwrap_or(dir);
+        let names = nofollow::entries(folder).map_err(|e| inspect(&root.join(&relative), &e))?;
+        for (name, attributes) in names {
+            let path = relative.join(&name);
+            if attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                return Err(link(&root.join(&path)));
+            }
+            let access = if attributes & FILE_ATTRIBUTE_DIRECTORY.0 != 0 {
+                READ_CONTROL | FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY | FILE_TRAVERSE
+            } else {
+                READ_CONTROL | FILE_READ_ATTRIBUTES
+            };
+            let share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
+            let child = match nofollow::open_at(folder, &name, access, share, FILE_OPEN, NTCREATEFILE_CREATE_OPTIONS(0))
+            {
+                Ok(child) => child,
+                Err(e) if is_link_error(&e) => return Err(link(&root.join(&path))),
+                // Gone since the folder was listed.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(inspect(&root.join(&path), &e)),
+            };
+            let found = nofollow::info(&child).map_err(|e| inspect(&root.join(&path), &e))?;
+            if nofollow::is_link(&found) {
+                return Err(link(&root.join(&path)));
+            }
+            let object = if nofollow::is_dir(&found) {
+                Object::Folder
+            } else {
+                Object::File
+            };
+            let reason = match handle_descriptor(child.raw()) {
+                Some(descriptor) => untrusted_object(&descriptor, object, owner, grants),
+                None => Some(tr!("its permissions cannot be read")),
+            };
+            if let Some(reason) = reason {
+                return Ok(Some(format!("{}: {reason}", path.display())));
+            }
+            if nofollow::is_dir(&found) {
+                pending.push((Some(child), path));
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// Sets the private descriptor on the held folder itself (owner and a protected DACL) through the
+/// handle. Nothing is propagated by path: what is inside was judged by handle and inherits from it.
+fn restrict(dir: &nofollow::Handle, root: &Path, sddl: &str, owner: &str, grants: &[&str]) -> Result<()> {
+    let failed = |problem: String| {
+        ActionError::new(tr!(
+            "The data folder {0} could not be fully restricted to administrators ({1}).",
+            root.display(),
+            problem
+        ))
+    };
+    let text = wide(sddl);
+    let mut sd = PSECURITY_DESCRIPTOR::default();
+    // SAFETY: `text` is NUL-terminated; `sd` receives a LocalAlloc'd descriptor freed below.
+    unsafe { ConvertStringSecurityDescriptorToSecurityDescriptorW(PCWSTR(text.as_ptr()), 1, &mut sd, None) }
+        .map_err(|e| failed(e.message()))?;
+    // The SDDL's "P" protects the DACL: nothing is inherited from the parent from now on.
+    // SAFETY: the handle is open with WRITE_DAC and WRITE_OWNER; `sd` is a valid descriptor for
+    // the call. Setting it on the handle changes this folder only.
+    let result = unsafe {
+        SetKernelObjectSecurity(
+            dir.raw(),
+            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            sd,
+        )
+    };
+    // SAFETY: `sd` came from ConvertStringSecurityDescriptorToSecurityDescriptorW and is freed once.
+    unsafe {
+        let _ = LocalFree(Some(HLOCAL(sd.0)));
+    }
+    result.map_err(|e| failed(e.message()))?;
+    match handle_descriptor(dir.raw()) {
+        Some(descriptor) => match untrusted_reason(&descriptor, owner, grants) {
+            Some(reason) => Err(failed(reason)),
+            None => Ok(()),
+        },
+        None => Err(failed(tr!("its permissions cannot be read"))),
     }
 }
 
-/// Renames the folder to `<name>.untrusted-<time>` next to it (a free name), deleting nothing.
-fn move_aside(root: &Path) -> Result<PathBuf> {
+/// Renames the held folder (or file) to `<name>.untrusted-<time>` next to it (a free name),
+/// deleting nothing. The rename goes through the handle: what moves is what was judged.
+fn move_aside(held: &nofollow::Handle, root: &Path) -> Result<PathBuf> {
     let name = root
         .file_name()
         .map_or_else(|| APP_FOLDER.into(), |n| n.to_string_lossy().into_owned());
     let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
     let parent = root.parent().unwrap_or(root);
-    let mut aside = parent.join(format!("{name}.untrusted-{stamp}"));
-    let mut n = 2;
-    while fs::symlink_metadata(&aside).is_ok() {
-        aside = parent.join(format!("{name}.untrusted-{stamp}-{n}"));
-        n += 1;
+    let mut n = 1;
+    loop {
+        let candidate = if n == 1 {
+            format!("{name}.untrusted-{stamp}")
+        } else {
+            format!("{name}.untrusted-{stamp}-{n}")
+        };
+        let aside = parent.join(&candidate);
+        match nofollow::rename_here(held, &candidate) {
+            Ok(()) => return Ok(aside),
+            // ERROR_FILE_EXISTS (80), ERROR_ALREADY_EXISTS (183): the next name.
+            Err(e) if matches!(e.raw_os_error(), Some(80 | 183)) && n < 100 => n += 1,
+            Err(e) => {
+                return fail(tr!(
+                    "could not move {0} aside to {1}: {2}",
+                    root.display(),
+                    aside.display(),
+                    io_text(&e)
+                ));
+            }
+        }
     }
-    fs::rename(root, &aside).map_err(|e| {
+}
+
+/// Creates the folder with its private descriptor and opens it like an existing one.
+fn create_private(root: &Path, sddl: &str) -> Result<nofollow::Handle> {
+    create_with_sddl(root, sddl)?;
+    open_root(root).map_err(|e| {
         ActionError::new(tr!(
-            "could not move {0} aside to {1}: {2}",
+            "Could not inspect the data folder {0}: {1}",
             root.display(),
-            aside.display(),
             io_text(&e)
         ))
-    })?;
-    Ok(aside)
+    })
+}
+
+static PROBE_COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// Vigil can create (and delete) a file in the held folder.
+fn probe(dir: &nofollow::Handle) -> std::io::Result<()> {
+    let name = format!(
+        ".write-test-{}-{}",
+        std::process::id(),
+        PROBE_COUNTER.fetch_add(1, Ordering::Relaxed)
+    );
+    let file = nofollow::open_at(
+        dir,
+        &name,
+        FILE_GENERIC_WRITE | DELETE,
+        FILE_SHARE_MODE(0),
+        FILE_CREATE,
+        FILE_NON_DIRECTORY_FILE,
+    )?;
+    nofollow::delete_on_close(file.raw())
 }
 
 /// Makes `root` a folder private to `owner` and `grants` (see the module notes). Returns what was
 /// moved aside, if anything; an error when the folder cannot be made private.
+///
+/// The folder is opened once (never through a link) and held without delete sharing; every check
+/// and change after that goes through the handle, so swapping the path for a link changes nothing.
 pub(crate) fn prepare_private_dir(root: &Path, owner: &str, grants: &[&str]) -> Result<Option<Moved>> {
     let redirect = tr!("Remove it before using Vigil: someone may be trying to redirect its files.");
-    if is_reparse_point(root) {
-        return fail(tr!("{0} is a junction or symbolic link. {1}", root.display(), redirect));
-    }
     let key = root.to_string_lossy().to_lowercase();
-    if root.is_dir() && LOCKED_DIRS.lock().is_ok_and(|locked| locked.contains(&key)) {
+    if !is_reparse_point(root) && root.is_dir() && LOCKED_DIRS.lock().is_ok_and(|locked| locked.contains(&key)) {
         return Ok(None);
     }
+    let inspect = |e: &std::io::Error| {
+        ActionError::new(tr!(
+            "Could not inspect the data folder {0}: {1}",
+            root.display(),
+            io_text(e)
+        ))
+    };
     let sddl = private_sddl(owner, grants);
     let mut moved = None;
-    let created = match fs::symlink_metadata(root) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            create_with_sddl(root, &sddl)?;
-            true
-        }
-        Err(e) => {
-            return fail(tr!(
-                "Could not inspect the data folder {0}: {1}",
-                root.display(),
-                io_text(&e)
-            ));
-        }
-        Ok(meta) => {
-            let reason = if meta.is_dir() {
-                untrusted(root, owner, grants)
+    let held = match open_root(root) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => create_private(root, &sddl)?,
+        Err(e) => return Err(inspect(&e)),
+        Ok(held) => {
+            let found = nofollow::info(&held).map_err(|e| inspect(&e))?;
+            if nofollow::is_link(&found) {
+                return fail(tr!("{0} is a junction or symbolic link. {1}", root.display(), redirect));
+            }
+            let reason = if nofollow::is_dir(&found) {
+                untrusted_tree(&held, root, owner, grants, &redirect)?
             } else {
                 Some(tr!("it is a file, not a folder"))
             };
             match reason {
                 Some(reason) => {
-                    let aside = move_aside(root)?;
-                    create_with_sddl(root, &sddl)?;
+                    let aside = move_aside(&held, root)?;
+                    drop(held);
+                    let created = create_private(root, &sddl)?;
                     moved = Some(Moved {
                         root: root.to_path_buf(),
                         aside,
                         reason,
                     });
-                    true
+                    created
                 }
-                None => false,
+                None => held,
             }
         }
     };
-    if !created {
-        restrict_existing(root, owner, grants, &redirect)?;
+    let found = nofollow::info(&held).map_err(|e| inspect(&e))?;
+    if nofollow::is_link(&found) || !nofollow::is_dir(&found) {
+        return fail(tr!("{0} is a junction or symbolic link. {1}", root.display(), redirect));
     }
-    let probe = root.join(format!(".write-test-{}", std::process::id()));
-    if let Err(e) = fs::write(&probe, b"").and_then(|()| fs::remove_file(&probe)) {
+    restrict(&held, root, &sddl, owner, grants)?;
+    if let Err(e) = probe(&held) {
         return fail(tr!(
             "Vigil cannot write to its data folder {0} ({1}). Check its permissions, or delete the folder so it is \
              created again.",
@@ -350,88 +548,6 @@ pub(crate) fn prepare_private_dir(root: &Path, owner: &str, grants: &[&str]) -> 
         locked.insert(key);
     }
     Ok(moved)
-}
-
-/// A private folder from before: everything inside is reset to inherit from it and owned by
-/// `owner` (an earlier version, or a file put there by hand, may have left other entries). Any
-/// failure is an error: the folder is not used half restricted.
-fn restrict_existing(root: &Path, owner: &str, grants: &[&str], redirect: &str) -> Result<()> {
-    // icacls below works recursively and would follow a planted junction out of the folder.
-    let links = reparse_points_inside(root).map_err(|e| {
-        ActionError::new(tr!(
-            "Could not inspect the data folder {0}: {1}",
-            root.display(),
-            io_text(&e)
-        ))
-    })?;
-    if let Some(link) = links.first() {
-        return fail(tr!(
-            "{0} is a junction or symbolic link inside the data folder. {1}",
-            link.display(),
-            redirect
-        ));
-    }
-    let icacls = runner::tool("icacls.exe");
-    let root_text = root.to_string_lossy().into_owned();
-    let mut folder = vec![
-        icacls.clone(),
-        root_text.clone(),
-        "/inheritance:r".into(),
-        "/grant:r".into(),
-    ];
-    folder.extend(grants.iter().map(|sid| format!("*{sid}:(OI)(CI)F")));
-    folder.push("/Q".into());
-    let mut steps = vec![
-        // The folder: no inherited entries, full control only for Administrators and SYSTEM, passed
-        // down to everything created inside it.
-        folder,
-        // Everything already inside: drop explicit entries and inherit from the folder. (Granting the
-        // folder's entries recursively instead would leave every file with an empty ACL: unusable.)
-        vec![
-            icacls.clone(),
-            format!("{root_text}\\*"),
-            "/reset".into(),
-            "/T".into(),
-            "/C".into(),
-            "/Q".into(),
-        ],
-        // Administrators own it all, so no one else keeps the owner's right to change permissions.
-        vec![
-            icacls,
-            root_text,
-            "/setowner".into(),
-            format!("*{owner}"),
-            "/T".into(),
-            "/C".into(),
-            "/Q".into(),
-        ],
-    ];
-    let empty = fs::read_dir(root)
-        .map(|mut entries| entries.next().is_none())
-        .unwrap_or(true);
-    if empty {
-        steps.remove(1);
-    }
-    for args in &steps {
-        let result = runner::run_system(args, 120, None).unwrap_or_else(|e| ToolResult::new(1, "", e.to_string()));
-        if result.code != 0 {
-            let line = runner::first_line(&result.text());
-            let problem = if line.is_empty() { tr!("icacls failed") } else { line };
-            return fail(tr!(
-                "The data folder {0} could not be fully restricted to administrators ({1}).",
-                root.display(),
-                problem
-            ));
-        }
-    }
-    if let Some(reason) = untrusted(root, owner, grants) {
-        return fail(tr!(
-            "The data folder {0} could not be fully restricted to administrators ({1}).",
-            root.display(),
-            reason
-        ));
-    }
-    Ok(())
 }
 
 #[cfg(test)]

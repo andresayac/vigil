@@ -90,6 +90,10 @@ fn hint_text(h: &Value) -> (String, String) {
                 ],
             ),
         ),
+        "store_retry" => (
+            t("updates.hint.storeTitle"),
+            tn("updates.hint.storeText", count, &[("apps", h.s("subject"))]),
+        ),
         "updates_disabled" => (t("updates.hint.disabledTitle"), t("updates.hint.disabledText")),
         "service_disabled" => (t("updates.hint.serviceTitle"), t("updates.hint.serviceText")),
         "paused" => (
@@ -377,8 +381,12 @@ impl UpdatesPage {
             .child(kit::faint(t("updates.failuresNote"), tk));
         for (i, g) in groups.iter().enumerate().take(12) {
             let fixed = g.b("fixedLater");
+            // A Store app that could not update for now is no failure to worry about.
+            let retry = g.b("storeRetry");
             let (glyph, color) = if fixed {
                 (icons::CHECK, tk.ink3)
+            } else if retry {
+                (icons::INFO, tk.ink3)
             } else {
                 (icons::ERROR, tk.bad)
             };
@@ -392,6 +400,8 @@ impl UpdatesPage {
             }
             if fixed {
                 line = format!("{line} · {}", t("updates.fixedLater"));
+            } else if retry {
+                line = format!("{line} · {}", t("updates.storeRetry"));
             }
             panel = panel.child(
                 div()
@@ -461,7 +471,11 @@ impl UpdatesPage {
                         div()
                             .w(px(190.))
                             .flex_none()
-                            .text_color(result_color(result, tk))
+                            .text_color(if e.b("storeRetry") {
+                                tk.ink3
+                            } else {
+                                result_color(result, tk)
+                            })
                             .child(what),
                     ),
             );

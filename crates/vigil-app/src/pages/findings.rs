@@ -196,7 +196,7 @@ impl FindingsPage {
             let written = cx
                 .background_spawn(async move {
                     let bytes = vigil_core::export::render_report(&report, format, options);
-                    std::fs::write(&path, bytes)
+                    vigil_core::export::write_user_file(&path, &bytes)
                 })
                 .await;
             let _ = this.update(cx, |page, cx| {
@@ -349,6 +349,11 @@ impl FindingsPage {
                 let id = i.s("id");
                 let verdict = i.s("verdict");
                 let mut label = verdict_label(verdict);
+                // The AI review can set a verdict the local score alone wouldn't ("Remove" at 0):
+                // the list says where the verdict came from.
+                if i.s("verdict_source") == "ai" {
+                    label = format!("{label} · {}", t("findings.byAi"));
+                }
                 if i.a("actions_taken").iter().any(|a| a.b("ok")) {
                     label = format!("{label} · {}", t("findings.handled"));
                 }
@@ -632,6 +637,19 @@ impl FindingsPage {
             ));
         }
         pane = pane.child(pills);
+        if item.s("verdict_source") == "ai" && item.has("score") {
+            let score = item.n("score");
+            let shown = crate::format::num(score, 0);
+            let key = if score < 15.0 {
+                "detail.aiOverrideLittle"
+            } else {
+                "detail.aiOverride"
+            };
+            pane = pane.child(kit::muted(
+                tf(key, &[("verdict", &verdict_label(verdict)), ("score", &shown)]),
+                &tk,
+            ));
+        }
         if item.has("what") {
             pane = pane.child(kit::sel("fd-what", item.s("what").to_string()).text_size(px(13.)));
         }

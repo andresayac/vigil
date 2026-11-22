@@ -912,10 +912,15 @@ pub fn event_from_xml(xml: &str, message: &str) -> Option<ReliabilityEvent> {
         ("Microsoft-Windows-WindowsUpdateClient", 20) => {
             event.category = "update";
             event.kind = "install_failed";
-            event.severity = "warning";
-            event.subject = r.get("updateTitle", 1).to_string();
+            event.subject = crate::updates::readable_title(r.get("updateTitle", 1));
             let code = r.get("errorCode", 0);
             event.code = parse_code(code, false).map_or_else(|| code.to_string(), hex8);
+            // A Store app that could not update for now is no warning (Windows retries).
+            event.severity = if crate::updates::store_retry(&event.code) {
+                "info"
+            } else {
+                "warning"
+            };
         }
         ("Application Error", 1000) => {
             event.category = "app_crash";
@@ -1251,7 +1256,7 @@ pub fn hints(events: &[ReliabilityEvent], crashing_apps: &[AppGroup]) -> Vec<Hin
 
     // An update that keeps failing.
     let mut updates: BTreeMap<String, Vec<&ReliabilityEvent>> = BTreeMap::new();
-    for failure in of("update") {
+    for failure in of("update").filter(|e| !crate::updates::store_retry(&e.code)) {
         updates.entry(failure.subject.to_lowercase()).or_default().push(failure);
     }
     let mut failing: Vec<Vec<&ReliabilityEvent>> = updates.into_values().filter(|l| l.len() >= 3).collect();
@@ -1260,6 +1265,17 @@ pub fn hints(events: &[ReliabilityEvent], crashing_apps: &[AppGroup]) -> Vec<Hin
         let mut found = hint("update_repeat", "info", &list[0].subject, list);
         found.detail = list[0].code.clone();
         out.push(found);
+    }
+    // Store apps that could not update while they were open: benign, Windows retries.
+    let retried: Vec<&ReliabilityEvent> = of("update").filter(|e| crate::updates::store_retry(&e.code)).collect();
+    if !retried.is_empty() {
+        let mut names: Vec<&str> = Vec::new();
+        for e in &retried {
+            if names.len() < 3 && !names.iter().any(|n| n.eq_ignore_ascii_case(&e.subject)) {
+                names.push(&e.subject);
+            }
+        }
+        out.push(hint("store_retry", "info", &names.join(", "), &retried));
     }
 
     // A service that keeps crashing.
@@ -1586,6 +1602,35 @@ mod tests {
         ));
         assert_eq!((update.category, update.code.as_str()), ("update", "0x80073D02"));
         assert_eq!(update.subject, "Contoso Notes 1.2");
+        assert_eq!(update.severity, "info", "an app that was open: Windows retries");
+        let store = |record: u64, title: &str, code: &str| {
+            parse(&xml(
+                "Microsoft-Windows-WindowsUpdateClient",
+                20,
+                2,
+                "2026-01-05T00:00:00Z",
+                record,
+                "System",
+                &named(&[("errorCode", code), ("updateTitle", title), ("updateGuid", "{0}")]),
+            ))
+        };
+        let codex = store(51, "9PLM9XGG6VKS-OpenAI.Codex", "0x80073d02");
+        assert_eq!((codex.subject.as_str(), codex.severity), ("OpenAI.Codex", "info"));
+        let driver = store(52, "Contoso driver 1.2", "0x80073701");
+        assert_eq!(driver.severity, "warning");
+        let retried = [
+            codex.clone(),
+            codex.clone(),
+            codex,
+            driver.clone(),
+            driver.clone(),
+            driver,
+        ];
+        let found = hints(&retried, &[]);
+        let codes: Vec<&str> = found.iter().map(|h| h.code).collect();
+        assert_eq!(codes, ["update_repeat", "store_retry"], "{found:?}");
+        assert_eq!(found[0].subject, "Contoso driver 1.2");
+        assert_eq!((found[1].subject.as_str(), found[1].count), ("OpenAI.Codex", 3));
 
         let installed = parse(&xml(
             "MsiInstaller",

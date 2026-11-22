@@ -93,8 +93,20 @@ pub(crate) fn parse(args: &[String]) -> Result<Request, String> {
     Ok(request)
 }
 
+/// Writes a file the user chose (an export from the window). While Vigil is elevated nothing on
+/// the way is followed: no link at the name or above it (`vigil_actions::write_user_file`).
+pub fn write_user_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    vigil_actions::write_user_file(path, bytes)
+}
+
 /// Writes `bytes` to a new file at `path`; an existing file is an error unless `force`.
 pub(crate) fn write_new(path: &Path, bytes: &[u8], force: bool) -> Result<(), String> {
+    if vigil_sys::elevation::is_elevated() {
+        if !force && std::fs::symlink_metadata(path).is_ok() {
+            return Err(tr!("{0} already exists; add --force to replace it", path.display()));
+        }
+        return write_user_file(path, bytes).map_err(|e| tr!("Could not write {0}: {1}", path.display(), e));
+    }
     let mut open = std::fs::OpenOptions::new();
     open.write(true);
     if force {

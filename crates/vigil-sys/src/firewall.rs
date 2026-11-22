@@ -19,11 +19,10 @@ use windows::Win32::NetworkManagement::WindowsFirewall::{
 use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoUninitialize, IDispatch,
 };
-use windows::Win32::System::Environment::ExpandEnvironmentStringsW;
 use windows::Win32::System::Ole::IEnumVARIANT;
 use windows::Win32::System::Variant::{VARIANT, VT_DISPATCH, VT_UNKNOWN, VariantClear};
 use windows::Win32::UI::Shell::SHLoadIndirectString;
-use windows::core::{BSTR, HSTRING, Interface, PCWSTR};
+use windows::core::{BSTR, Interface, PCWSTR};
 
 use crate::SysError;
 use crate::util::{from_wide, wide};
@@ -624,22 +623,9 @@ fn indirect(raw: &str) -> Option<String> {
 }
 
 fn expand(text: &str) -> String {
-    if !text.contains('%') {
-        return text.to_string();
-    }
-    let source = HSTRING::from(text);
-    // SAFETY: a size query (no buffer).
-    let needed = unsafe { ExpandEnvironmentStringsW(&source, None) };
-    if needed == 0 {
-        return text.to_string();
-    }
-    let mut buffer = vec![0u16; needed as usize];
-    // SAFETY: the buffer has the size the first call asked for.
-    let written = unsafe { ExpandEnvironmentStringsW(&source, Some(&mut buffer)) };
-    if written == 0 || written as usize > buffer.len() {
-        return text.to_string();
-    }
-    from_wide(&buffer)
+    // Expanded with Windows' own folders, never the process environment (which the user's own
+    // environment, HKCU\Environment, can change): see `paths::known_variables`.
+    crate::paths::expand_known(text).0
 }
 
 fn read_rule(rule: &INetFwRule, strings: &mut Strings) -> FirewallRule {

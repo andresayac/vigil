@@ -217,6 +217,18 @@ impl Grid {
         self.rebuild();
     }
 
+    /// Replaces the columns (a column that cannot be read is left out); the rows must match them.
+    /// Returns whether they changed, so the caller refreshes the table.
+    pub fn set_cols(&mut self, cols: Vec<GridCol>) -> bool {
+        let same = cols.len() == self.cols.len() && cols.iter().zip(&self.cols).all(|(a, b)| a.key == b.key);
+        if same {
+            return false;
+        }
+        self.cols = cols;
+        self.sort = None;
+        true
+    }
+
     /// What the grid says when it has no rows.
     pub fn set_empty(&mut self, text: impl Into<SharedString>) {
         self.name = text.into();
@@ -453,6 +465,9 @@ pub fn table(state: &gpui_kit::Entity<TableState<Grid>>, name: impl Into<SharedS
         .with_size(gpui_kit::component::Size::Size(px(28.)))
         .bordered(false)
         .stripe(false)
+        // Scrollbars stay visible: columns past the right edge must show they are there (a
+        // scrollbar that only appears while scrolling hides them).
+        .scrollbar_mode(gpui_kit::component::scroll::ScrollbarMode::Always)
         .accessibility_label(name)
 }
 

@@ -16,7 +16,6 @@ use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx, CoUninitialize, IPersistFile,
     STGM_READ,
 };
-use windows::Win32::System::Environment::ExpandEnvironmentStringsW;
 use windows::Win32::System::Registry::{
     HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_64KEY, REG_EXPAND_SZ, REG_SZ, REG_VALUE_TYPE,
     RegCloseKey, RegEnumValueW, RegOpenKeyExW, RegQueryInfoKeyW,
@@ -409,17 +408,9 @@ pub fn switch_state(data: Option<&[u8]>) -> (bool, Option<i64>) {
 
 /// Environment variables in a command (`%ProgramFiles%`) expanded.
 pub(crate) fn expand(text: &str) -> String {
-    if !text.contains('%') {
-        return text.to_string();
-    }
-    let source = wide(text);
-    let mut buffer = vec![0u16; 4096];
-    // SAFETY: `source` is NUL-terminated; `buffer` is writable for its length.
-    let written = unsafe { ExpandEnvironmentStringsW(PCWSTR(source.as_ptr()), Some(&mut buffer)) };
-    if written == 0 || written as usize > buffer.len() {
-        return text.to_string();
-    }
-    from_wide(&buffer)
+    // Expanded with Windows' own folders, never the process environment (which the user's own
+    // environment, HKCU\Environment, can change): see `paths::known_variables`.
+    crate::paths::expand_known(text).0
 }
 
 /// The program a command line starts: the quoted path, or the longest leading run of words that

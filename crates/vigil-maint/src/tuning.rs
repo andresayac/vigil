@@ -175,10 +175,13 @@ fn hibernation() -> Hibernation {
         r"SYSTEM\CurrentControlSet\Control\Power",
         "HibernateEnabled",
     );
-    let drive = std::env::var("SystemDrive")
-        .ok()
-        .filter(|d| !d.is_empty())
-        .unwrap_or_else(|| "C:".to_string());
+    // The Windows drive from Windows itself (not %SystemDrive%, which the user can change).
+    let windows = vigil_sys::paths::windows_dir().display().to_string();
+    let drive = windows
+        .get(..2)
+        .filter(|d| d.ends_with(':'))
+        .unwrap_or("C:")
+        .to_string();
     // The file itself is locked: its size comes from the directory entry.
     let file_size = lstat(&PathBuf::from(format!("{drive}\\hiberfil.sys")))
         .map(|e| e.size)

@@ -1033,7 +1033,7 @@ fn affinity_plan(pid: u32, created_ms: i64, cores: &[u32], ctx: &Context<'_>) ->
 /// command line that will start.
 fn run_plan(path: &str, args: &str, admin: bool) -> Result<Plan, String> {
     use vigil_actions::run::RunMode;
-    let program = vigil_actions::run::resolve_program(path).map_err(|e| e.to_string())?;
+    let program = vigil_actions::run::resolve_program(path, admin).map_err(|e| e.to_string())?;
     vigil_actions::run::check_args(args).map_err(|e| e.to_string())?;
     let args = args.trim();
     let plan = vigil_actions::run::plan(&program, args, admin, vigil_actions::is_admin()).map_err(|e| e.to_string())?;
@@ -1318,6 +1318,20 @@ fn cleanup_plan(keys: &[String], ctx: &Context<'_>) -> Result<Plan, String> {
     .group("remove")
     .destructive()
     .irreversible();
+    // The real folders the action will work in (rebuilt the same way the action rebuilds them),
+    // so the confirmation shows where files are deleted, not only the names of the places.
+    let targets: Vec<_> = vigil_maint::storage::cleanup_targets(None)
+        .into_iter()
+        .filter(|t| keys.contains(&t.key.as_str()))
+        .collect();
+    let roots = vigil_maint::storage::cleanup_roots(&targets);
+    if !roots.is_empty() {
+        let mut shown: Vec<String> = roots.iter().take(12).map(|r| crate::display::shown_line(r)).collect();
+        if roots.len() > 12 {
+            shown.push(tr!("and {0} more", roots.len() - 12));
+        }
+        spec = spec.warning(&tr!("Folders: {0}", shown.join("\n")));
+    }
     spec.admin = admin;
     Ok(Plan::Run { spec, item: None })
 }

@@ -1763,6 +1763,8 @@ impl Render for ProcessesPage {
                             .header_row_height(px(52.))
                             .bordered(false)
                             .stripe(false)
+                            // Columns past the right edge stay discoverable.
+                            .scrollbar_mode(gpui_kit::component::scroll::ScrollbarMode::Always)
                             .accessibility_label(t("page.processes")),
                     ),
             )

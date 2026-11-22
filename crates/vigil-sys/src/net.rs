@@ -140,6 +140,55 @@ pub fn listening_tcp() -> Result<Vec<Connection>, SysError> {
     Ok(endpoints.into_iter().map(|e| e.into_connection(&names)).collect())
 }
 
+/// The processes listening on TCP `port` where a connection to this computer's loopback address
+/// can land: the loopback address itself or any address, IPv4 (`v4`) and/or IPv6 (`v6`), dual-stack
+/// sockets included. Each is (PID, image path; empty when it cannot be read, as for HTTP.sys's
+/// System process), without repeats. Several owners mean the address is shared: every one counts.
+pub fn loopback_listeners(port: u16, v4: bool, v6: bool) -> Result<Vec<(u32, String)>, SysError> {
+    let reaches = |ip: IpAddr| match ip {
+        IpAddr::V4(a) => v4 && (a.is_loopback() || a.is_unspecified()),
+        IpAddr::V6(a) => match a.to_ipv4_mapped() {
+            Some(m) => v4 && (m.is_loopback() || m.is_unspecified()),
+            // A dual-stack socket on [::] also takes IPv4 connections.
+            None => (v6 && a.is_loopback()) || ((v4 || v6) && a.is_unspecified()),
+        },
+    };
+    let mut owners: Vec<u32> = Vec::new();
+    let mut add = |pid: u32, state: u32, ip: IpAddr, raw_port: u32| {
+        if TCP_STATES.get(state as usize) == Some(&"LISTEN")
+            && self::port(raw_port) == port
+            && reaches(ip)
+            && !owners.contains(&pid)
+        {
+            owners.push(pid);
+        }
+    };
+    for row in table::<MIB_TCPROW_OWNER_PID>(Kind::Tcp, AF_INET.0 as u32)? {
+        add(
+            row.dwOwningPid,
+            row.dwState,
+            IpAddr::V4(ipv4(row.dwLocalAddr)),
+            row.dwLocalPort,
+        );
+    }
+    for row in table::<MIB_TCP6ROW_OWNER_PID>(Kind::Tcp, AF_INET6.0 as u32)? {
+        add(
+            row.dwOwningPid,
+            row.dwState,
+            IpAddr::V6(Ipv6Addr::from(row.ucLocalAddr)),
+            row.dwLocalPort,
+        );
+    }
+    let paths = PathResolver::new();
+    Ok(owners
+        .into_iter()
+        .map(|pid| {
+            let path = if pid <= 4 { String::new() } else { paths.dos_path(pid) };
+            (pid, path)
+        })
+        .collect())
+}
+
 struct Endpoint {
     pid: u32,
     protocol: &'static str,
@@ -356,6 +405,27 @@ mod tests {
         assert_eq!(port(u32::from(u16::to_be(443))), 443);
         assert_eq!(ipv4(u32::from_ne_bytes([127, 0, 0, 1])), Ipv4Addr::LOCALHOST);
         assert_eq!(endpoint_text(IpAddr::V6(Ipv6Addr::LOCALHOST), 80), "[::1]:80");
+    }
+
+    #[test]
+    fn a_loopback_listener_is_found_with_its_program() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("address").port();
+        let found = loopback_listeners(port, true, false).expect("table");
+        let me = std::process::id();
+        let (_, path) = found
+            .iter()
+            .find(|(pid, _)| *pid == me)
+            .expect("this test listens there");
+        let exe = std::env::current_exe().expect("exe");
+        assert!(path.eq_ignore_ascii_case(&exe.display().to_string()), "{path}");
+        // Only IPv6 asked: an IPv4-only socket is not reachable there.
+        assert!(
+            !loopback_listeners(port, false, true)
+                .expect("table")
+                .iter()
+                .any(|(pid, _)| *pid == me)
+        );
     }
 
     #[test]

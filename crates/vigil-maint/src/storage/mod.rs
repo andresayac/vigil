@@ -470,15 +470,39 @@ impl<'a> Spec<'a> {
 /// offered for the real environment.
 pub fn cleanup_targets(env: Option<&HashMap<String, String>>) -> Vec<CleanupTarget> {
     let real = env.is_none();
-    let local = env_get(env, "LOCALAPPDATA");
-    let roaming = env_get(env, "APPDATA");
-    let temp = Some(env_get(env, "TEMP"))
-        .filter(|t| !t.is_empty())
-        .unwrap_or_else(|| env_get(env, "TMP"));
-    let windir = Some(env_get(env, "SystemRoot"))
-        .filter(|w| !w.is_empty())
-        .unwrap_or_else(|| env_get(env, "windir"));
-    let programdata = env_get(env, "ProgramData");
+    // The real folders come from Windows itself, never from environment variables: a program
+    // running as the user could set TEMP to Vigil's data folder or a program's folder, and the
+    // elevated cleanup would then delete there. The user's temporary folder is LocalAppData\Temp.
+    let (local, roaming, temp, windir, programdata) = if real {
+        let local = vigil_sys::paths::local_app_data()
+            .map(|p| display(&p))
+            .unwrap_or_default();
+        let roaming = vigil_sys::paths::roaming_app_data()
+            .map(|p| display(&p))
+            .unwrap_or_default();
+        let temp = join(&local, &["Temp"]).map(|p| display(&p)).unwrap_or_default();
+        (
+            local,
+            roaming,
+            temp,
+            display(&vigil_sys::paths::windows_dir()),
+            display(&vigil_sys::paths::program_data()),
+        )
+    } else {
+        let temp = Some(env_get(env, "TEMP"))
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| env_get(env, "TMP"));
+        let windir = Some(env_get(env, "SystemRoot"))
+            .filter(|w| !w.is_empty())
+            .unwrap_or_else(|| env_get(env, "windir"));
+        (
+            env_get(env, "LOCALAPPDATA"),
+            env_get(env, "APPDATA"),
+            temp,
+            windir,
+            env_get(env, "ProgramData"),
+        )
+    };
     let mut out: Vec<CleanupTarget> = Vec::new();
     let mut add = |spec: Spec, roots: Vec<Option<PathBuf>>| {
         let roots = usable(roots);
@@ -1107,12 +1131,84 @@ fn remove_empty_dirs(dirs: &mut [(usize, PathBuf, bool)]) {
     }
 }
 
+/// Where cleanup may delete, from folders Windows itself names (never environment variables a
+/// program can change). A root is cleaned only when its real path, read through a handle, is
+/// inside one of `allowed` and inside none of `protected`.
+///
+/// Allowed: the user's profile (from the token's profile, not a redirectable folder) for the
+/// per-user caches, and only the Windows and ProgramData folders cleanup is meant for. Protected:
+/// Vigil's data folders, Program Files and System32, even if an allowed folder was pointed there.
+#[derive(Debug, Clone, Default)]
+pub struct RootPolicy {
+    allowed: Vec<String>,
+    protected: Vec<String>,
+}
+
+impl RootPolicy {
+    /// The policy for this computer and user.
+    pub fn from_windows() -> Self {
+        use vigil_sys::paths;
+        let windows = paths::windows_dir();
+        let program_data = paths::program_data();
+        let profile = paths::profile();
+        let mut allowed: Vec<PathBuf> = vec![
+            windows.join("Temp"),
+            windows.join(r"SoftwareDistribution\Download"),
+            windows.join("Minidump"),
+            windows.join("MEMORY.DMP"),
+            program_data.join(r"Microsoft\Windows\WER"),
+        ];
+        allowed.extend(profile.clone());
+        let mut protected: Vec<PathBuf> = vec![
+            program_data.join("Vigil"),
+            paths::program_files(),
+            paths::program_files_x86(),
+            paths::common_program_files(),
+            paths::system_dir(),
+        ];
+        protected.extend(paths::local_app_data().map(|local| local.join("Vigil")));
+        protected.extend(profile.map(|p| p.join(r"AppData\Local\Vigil")));
+        Self::new(&allowed, &protected)
+    }
+
+    /// A policy from explicit folders (tests, and the computer's own in `from_windows`).
+    pub fn new(allowed: &[PathBuf], protected: &[PathBuf]) -> Self {
+        let real = |paths: &[PathBuf]| -> Vec<String> {
+            let mut out: Vec<String> = Vec::new();
+            for path in paths {
+                for form in [resolved_path(path), Some(long_path(path)), Some(path.clone())]
+                    .into_iter()
+                    .flatten()
+                {
+                    let text = crate::win::normcase(&display(&form)).trim_end_matches('\\').to_string();
+                    if !text.is_empty() && !out.contains(&text) {
+                        out.push(text);
+                    }
+                }
+            }
+            out
+        };
+        Self {
+            allowed: real(allowed),
+            protected: real(protected),
+        }
+    }
+
+    /// True when `real` (a real path in lower case, as `final_path` gives it) may be cleaned.
+    pub fn allows(&self, real: &str) -> bool {
+        let real = real.trim_end_matches('\\');
+        let within = |base: &String| real == base || real.starts_with(&format!("{base}\\"));
+        self.allowed.iter().any(within) && !self.protected.iter().any(within)
+    }
+}
+
 struct Cleaner<'a> {
     result: CleanResult,
     progress: &'a dyn Fn(&str),
     cancel: &'a dyn Cancel,
     cancelled: bool,
     next_report: Instant,
+    policy: &'a RootPolicy,
 }
 
 impl Cleaner<'_> {
@@ -1149,6 +1245,13 @@ impl Cleaner<'_> {
                 }
                 continue;
             };
+            if !self.policy.allows(&root.0) {
+                self.result.errors.push(tr!(
+                    "{0}: skipped, it is outside the folders cleanup may touch",
+                    root_text
+                ));
+                continue;
+            }
             let mut walk = Walk::new(&root_path, target, now, cancel);
             walk.files(&mut |path, size| {
                 if cancel.cancelled() {
@@ -1254,9 +1357,36 @@ pub fn clean(targets: &[CleanupTarget], progress: &dyn Fn(&str), cancel: &dyn Ca
     clean_at(targets, now_seconds(), progress, cancel)
 }
 
+/// The real folders `clean` would work in for `targets`, after the policy (for the confirmation).
+pub fn cleanup_roots(targets: &[CleanupTarget]) -> Vec<String> {
+    let policy = RootPolicy::from_windows();
+    let mut out: Vec<String> = Vec::new();
+    for target in targets.iter().filter(|t| t.kind == TargetKind::Files) {
+        for root in &target.roots {
+            if let Some((real, _)) = root_identity(Path::new(root))
+                && policy.allows(&real)
+                && !out.contains(root)
+            {
+                out.push(root.clone());
+            }
+        }
+    }
+    out
+}
+
 pub(crate) fn clean_at(
     targets: &[CleanupTarget],
     now: f64,
+    progress: &dyn Fn(&str),
+    cancel: &dyn Cancel,
+) -> CleanResult {
+    clean_with(targets, now, &RootPolicy::from_windows(), progress, cancel)
+}
+
+pub(crate) fn clean_with(
+    targets: &[CleanupTarget],
+    now: f64,
+    policy: &RootPolicy,
     progress: &dyn Fn(&str),
     cancel: &dyn Cancel,
 ) -> CleanResult {
@@ -1266,6 +1396,7 @@ pub(crate) fn clean_at(
         cancel,
         cancelled: false,
         next_report: Instant::now(),
+        policy,
     };
     for target in targets {
         if !target.selected {

@@ -16,10 +16,12 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use windows::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_SERVICE_DOES_NOT_EXIST, ERROR_SUCCESS, HLOCAL, LocalFree};
+use windows::Win32::Foundation::{
+    ERROR_ACCESS_DENIED, ERROR_SERVICE_DOES_NOT_EXIST, ERROR_SUCCESS, HANDLE, HLOCAL, LocalFree,
+};
 use windows::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, GetNamedSecurityInfoW,
-    SE_FILE_OBJECT, SE_OBJECT_TYPE, SE_REGISTRY_KEY,
+    GetSecurityInfo, SE_FILE_OBJECT, SE_OBJECT_TYPE, SE_REGISTRY_KEY,
 };
 use windows::Win32::Security::{
     ACE_HEADER, ACL, DACL_SECURITY_INFORMATION, GetAce, GetSecurityDescriptorDacl, GetSecurityDescriptorOwner,
@@ -352,6 +354,31 @@ pub fn file_descriptor(path: &Path) -> Option<Descriptor> {
             None,
             None,
             &mut sd,
+        )
+    };
+    if status != ERROR_SUCCESS {
+        return None;
+    }
+    let owned = LocalSd(sd);
+    sd_descriptor(owned.0)
+}
+
+/// The owner and DACL of an open file or folder (the handle needs `READ_CONTROL`). Unlike
+/// [`file_descriptor`], nothing is looked up by name, so a link swapped in afterwards changes nothing.
+pub fn handle_descriptor(handle: HANDLE) -> Option<Descriptor> {
+    let mut sd = PSECURITY_DESCRIPTOR::default();
+    // SAFETY: the caller keeps `handle` open for the call; the descriptor returned in `sd` is
+    // owned (and freed) by `LocalSd`. Reading a descriptor changes nothing.
+    let status = unsafe {
+        GetSecurityInfo(
+            handle,
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+            None,
+            None,
+            None,
+            None,
+            Some(&mut sd),
         )
     };
     if status != ERROR_SUCCESS {

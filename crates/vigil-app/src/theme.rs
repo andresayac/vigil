@@ -1,9 +1,10 @@
-//! Windows 11 Fluent tokens (WinUI 3 theme resources).
+//! Vigil's tokens: the WinUI 3 metrics and roles, in the palette of Vigil's logo (deep teal
+//! `#035568`, emerald `#03C488`, mint `#7DFABD`), light and dark.
 //!
 //! Colour carries meaning: verdict colours only for verdicts, the `chart_*`
 //! resource hues only for live measurements, `ok` / `warn` / `bad` only for state, `heat` only for
-//! the process table's heat map, the accent only for interactive elements. Everything else is ink
-//! and greys.
+//! the process table's heat map, the accent only for interactive elements, `brand` only for brand
+//! marks. Everything else is ink and teal-tinted greys.
 
 use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::{App, Global, Hsla, Pixels, SharedString, px, rgb, rgba};
@@ -67,6 +68,10 @@ pub struct Tokens {
     pub accent_hover: Hsla,
     pub accent_pressed: Hsla,
     pub on_accent: Hsla,
+    /// The logo's green, for brand marks only: the selected page's indicator, the logo.
+    pub brand: Hsla,
+    /// A faint wash of the brand green (the selected page's fill).
+    pub brand_soft: Hsla,
     pub table_select: Hsla,
     pub ok: Hsla,
     pub warn: Hsla,
@@ -101,35 +106,40 @@ fn hexa(value: u32) -> Hsla {
 }
 
 impl Tokens {
+    /// Light: neutrals tinted with the logo's teal, the deep teal (`#035568`) as the accent and the
+    /// emerald (`#03C488`) for the brand marks (the selected page, the logo).
     pub fn light(mica: bool) -> Self {
-        let accent = hex(0x005fb8);
+        let accent = hex(0x035568);
         Self {
             dark: false,
             mica,
-            canvas: if mica { hexa(0x00000000) } else { hex(0xeef2f6) },
-            layer: if mica { hexa(0xffffffb8) } else { hex(0xfbfbfb) },
-            layer_stroke: hexa(0x0000000f),
+            // Over Mica the bases stay nearly opaque: the wallpaper's tint must not recolour the palette.
+            canvas: if mica { hexa(0xe9efeee6) } else { hex(0xe9efee) },
+            layer: if mica { hexa(0xf5f8f7f5) } else { hex(0xf5f8f7) },
+            layer_stroke: hexa(0x0a2a300f),
             surface: hex(0xffffff),
-            surface2: hex(0xfafafa),
-            flyout: hex(0xfcfcfc),
-            ink: hex(0x1b1b1b),
-            ink2: hex(0x5d5d5d),
-            ink3: hex(0x8b8b8b),
-            ink_disabled: hex(0xa8a8a8),
-            rule: hex(0xe5e5e5),
-            rule_strong: hex(0xd1d1d1),
-            hover: hexa(0x0000000a),
-            pressed: hexa(0x00000006),
-            control: hex(0xfbfbfb),
-            control_hover: hex(0xf6f6f6),
-            control_stroke: hex(0xe5e5e5),
-            control_stroke_bottom: hex(0xcccccc),
+            surface2: hex(0xf9fbfb),
+            flyout: hex(0xfcfdfd),
+            ink: hex(0x0e2226),
+            ink2: hex(0x4a5e62),
+            ink3: hex(0x74878a),
+            ink_disabled: hex(0xa6b3b4),
+            rule: hex(0xe1e8e7),
+            rule_strong: hex(0xcad5d4),
+            hover: hexa(0x0a2a300a),
+            pressed: hexa(0x0a2a3006),
+            control: hex(0xfbfcfc),
+            control_hover: hex(0xf3f7f6),
+            control_stroke: hex(0xdbe3e2),
+            control_stroke_bottom: hex(0xc4cfce),
             input_bg: hex(0xffffff),
             accent,
-            accent_hover: hex(0x1a6fc1),
-            accent_pressed: hex(0x3381ca),
+            accent_hover: hex(0x0d6679),
+            accent_pressed: hex(0x1b7689),
             on_accent: hex(0xffffff),
-            table_select: accent.opacity(0.12),
+            brand: hex(0x03c488),
+            brand_soft: hex(0x03c488).opacity(0.14),
+            table_select: accent.opacity(0.10),
             ok: hex(0x0f7b0f),
             warn: hex(0x9d5d00),
             bad: hex(0xc42b1c),
@@ -139,53 +149,56 @@ impl Tokens {
             chart_net: hex(0xb35c00),
             chart_gpu: hex(0x0e7a8a),
             heat: [
-                hex(0xf8eefb),
-                hex(0xf2ddf8),
-                hex(0xecd0f4),
-                hex(0xe5c2f0),
-                hex(0xd9a9ea),
+                hex(0xeef7f4),
+                hex(0xdcf1ea),
+                hex(0xc9eadf),
+                hex(0xb3e1d2),
+                hex(0x93d4c0),
             ],
             heat_rule: hexa(0xffffffcc),
             verdict_remove: hex(0xc42b1c),
             verdict_disable: hex(0x9d5d00),
             verdict_review: hex(0x6b3fd1),
-            verdict_no_signals: hex(0x6b6b6b),
+            verdict_no_signals: hex(0x6b7b7d),
             verdict_safe: hex(0x0f7b0f),
-            verdict_trusted: hex(0x9b9b9b),
+            verdict_trusted: hex(0x9aa7a8),
             on_chart: hex(0xffffff),
             chart2: hex(0x0e7a8a),
-            sunken: hex(0xfbfbfb),
+            sunken: hex(0xf0f4f3),
         }
     }
 
+    /// Dark: deep neutrals tinted with the logo's teal, the emerald (`#03C488`) as the accent.
     pub fn dark(mica: bool) -> Self {
-        let accent = hex(0x60cdff);
+        let accent = hex(0x03c488);
         Self {
             dark: true,
             mica,
-            canvas: if mica { hexa(0x00000000) } else { hex(0x202020) },
-            layer: if mica { hexa(0x3a3a3a4d) } else { hex(0x272727) },
-            layer_stroke: hexa(0x0000001a),
-            surface: hex(0x2b2b2b),
-            surface2: hex(0x2e2e2e),
-            flyout: hex(0x2c2c2c),
-            ink: hex(0xffffff),
-            ink2: hex(0xc8c8c8),
-            ink3: hex(0x9d9d9d),
-            ink_disabled: hex(0x717171),
-            rule: hex(0x363636),
-            rule_strong: hex(0x454545),
-            hover: hexa(0xffffff0f),
-            pressed: hexa(0xffffff0b),
-            control: hex(0x2d2d2d),
-            control_hover: hex(0x323232),
-            control_stroke: hex(0x353535),
-            control_stroke_bottom: hex(0x3f3f3f),
-            input_bg: hex(0x1f1f1f),
+            canvas: if mica { hexa(0x0c1416e6) } else { hex(0x0c1416) },
+            layer: if mica { hexa(0x111b1ef5) } else { hex(0x111b1e) },
+            layer_stroke: hexa(0xffffff0d),
+            surface: hex(0x162327),
+            surface2: hex(0x19272b),
+            flyout: hex(0x1b292d),
+            ink: hex(0xe8f1ef),
+            ink2: hex(0xadc0bd),
+            ink3: hex(0x7e9390),
+            ink_disabled: hex(0x50625f),
+            rule: hex(0x213236),
+            rule_strong: hex(0x2c3f43),
+            hover: hexa(0xffffff0d),
+            pressed: hexa(0xffffff08),
+            control: hex(0x1a292d),
+            control_hover: hex(0x203135),
+            control_stroke: hex(0x2a3c40),
+            control_stroke_bottom: hex(0x33484c),
+            input_bg: hex(0x0e171a),
             accent,
-            accent_hover: hex(0x5abce9),
-            accent_pressed: hex(0x52aad2),
-            on_accent: hex(0x000000),
+            accent_hover: hex(0x1fd39b),
+            accent_pressed: hex(0x02a874),
+            on_accent: hex(0x03262d),
+            brand: hex(0x7dfabd),
+            brand_soft: hex(0x03c488).opacity(0.16),
             table_select: accent.opacity(0.16),
             ok: hex(0x6ccb5f),
             warn: hex(0xf6c343),
@@ -196,37 +209,23 @@ impl Tokens {
             chart_net: hex(0xf0a34a),
             chart_gpu: hex(0x4cc9d6),
             heat: [
-                hex(0x2b2433),
-                hex(0x382a45),
-                hex(0x44305a),
-                hex(0x523671),
-                hex(0x653d8c),
+                hex(0x15282b),
+                hex(0x173338),
+                hex(0x1a4047),
+                hex(0x1d4e57),
+                hex(0x215f6a),
             ],
             heat_rule: hexa(0x00000059),
             verdict_remove: hex(0xff99a4),
             verdict_disable: hex(0xf6c343),
             verdict_review: hex(0xc4a7ff),
-            verdict_no_signals: hex(0xa0a0a0),
+            verdict_no_signals: hex(0x9aaaa8),
             verdict_safe: hex(0x6ccb5f),
-            verdict_trusted: hex(0x6e6e6e),
+            verdict_trusted: hex(0x627673),
             on_chart: hex(0x000000),
             chart2: hex(0x4cc9d6),
-            sunken: hex(0x1f1f1f),
+            sunken: hex(0x0b1315),
         }
-    }
-
-    /// Uses the Windows accent colour (in the theme's shade) for interactive elements.
-    pub fn set_accent(&mut self, accent: Hsla) {
-        self.accent = accent;
-        self.accent_hover = accent.opacity(0.9);
-        self.accent_pressed = accent.opacity(0.8);
-        self.table_select = accent.opacity(if self.dark { 0.16 } else { 0.12 });
-        // Text on the accent: black on a light accent, white on a dark one.
-        self.on_accent = if accent.l > 0.6 {
-            rgb(0x000000).into()
-        } else {
-            rgb(0xffffff).into()
-        };
     }
 
     /// The verdict colour of a finding ("remove", "disable", "review").

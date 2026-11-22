@@ -117,6 +117,46 @@ fn restore_never_writes_through_a_link_and_recreates_missing_folders() {
 }
 
 #[test]
+fn restore_refuses_a_folder_held_for_deletion_and_removes_folders_it_made() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let fx = Fixture::new();
+    let place = fx.tmp.path().join("held").join("deep");
+    fs::create_dir_all(&place).expect("folder");
+    let path = place.join("evil.exe");
+    fs::write(&path, b"MZ payload").expect("file");
+    let path = path.to_string_lossy().into_owned();
+    let qid = quarantined_id(&vigil_actions::quarantine_file(&path, &fx.store, "", false, false).expect("quarantine"));
+
+    // Another program holds the folder with the right to delete (or rename) it.
+    let holder = fs::OpenOptions::new()
+        .access_mode(0x0001_0000 | 0x0080) // DELETE | FILE_READ_ATTRIBUTES
+        .share_mode(0x7)
+        .custom_flags(0x0200_0000) // FILE_FLAG_BACKUP_SEMANTICS
+        .open(&place)
+        .expect("held");
+    let refused = vigil_actions::restore_quarantined(&qid, &fx.store).expect_err("held for deletion");
+    assert!(refused.message().contains("another program"), "{refused}");
+    assert!(!fs::exists(&path).unwrap_or(true));
+    drop(holder);
+
+    // A restore that fails after creating folders removes them again.
+    fs::remove_dir_all(fx.tmp.path().join("held")).expect("clear");
+    let blob = fx.store.quarantine_dir().join(format!("{qid}.bin"));
+    let mut data = fs::read(&blob).expect("blob");
+    data[0] ^= 0xFF;
+    fs::write(&blob, &data).expect("damage");
+    let damaged = vigil_actions::restore_quarantined(&qid, &fx.store).expect_err("damaged");
+    assert!(damaged.message().contains("hash mismatch"), "{damaged}");
+    assert!(!fx.tmp.path().join("held").exists(), "the folders it made are gone");
+
+    // Undamaged, it comes back and the folders are made again.
+    data[0] ^= 0xFF;
+    fs::write(&blob, &data).expect("repair");
+    vigil_actions::restore_quarantined(&qid, &fx.store).expect("restore");
+    assert_eq!(fs::read(&path).expect("restored"), b"MZ payload");
+}
+
+#[test]
 fn restore_refuses_places_a_quarantined_file_never_came_from() {
     let fx = Fixture::new();
     let path = victim(&fx, "evil.exe", b"payload");
@@ -1143,6 +1183,62 @@ fn an_untrusted_data_folder_is_moved_aside_and_a_private_one_created() {
 }
 
 #[test]
+fn a_trusted_data_folder_is_restricted_through_its_handle() {
+    let sid = common::current_user_sid();
+    let tmp = TempDir::new("vigil-data-");
+    let root = tmp.path().join("Vigil");
+    // Trusted (only reading is granted to others) but not exactly private: read access for Users.
+    testing::create_dir_with_sddl(&root, &format!("O:{sid}D:P(A;OICI;FA;;;{sid})(A;OICI;0x1200a9;;;BU)"))
+        .expect("root");
+    fs::write(root.join("journal.jsonl"), "{}\n").expect("journal");
+    assert_eq!(
+        testing::prepare_private_dir_as(&root, &sid, &[&sid, "S-1-5-18"]).expect("prepare"),
+        ""
+    );
+    let descriptor = vigil_sys::svcsec::file_descriptor(&root).expect("descriptor");
+    let vigil_sys::svcsec::Dacl::Aces(aces) = &descriptor.dacl else {
+        panic!("no DACL: {descriptor:?}")
+    };
+    assert!(aces.iter().all(|a| a.sid != "S-1-5-32-545"), "{descriptor:?}");
+    assert_eq!(fs::read_to_string(root.join("journal.jsonl")).expect("kept"), "{}\n");
+    let moved = fs::read_dir(tmp.path())
+        .expect("list")
+        .filter_map(Result::ok)
+        .filter(|e| e.file_name().to_string_lossy().starts_with("Vigil.untrusted-"))
+        .count();
+    assert_eq!(moved, 0, "a trusted folder is not moved");
+}
+
+#[test]
+fn an_untrusted_file_inside_moves_the_data_folder_aside() {
+    let sid = common::current_user_sid();
+    let tmp = TempDir::new("vigil-data-");
+    let root = tmp.path().join("Vigil");
+    testing::create_dir_with_sddl(&root, &format!("O:{sid}D:P(A;OICI;FA;;;{sid})(A;OICI;FA;;;SY)")).expect("root");
+    fs::create_dir_all(root.join("backups")).expect("backups");
+    // A backup any user may rewrite: what the elevated copy would restore is not Vigil's.
+    testing::create_dir_with_sddl(
+        &root.join(r"backups\planted"),
+        &format!("O:{sid}D:P(A;OICI;FA;;;{sid})(A;OICI;FA;;;BU)"),
+    )
+    .expect("planted");
+    let notice = testing::prepare_private_dir_as(&root, &sid, &[&sid, "S-1-5-18"]).expect("prepare");
+    assert!(
+        notice.contains("planted") && notice.contains("S-1-5-32-545"),
+        "{notice}"
+    );
+    let moved: Vec<_> = fs::read_dir(tmp.path())
+        .expect("list")
+        .filter_map(Result::ok)
+        .filter(|e| e.file_name().to_string_lossy().starts_with("Vigil.untrusted-"))
+        .map(|e| e.path())
+        .collect();
+    assert_eq!(moved.len(), 1, "{moved:?}");
+    assert!(moved[0].join(r"backups\planted").is_dir(), "nothing is deleted");
+    assert_eq!(fs::read_dir(&root).expect("new folder").count(), 0);
+}
+
+#[test]
 fn junction_inside_the_data_folder_is_refused() {
     let tmp = TempDir::new("vigil-data-");
     let root = tmp.path().join("Vigil");
@@ -1160,6 +1256,14 @@ fn junction_inside_the_data_folder_is_refused() {
         "{error}"
     );
     fs::remove_dir(root.join("backups")).expect("remove the junction only");
+    assert!(target.is_dir());
+
+    // A junction deeper inside is found too, by handle.
+    fs::create_dir_all(root.join(r"scans\old")).expect("nested");
+    common::junction(&root.join(r"scans\old\link"), &target);
+    let error = testing::prepare_private_dir_as(&root, &sid, &[&sid, "S-1-5-18"]).expect_err("refused");
+    assert!(error.message().contains("inside the data folder"), "{error}");
+    fs::remove_dir(root.join(r"scans\old\link")).expect("remove the junction only");
     assert!(target.is_dir());
 
     let linked = tmp.path().join("LinkedVigil");

@@ -181,13 +181,15 @@ Each crate has its tests next to the code (`#[cfg(test)]`) or in `tests/`; recor
 
 ## UI conventions
 
-- The look is Windows 11 Fluent (see `docs/NATIVE-UI.md`): Mica, the native title bar (it keeps snap layouts),
-  Segoe UI Variable, the WinUI 3 tokens in `crates/vigil-app/src/theme.rs` (light and dark), Fluent controls in
-  `src/ui` built on gpui-base primitives (focus, Tab, Enter/Space, accessibility role, name and state).
+- The look is a Windows 11 desktop app, not a web page (see `docs/NATIVE-UI.md`): Mica, the native title bar
+  (it keeps snap layouts), Segoe UI Variable, WinUI 3 metrics in the logo's palette (`crates/vigil-app/src/theme.rs`,
+  light and dark; never the Windows accent), Fluent controls in `src/ui` built on gpui-base primitives (focus,
+  Tab, Enter/Space, accessibility role, name and state). Pages are a title and sections of grouped rows
+  (`kit::section`, `kit::group`, `kit::NavRow`), not lists of links under paragraphs.
 - Colour carries meaning: the six verdict colours are only for verdicts; `chart2` and the per-resource
   `chart_*` hues (CPU, memory, disk, network, GPU, as in Task Manager) only for live measurements;
-  `ok` / `warn` / `bad` only for state; the accent only for interactive elements. Everything else is ink and
-  greys.
+  `ok` / `warn` / `bad` only for state, always with a glyph; the accent only for interactive elements; `brand`
+  only for brand marks (the selected page, the logo). Everything else is ink and teal-tinted greys.
 - Never block the window: slow reads run on the background executor (`pages::common::read`), requests on their
   own thread (`actions.rs`); long jobs report progress through channels. Live data comes from one sampler thread
   that runs only while a live page is open and the window is visible (`live.rs`).

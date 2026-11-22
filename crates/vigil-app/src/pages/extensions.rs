@@ -26,18 +26,32 @@ use crate::ui::grid::{self, Grid, GridCell, GridCol, GridRow};
 use crate::ui::kit::{self, J as _};
 use crate::ui::{self, FButton, Kind};
 
-const WARN_FLAGS: [&str; 10] = [
+/// Flags that always get the warning colour: a harmful mark, forced by a policy, developer mode, or
+/// from outside the store. Broad permissions of a store extension are ordinary and stay grey, so the
+/// warnings keep meaning something.
+const WARN_FLAGS: [&str; 6] = [
     "store_flagged",
+    "delisted",
     "policy",
     "outside_store",
     "unpacked",
     "not_signed",
-    "delisted",
-    "native",
-    "debugger",
-    "proxy",
-    "management",
 ];
+
+/// Permissions that warn only on an extension from outside the store that also reaches every site.
+const RISKY_OUTSIDE: [&str; 2] = ["native", "debugger"];
+
+/// Not installed from the browser's store (another source, developer mode, or unsigned).
+fn from_outside(flags: &[&str]) -> bool {
+    flags
+        .iter()
+        .any(|f| matches!(*f, "outside_store" | "unpacked" | "not_signed"))
+}
+
+/// Whether one of an extension's flags gets the warning colour.
+fn is_warn(flag: &str, flags: &[&str]) -> bool {
+    WARN_FLAGS.contains(&flag) || (RISKY_OUTSIDE.contains(&flag) && flags.contains(&"all_sites") && from_outside(flags))
+}
 
 const CHIPS: [(&str, &str); 6] = [
     ("all", "ext.chipAll"),
@@ -85,28 +99,33 @@ fn camel(snake: &str) -> String {
     out
 }
 
-fn ordered_flags(e: &Value) -> Vec<String> {
+/// The flags, the warning ones first, each with whether it warns.
+fn ordered_flags(e: &Value) -> Vec<(String, bool)> {
     let flags = e.strs("flags");
-    let mut out: Vec<String> = flags
+    let mut out: Vec<(String, bool)> = flags
         .iter()
-        .filter(|f| WARN_FLAGS.contains(f))
-        .map(|f| f.to_string())
+        .filter(|f| is_warn(f, &flags))
+        .map(|f| (f.to_string(), true))
         .collect();
-    out.extend(flags.iter().filter(|f| !WARN_FLAGS.contains(f)).map(|f| f.to_string()));
+    out.extend(
+        flags
+            .iter()
+            .filter(|f| !is_warn(f, &flags))
+            .map(|f| (f.to_string(), false)),
+    );
     out
 }
 
 fn has_warn(e: &Value) -> bool {
-    e.strs("flags").iter().any(|f| WARN_FLAGS.contains(f))
+    let flags = e.strs("flags");
+    flags.iter().any(|f| is_warn(f, &flags))
 }
 
 fn chip_test(chip: &str, e: &Value) -> bool {
     let flags = e.strs("flags");
     match chip {
         "allSites" => flags.contains(&"all_sites"),
-        "outside" => flags
-            .iter()
-            .any(|f| matches!(*f, "outside_store" | "unpacked" | "not_signed")),
+        "outside" => from_outside(&flags),
         "policy" => flags.contains(&"policy"),
         "disabled" => !e.b("enabled"),
         "mv2" => flags.contains(&"mv2"),
@@ -313,16 +332,14 @@ impl ExtensionsPage {
                 let flags = ordered_flags(e);
                 let short: Vec<String> = flags
                     .iter()
-                    .map(|f| t_or(&format!("ext.short.{}", camel(f)), f))
+                    .map(|(f, _)| t_or(&format!("ext.short.{}", camel(f)), f))
                     .collect();
                 let mut name = GridCell::text(e.s("name")).image(self.icons.get(e.s("key")).cloned());
                 if warn {
                     name = name.glyph(icons::WARNING, tk.warn);
                 }
-                let mut flag_cell = GridCell::text(short.join(", "));
-                if warn {
-                    flag_cell = flag_cell.color(tk.warn);
-                }
+                // Warnings in the warning colour; ordinary permissions in neutral grey.
+                let flag_cell = GridCell::text(short.join(", ")).color(if warn { tk.warn } else { tk.ink2 });
                 let cells = vec![
                     name,
                     GridCell::text(e.s("browser")),
@@ -437,8 +454,7 @@ impl ExtensionsPage {
         if e.has("description") {
             pane = pane.child(kit::body(e.s("description").to_string()));
         }
-        for f in ordered_flags(e) {
-            let warn = WARN_FLAGS.contains(&f.as_str());
+        for (f, warn) in ordered_flags(e) {
             let (g, c) = if warn {
                 (icons::WARNING, tk.warn)
             } else {
@@ -876,5 +892,75 @@ impl Render for ExtensionsPage {
                     }),
             )
             .child(kit::faint(footer, &tk))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn warns(flags: &[&str]) -> Vec<String> {
+        ordered_flags(&json!({ "flags": flags }))
+            .into_iter()
+            .filter(|(_, warn)| *warn)
+            .map(|(f, _)| f)
+            .collect()
+    }
+
+    #[test]
+    fn only_real_risks_get_the_warning_colour() {
+        // A store extension with broad permissions: ordinary, all grey.
+        let store = [
+            "all_sites",
+            "history",
+            "tabs",
+            "cookies",
+            "web_request",
+            "native",
+            "debugger",
+            "proxy",
+        ];
+        assert!(warns(&store).is_empty());
+        assert!(!has_warn(&json!({ "flags": store })));
+        // Harmful mark, policy, developer mode, outside the store: always.
+        for flag in [
+            "store_flagged",
+            "delisted",
+            "policy",
+            "unpacked",
+            "outside_store",
+            "not_signed",
+        ] {
+            assert_eq!(warns(&[flag, "tabs"]), [flag]);
+        }
+        // nativeMessaging or debugger warn only from outside the store with access to every site.
+        assert_eq!(
+            warns(&["outside_store", "all_sites", "native", "debugger", "proxy"]),
+            ["outside_store", "native", "debugger"]
+        );
+        assert_eq!(warns(&["outside_store", "native"]), ["outside_store"]);
+        assert_eq!(warns(&["unpacked", "all_sites", "debugger"]), ["unpacked", "debugger"]);
+        // Warnings come first, the order of the rest is kept.
+        let ordered: Vec<String> = ordered_flags(&json!({ "flags": ["tabs", "policy", "history"] }))
+            .into_iter()
+            .map(|(f, _)| f)
+            .collect();
+        assert_eq!(ordered, ["policy", "tabs", "history"]);
+    }
+
+    #[test]
+    fn filters_keep_working() {
+        let e = |flags: &[&str], enabled: bool| json!({ "flags": flags, "enabled": enabled });
+        assert!(chip_test("allSites", &e(&["all_sites"], true)));
+        assert!(!chip_test("allSites", &e(&["tabs"], true)));
+        for outside in ["outside_store", "unpacked", "not_signed"] {
+            assert!(chip_test("outside", &e(&[outside], true)));
+        }
+        assert!(!chip_test("outside", &e(&["policy", "all_sites"], true)));
+        assert!(chip_test("policy", &e(&["policy"], true)));
+        assert!(chip_test("disabled", &e(&[], false)) && !chip_test("disabled", &e(&[], true)));
+        assert!(chip_test("mv2", &e(&["mv2"], true)));
+        assert!(chip_test("all", &e(&[], true)));
     }
 }

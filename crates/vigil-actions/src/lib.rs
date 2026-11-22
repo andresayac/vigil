@@ -29,6 +29,7 @@ mod fuzz_tests;
 mod guards;
 mod json_text;
 mod labels;
+mod nofollow;
 mod ops;
 mod params;
 mod posture;
@@ -55,6 +56,7 @@ pub use engine::{
 pub use error::ActionError;
 pub use guards::{ESSENTIAL_SERVICES, guard_file, guard_service};
 pub use labels::{known_op_label, op_label};
+pub use nofollow::write_user_file;
 pub use ops::{
     approved_location, create_restore_point, service_status, startup_folder_approved, task_enabled,
     task_stores_password,
