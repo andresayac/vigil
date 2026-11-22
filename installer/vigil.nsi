@@ -1,12 +1,19 @@
 ; Vigil's installer: per machine, in Program Files, with a Start menu shortcut that carries the
 ; app's AppUserModelID (Windows ties notifications to it) and an uninstaller.
 ;
-;   makensis /DVERSION=1.7.0 /DEXE=C:\full\path\vigil.exe /DOUT=C:\full\path\Vigil_1.7.0_x64-setup.exe installer\vigil.nsi
+;   makensis /DVERSION=2.0.0 /DEXE=C:\full\path\vigil.exe /DOUT=C:\full\path\Vigil_2.0.0_x64-setup.exe installer\vigil.nsi
+;
+; installer\test-installer.ps1 installs it, checks it, upgrades over it and uninstalls it (CI).
 ;
 ; makensis works in this folder, so relative paths are read from here: pass full paths.
 ;
+; Vigil always goes to Program Files, where only administrators can write: the executable runs
+; elevated, so a folder a standard user could change would let malware replace it. There is no
+; folder choice, and /D and a stale InstallLocation are ignored.
+;
 ; The program, its shortcut and the uninstall entry use the same names as earlier Vigil
-; installers, so installing over an older version upgrades it in place. Vigil's data
+; installers, so installing over an older version upgrades it in place; what those wrote and this
+; one does not (a desktop shortcut, the vendor key) is removed by exact name. Vigil's data
 ; (%ProgramData%\Vigil: the journal and the quarantine; %LOCALAPPDATA%\Vigil) is kept: History and
 ; quarantined files must survive a reinstall.
 
@@ -31,6 +38,9 @@ SetCompressor /SOLID lzma
 !define AUMID "com.andresayac.vigil"
 !define PUBLISHER "andresayac"
 !define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP}"
+; Earlier installers kept the install folder and the installer language here.
+!define VENDOR_KEY "Software\${PUBLISHER}"
+!define OLD_PRODUCT_KEY "${VENDOR_KEY}\${APP}"
 
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
@@ -39,7 +49,6 @@ SetCompressor /SOLID lzma
 Name "${APP}"
 OutFile "${OUT}"
 InstallDir "$PROGRAMFILES64\${APP}"
-InstallDirRegKey HKLM "${UNINSTALL_KEY}" "InstallLocation"
 RequestExecutionLevel admin
 BrandingText "${APP} ${VERSION}"
 
@@ -58,7 +67,6 @@ VIAddVersionKey "LegalCopyright" "${PUBLISHER}"
 !define MUI_FINISHPAGE_NOAUTOCLOSE
 
 !insertmacro MUI_PAGE_WELCOME
-!insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
 
@@ -130,12 +138,37 @@ LangString RUNNING ${LANG_SIMPCHINESE} "Vigil 正在运行。请从通知区域�
   Pop $0
 !macroend
 
+; What earlier installers wrote and this one does not, by exact name. Installing removes the vendor
+; key (it held the old install folder and installer language; the key above it only if empty).
+; Uninstalling also removes their desktop shortcut (all users and the account that uninstalls),
+; which keeps working after an upgrade since the program's path does not change.
+!macro OLD_KEYS
+  DeleteRegKey HKLM "${OLD_PRODUCT_KEY}"
+  DeleteRegKey /ifempty HKLM "${VENDOR_KEY}"
+  DeleteRegKey HKCU "${OLD_PRODUCT_KEY}"
+  DeleteRegKey /ifempty HKCU "${VENDOR_KEY}"
+!macroend
+
+Function RemoveOldLeftovers
+  !insertmacro OLD_KEYS
+FunctionEnd
+
+Function un.RemoveOldLeftovers
+  !insertmacro OLD_KEYS
+  SetShellVarContext current
+  Delete "$DESKTOP\${APP}.lnk"
+  SetShellVarContext all
+  Delete "$DESKTOP\${APP}.lnk"
+FunctionEnd
+
 Function .onInit
   ${IfNot} ${RunningX64}
     MessageBox MB_ICONSTOP "Vigil needs 64-bit Windows 10 or 11."
     Abort
   ${EndIf}
   SetRegView 64
+  ; Program Files only, whatever /D or an earlier install said.
+  StrCpy $INSTDIR "$PROGRAMFILES64\${APP}"
   !insertmacro MUI_LANGDLL_DISPLAY
 FunctionEnd
 
@@ -143,6 +176,7 @@ Section "Vigil" Main
   SectionIn RO
   SetRegView 64
   SetShellVarContext all
+  StrCpy $INSTDIR "$PROGRAMFILES64\${APP}"
   SetOutPath "$INSTDIR"
   ; The running program cannot be replaced: ask to quit it and try again.
   retry:
@@ -150,7 +184,8 @@ Section "Vigil" Main
   SetOverwrite try
   File "/oname=vigil.exe" "${EXE}"
   ${If} ${Errors}
-    MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "$(RUNNING)" IDRETRY retry
+    MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "$(RUNNING)" /SD IDCANCEL IDRETRY retry
+    SetErrorLevel 2
     Abort
   ${EndIf}
   SetOverwrite on
@@ -172,6 +207,9 @@ Section "Vigil" Main
   ; Size in KB, for Installed apps.
   SectionGetSize ${Main} $0
   WriteRegDWORD HKLM "${UNINSTALL_KEY}" "EstimatedSize" $0
+
+  ; Earlier installers' leftovers, by exact name.
+  Call RemoveOldLeftovers
 SectionEnd
 
 Function un.onInit
@@ -186,10 +224,12 @@ Section "Uninstall"
   ClearErrors
   Delete "$INSTDIR\vigil.exe"
   ${If} ${Errors}
-    MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "$(RUNNING)" IDRETRY retry
+    MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "$(RUNNING)" /SD IDCANCEL IDRETRY retry
+    SetErrorLevel 2
     Abort
   ${EndIf}
   Delete "$SMPROGRAMS\${APP}.lnk"
+  Call un.RemoveOldLeftovers
   ; The start at sign-in (Settings > Background watch) of the account that uninstalls.
   DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${APP}"
   DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run" "${APP}"

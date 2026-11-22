@@ -23,3 +23,39 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Tests
         run: cargo test --workspace
+
+  # The runner is an administrator without a UAC prompt: the setup is really installed, checked,
+  # upgraded over itself and over the last 1.x release, and uninstalled.
+  installer:
+    if: github.event_name == 'push'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build Vigil
+        run: cargo build --release -p vigil-app
+      - name: Build the setup
+        shell: pwsh
+        run: installer\build-setup.ps1 -Out dist
+      - name: Download the last 1.x setup
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Force old-setup | Out-Null
+          gh release download v1.9.0 --pattern "*-setup.exe" --dir old-setup
+          if ($LASTEXITCODE -ne 0) { Write-Warning "no 1.x setup to upgrade from" }
+          exit 0
+      - name: Install, check, upgrade and uninstall
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem dist\*-setup.exe | Select-Object -First 1
+          $old = Get-ChildItem old-setup\*-setup.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          $version = Get-Content dist\version.txt
+          if ($old) {
+            installer\test-installer.ps1 -Setup $setup.FullName -Version $version -OldSetup $old.FullName
+          } else {
+            installer\test-installer.ps1 -Setup $setup.FullName -Version $version
+          }
+          if ($LASTEXITCODE -ne 0) { throw "the installer test failed" }

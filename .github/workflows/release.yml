@@ -28,17 +28,31 @@ jobs:
         run: cargo build --release -p vigil-app
       - name: Build the installer
         shell: pwsh
+        run: installer\build-setup.ps1 -Out dist-release
+      # The runner is an administrator without a UAC prompt: install, check, upgrade (from itself
+      # and from the last 1.x release) and uninstall the setup before anything is published.
+      - name: Test the installer
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          $version = ((cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages |
-            Where-Object name -eq "vigil-app").version
-          New-Item -ItemType Directory -Force dist-release | Out-Null
-          $makensis = Join-Path ${env:ProgramFiles(x86)} "NSIS\makensis.exe"
-          if (-not (Test-Path $makensis)) {
-            choco install nsis -y --no-progress
-            if ($LASTEXITCODE -ne 0) { throw "NSIS could not be installed" }
+          New-Item -ItemType Directory -Force old-setup | Out-Null
+          gh release download v1.9.0 --pattern "*-setup.exe" --dir old-setup
+          if ($LASTEXITCODE -ne 0) { Write-Warning "no 1.x setup to upgrade from" }
+          $setup = Get-ChildItem dist-release\*-setup.exe | Select-Object -First 1
+          $old = Get-ChildItem old-setup\*-setup.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          $version = Get-Content dist-release\version.txt
+          if ($old) {
+            installer\test-installer.ps1 -Setup $setup.FullName -Version $version -OldSetup $old.FullName
+          } else {
+            installer\test-installer.ps1 -Setup $setup.FullName -Version $version
           }
-          & $makensis /V2 "/DVERSION=$version" "/DEXE=$PWD\target\release\vigil.exe" "/DOUT=$PWD\dist-release\Vigil_${version}_x64-setup.exe" installer\vigil.nsi
-          if ($LASTEXITCODE -ne 0) { throw "makensis failed" }
+          if ($LASTEXITCODE -ne 0) { throw "the installer test failed" }
+      - name: Collect the files
+        shell: pwsh
+        run: |
+          $version = Get-Content dist-release\version.txt
+          Remove-Item dist-release\version.txt
           Copy-Item target/release/vigil.exe "dist-release/Vigil-$version-portable.exe"
           # LF line ends, so `sha256sum -c SHA256SUMS.txt` works everywhere.
           $lines = Get-ChildItem dist-release | ForEach-Object {
