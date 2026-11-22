@@ -9255,5 +9255,37 @@
    }
   ],
   "notes": []
+ },
+ "assistantReply": {
+  "answer": "Two things are worth a look. Parsec, a remote-access agent, starts with Windows and its service always waits for connections: if you do not use it, turn it off on the Startup page. And 17.3 GB can be freed safely: an old memory dump from September 2025 and the Recycle Bin.",
+  "links": [
+   {
+    "text": "Open Startup",
+    "page": "startup"
+   },
+   {
+    "text": "Free up space",
+    "page": "storage"
+   },
+   {
+    "text": "See the finding",
+    "page": "findings"
+   }
+  ],
+  "calls": [
+   {
+    "name": "get_scan_summary",
+    "bytes": 3174
+   },
+   {
+    "name": "list_startup",
+    "bytes": 2410
+   }
+  ],
+  "steps": 3,
+  "limit": "",
+  "destination": "Ollama on this computer (demo)",
+  "local": true,
+  "anonymized": false
  }
 }

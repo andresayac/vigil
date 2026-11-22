@@ -269,6 +269,22 @@ pub fn ignored_set(st: &AppState, item_id: &str, value: bool) -> Result<Vec<Stri
     Ok(ignored_ids(&inner))
 }
 
+/// Ignores (or stops ignoring) several findings at once, as the Findings page's groups do. A
+/// finding the loaded report does not have is skipped.
+pub fn ignored_set_many(st: &AppState, item_ids: &[String], value: bool) -> Result<Vec<String>, String> {
+    let mut inner = st.lock();
+    for item_id in item_ids {
+        let Some(item) = requests::find_item(inner.analysis_json.as_ref(), item_id).cloned() else {
+            continue;
+        };
+        let text = |key: &str| item.get(key).and_then(Value::as_str).unwrap_or("").to_string();
+        inner
+            .ignored
+            .set(item_key(&item), &text("title"), &text("kind"), value)?;
+    }
+    Ok(ignored_ids(&inner))
+}
+
 /// Every journal record, newest first, as History shows it.
 pub fn journal(st: &AppState) -> Vec<Value> {
     let mut records: Vec<Value> = st.store.records().iter().map(crate::service::record_json).collect();

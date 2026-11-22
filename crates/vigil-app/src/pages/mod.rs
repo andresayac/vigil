@@ -2,6 +2,7 @@
 
 pub mod accounts;
 pub mod alerts;
+pub mod assistant;
 pub mod common;
 pub mod dates;
 pub mod extensions;

@@ -540,18 +540,10 @@ pub fn search_box(state: &Entity<InputState>, tk: &Tokens) -> Input {
         .cleanable(true)
 }
 
-/// A page title (Subtitle in the WinUI type ramp).
-pub fn page_title(text: impl Into<SharedString>) -> impl IntoElement {
-    // Never squeezed or wrapped by a command bar next to it: the bar collapses instead.
-    div()
-        .flex_none()
-        .whitespace_nowrap()
-        .pl_1()
-        .font_family(crate::theme::FONT_DISPLAY)
-        .text_size(px(20.))
-        .line_height(px(28.))
-        .font_weight(FontWeight::SEMIBOLD)
-        .child(text.into())
+/// Where a page's title was. The shell draws the section's title and the page's tab over the
+/// content, so a page keeps only the row for its command bar.
+pub fn page_title(_text: impl Into<SharedString>) -> impl IntoElement {
+    div().flex_none()
 }
 
 /// A vertical rule between command bar groups.

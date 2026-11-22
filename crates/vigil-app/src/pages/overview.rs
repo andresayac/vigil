@@ -443,15 +443,14 @@ impl Render for OverviewPage {
         }
 
         // The verdict: a shield in the risk's colour, the headline, what the scan was.
-        let risk = risk_color(level, &tk);
+        let brand = crate::theme::hero();
         let mut hero = div()
             .flex()
             .flex_col()
             .gap_4()
-            .p(px(20.))
-            .bg(tk.surface)
-            .border_1()
-            .border_color(tk.rule)
+            .p(px(24.))
+            .bg(brand.fill)
+            .text_color(brand.ink)
             .rounded(RADIUS_CARD)
             .child(
                 div()
@@ -467,8 +466,8 @@ impl Render for OverviewPage {
                             .items_center()
                             .justify_center()
                             .rounded(px(12.))
-                            .bg(risk.opacity(0.14))
-                            .child(icons::icon(icons::SHIELD_PLAIN, 24.0, risk)),
+                            .bg(brand.hover)
+                            .child(icons::icon(icons::SHIELD_PLAIN, 24.0, brand.mint)),
                     )
                     .child(
                         div()
@@ -481,7 +480,11 @@ impl Render for OverviewPage {
                                 div()
                                     .text_size(px(12.))
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(risk)
+                                    .text_color(brand.mint)
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(kit::dot(Some(risk_color(level, &tk))))
                                     .child(risk_label(level)),
                             )
                             .child(
@@ -493,11 +496,53 @@ impl Render for OverviewPage {
                                     .child(kit::plain(headline)),
                             )
                             .when(summary.has("summary"), |this| {
-                                this.child(kit::muted(summary.s("summary").to_string(), &tk))
+                                this.child(kit::body(summary.s("summary").to_string()).text_color(brand.ink2))
                             })
-                            .child(kit::faint(parts.join(" · "), &tk).pt_1()),
+                            .child(
+                                div()
+                                    .pt_1()
+                                    .text_size(px(12.))
+                                    .text_color(brand.ink2)
+                                    .child(parts.join(" · ")),
+                            ),
                     ),
             );
+        // The two things to do from here: look at what matters, or scan again.
+        let review_verdict = ["remove", "disable", "review"]
+            .into_iter()
+            .find(|v| visible.iter().any(|i| i.s("verdict") == *v && !i.b("trusted")));
+        let review = ctx.clone();
+        let again = ctx.clone();
+        hero = hero.child(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap_2()
+                .when_some(review_verdict, |this, verdict| {
+                    this.child(
+                        ui::FButton::new("ov-review", ui::Kind::Standard)
+                            .label(t("overview.reviewNow"))
+                            .glyph(icons::CHEVRON_RIGHT)
+                            .bg(brand.mint)
+                            .text_color(brand.on_mint)
+                            .border_0()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .on_click(move |_, window, cx| {
+                                review.find(Focus::Verdict(verdict.to_string()), window, cx)
+                            }),
+                    )
+                })
+                .child(
+                    ui::FButton::new("ov-again", ui::Kind::Standard)
+                        .label(t("overview.scanAgain"))
+                        .glyph(icons::REFRESH)
+                        .bg(brand.hover)
+                        .text_color(brand.ink)
+                        .border_color(brand.ink2)
+                        .disabled(report.scanning)
+                        .on_click(move |_, window, cx| again.scan_dialog(window, cx)),
+                ),
+        );
 
         // One bar for the open findings, a segment per verdict, and its legend.
         let counts: Vec<(&'static str, usize)> = VERDICT_ORDER
@@ -557,11 +602,11 @@ impl Render for OverviewPage {
                             .py(px(3.))
                             .rounded(px(4.))
                             .text_size(px(13.))
-                            .hover(move |s| s.bg(tk.hover))
+                            .hover(move |s| s.bg(brand.hover))
                             .on_click(move |_, window, cx| c.find(Focus::Verdict(v.to_string()), window, cx))
                             .child(kit::dot(Some(tk.verdict(v))))
                             .child(div().font_weight(FontWeight::SEMIBOLD).child(n.to_string()))
-                            .child(div().text_color(tk.ink2).child(verdict_label(v)))
+                            .child(div().text_color(brand.ink2).child(verdict_label(v)))
                     })),
             );
         }
@@ -656,8 +701,53 @@ impl Render for OverviewPage {
             ));
         }
 
-        // The right column.
-        let mut right = div().flex().flex_col().gap(px(20.)).min_w_0();
+        // The right column: the quick actions first.
+        let quick: Vec<AnyElement> = [
+            (
+                "storage",
+                "overview.quickStorage",
+                "overview.quickStorageNote",
+                icons::section("cleanup"),
+            ),
+            (
+                "startup",
+                "overview.quickStartup",
+                "overview.quickStartupNote",
+                icons::page("startup"),
+            ),
+            (
+                "protection",
+                "overview.quickDefender",
+                "overview.quickDefenderNote",
+                icons::page("protection"),
+            ),
+            (
+                "restore",
+                "overview.quickRestore",
+                "overview.quickRestoreNote",
+                icons::page("restore"),
+            ),
+            (
+                "assistant",
+                "overview.quickAsk",
+                "overview.quickAskNote",
+                icons::section("assistant"),
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, (target, title, note, glyph))| {
+            let c = ctx.clone();
+            kit::NavRow::new(ElementId::NamedInteger("ov-quick".into(), i as u64), t(title))
+                .subtitle(t(note))
+                .lead(kit::lead_glyph(glyph, tk.accent))
+                .build(move |window, cx| c.go(target, window, cx), &tk)
+        })
+        .collect();
+        let mut right = div().flex().flex_col().gap(px(20.)).min_w_0().child(kit::section(
+            kit::section_head(t("overview.quick"), &tk),
+            kit::group(quick, &tk),
+        ));
         if let Some(w) = &watch {
             right = right.child(watchui::watch_card(&ctx, w, &tk));
         }

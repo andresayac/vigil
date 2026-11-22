@@ -64,6 +64,22 @@ pub fn page(key: &str) -> char {
         "updates" => '\u{E895}',
         "power" => '\u{E83F}',
         "reliability" => '\u{E95E}',
+        "assistant" => '\u{E8F2}',
+        _ => '\u{E8A5}',
+    }
+}
+
+/// The glyph of a section of the navigation pane.
+pub fn section(key: &str) -> char {
+    match key {
+        "home" => '\u{E80F}',
+        "assistant" => '\u{E8F2}',
+        "security" => '\u{EA18}',
+        "live" => '\u{E9D9}',
+        "cleanup" => '\u{EA99}',
+        "apps" => '\u{ECAA}',
+        "system" => '\u{E7F4}',
+        "activity" => '\u{E81C}',
         _ => '\u{E8A5}',
     }
 }

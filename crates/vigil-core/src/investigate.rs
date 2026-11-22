@@ -198,7 +198,7 @@ pub fn validate(item: &Item, answer: &Value) -> (String, String, String, Vec<Evi
     )
 }
 
-fn stamp() -> String {
+pub(crate) fn stamp() -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
@@ -292,7 +292,7 @@ fn run(st: &AppState, id: &str, ui: &(dyn Ui + Sync)) -> Result<Option<Investiga
         let work = root
             .join("investigations")
             .join(format!("run-{}-{}", stamp(), std::process::id()));
-        let launch = mcp_launch(&work, &report_path, anonymize);
+        let launch = mcp_launch(&work, Some(&report_path), anonymize);
         // The run's configuration files go, whatever happens (an error, a cancel, a panic).
         let _cleanup = RemoveOnDrop(work.clone());
         let progress = |call: &ToolCall| ui.progress(&format!("{} ({} B)", call.name, call.bytes));
@@ -337,7 +337,7 @@ fn run(st: &AppState, id: &str, ui: &(dyn Ui + Sync)) -> Result<Option<Investiga
 
 /// Deletes a run's work folder when dropped. The agent's process tree has already been ended (it
 /// runs in a job), but its handles may close a moment later, so a few attempts are made.
-struct RemoveOnDrop(PathBuf);
+pub(crate) struct RemoveOnDrop(pub(crate) PathBuf);
 
 impl Drop for RemoveOnDrop {
     fn drop(&mut self) {
@@ -353,16 +353,16 @@ impl Drop for RemoveOnDrop {
 
 /// How a local agent starts `vigil mcp` for this run: this executable, the loaded report, a call log
 /// and a work folder inside Vigil's data folder.
-fn mcp_launch(work: &Path, report: &Path, anonymize: bool) -> Result<McpLaunch, String> {
+pub(crate) fn mcp_launch(work: &Path, report: Option<&Path>, anonymize: bool) -> Result<McpLaunch, String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let log = work.join("calls.jsonl");
-    let mut args = vec![
-        "mcp".to_string(),
-        "--report".to_string(),
-        report.to_string_lossy().into_owned(),
-        "--log".to_string(),
-        log.to_string_lossy().into_owned(),
-    ];
+    let mut args = vec!["mcp".to_string()];
+    if let Some(report) = report {
+        args.push("--report".to_string());
+        args.push(report.to_string_lossy().into_owned());
+    }
+    args.push("--log".to_string());
+    args.push(log.to_string_lossy().into_owned());
     if !anonymize {
         args.push("--no-anonymize".into());
     }
@@ -445,11 +445,21 @@ mod tests {
     #[test]
     fn the_mcp_launch_names_the_report_log_and_anonymization() {
         let work = std::env::temp_dir().join("vigil-launch-test");
-        let launch = mcp_launch(&work, Path::new("C:\\data\\scan-20260101-100000-report.json"), true).expect("launch");
+        let launch = mcp_launch(
+            &work,
+            Some(Path::new("C:\\data\\scan-20260101-100000-report.json")),
+            true,
+        )
+        .expect("launch");
         assert_eq!(launch.args[0], "mcp");
         assert!(launch.args.contains(&"--report".to_string()) && launch.args.contains(&"--log".to_string()));
         assert!(!launch.args.contains(&"--no-anonymize".to_string()));
-        let open = mcp_launch(&work, Path::new("C:\\r.json"), false).expect("launch");
+        let open = mcp_launch(&work, Some(Path::new("C:\\r.json")), false).expect("launch");
+        let newest = mcp_launch(&work, None, true).expect("launch");
+        assert!(
+            !newest.args.contains(&"--report".to_string()),
+            "no report: the newest one"
+        );
         assert!(open.args.contains(&"--no-anonymize".to_string()));
     }
 }

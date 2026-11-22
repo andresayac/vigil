@@ -415,6 +415,7 @@ pub fn take_seed() -> Option<String> {
 pub fn page_synonyms(page: &str) -> &'static str {
     match page {
         "overview" => "home summary dashboard verdict",
+        "assistant" => "ai chat ask question help agent mcp",
         "findings" => "scan results threats malware suspicious",
         "alerts" => "notifications watch background",
         "protection" => "defender antivirus threats exclusions",

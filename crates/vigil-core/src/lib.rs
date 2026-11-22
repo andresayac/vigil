@@ -8,6 +8,7 @@
 
 pub mod accounts;
 pub mod api;
+pub mod assistant;
 pub mod autoscan;
 pub mod autostart;
 pub mod cli;

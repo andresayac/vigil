@@ -105,6 +105,29 @@ fn hexa(value: u32) -> Hsla {
     rgba(value).into()
 }
 
+/// The colours of the brand card (Home's verdict): the logo's deep teal with white and mint text,
+/// the same in the light and dark themes.
+#[derive(Debug, Clone, Copy)]
+pub struct Hero {
+    pub fill: Hsla,
+    pub ink: Hsla,
+    pub ink2: Hsla,
+    pub mint: Hsla,
+    pub on_mint: Hsla,
+    pub hover: Hsla,
+}
+
+pub fn hero() -> Hero {
+    Hero {
+        fill: hex(0x035568),
+        ink: hex(0xFFFFFF),
+        ink2: hex(0xDCEFEA),
+        mint: hex(0x7DFABD),
+        on_mint: hex(0x023D33),
+        hover: hexa(0xFFFFFF1F),
+    }
+}
+
 impl Tokens {
     /// Light: neutrals tinted with the logo's teal, the deep teal (`#035568`) as the accent and the
     /// emerald (`#03C488`) for the brand marks (the selected page, the logo).

@@ -845,6 +845,67 @@ impl Render for SettingsView {
             );
         }
 
+        // Vigil from the person's own AI agents, over MCP.
+        body = body.child(kit::h3(t("settings.mcp.title")));
+        body = body.child(kit::faint(t("settings.mcp.note"), &tk).px_1());
+        let exe = std::env::current_exe()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| "vigil.exe".into());
+        for (index, (title, note, text)) in [
+            (
+                "Claude Code",
+                t("settings.mcp.commandNote"),
+                vigil_core::mcp::server::add_command("claude", &exe),
+            ),
+            (
+                "Codex",
+                t("settings.mcp.commandNote"),
+                vigil_core::mcp::server::add_command("codex", &exe),
+            ),
+            (
+                "Claude Desktop, Cursor, VS Code…",
+                t("settings.mcp.jsonNote"),
+                vigil_core::mcp::server::json_config(&exe),
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let copied = text.clone();
+            body = body.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .px_4()
+                    .py_3()
+                    .bg(tk.surface)
+                    .border_1()
+                    .border_color(tk.rule)
+                    .rounded(px(6.))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_3()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(kit::body(title))
+                                    .child(kit::faint(note, &tk)),
+                            )
+                            .child(ui::button(("se-mcp-copy", index), t("settings.mcp.copy")).on_click(
+                                move |_, _, cx| {
+                                    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(copied.clone()))
+                                },
+                            )),
+                    )
+                    .child(kit::code(("se-mcp-text", index), text, &tk)),
+            );
+        }
+        body = body.child(kit::faint(t("settings.mcp.readOnly"), &tk).px_1());
+
         // Scan.
         body = body.child(kit::h3(t("settings.scan")));
         let weak = cx.entity().downgrade();

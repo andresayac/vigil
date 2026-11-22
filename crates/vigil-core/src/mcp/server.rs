@@ -405,14 +405,24 @@ pub fn tools_list() -> Vec<Value> {
 
 /// Ready-to-paste client configurations for this executable.
 pub fn config_snippets(exe: &str) -> String {
-    let json_config = serde_json::to_string_pretty(&json!({
-        "mcpServers": {"vigil": {"command": exe, "args": ["mcp"]}}
-    }))
-    .unwrap_or_default();
+    let json_config = json_config(exe);
     let toml_exe = vigil_scan::ai::toml_string(exe);
     format!(
         "{json_config}\n\n# TOML (for clients configured in TOML)\n[mcp_servers.vigil]\ncommand = {toml_exe}\nargs = ['mcp']\n"
     )
+}
+
+/// The JSON most MCP clients take (Claude Desktop, Cursor, VS Code and others).
+pub fn json_config(exe: &str) -> String {
+    serde_json::to_string_pretty(&json!({
+        "mcpServers": {"vigil": {"command": exe, "args": ["mcp"]}}
+    }))
+    .unwrap_or_default()
+}
+
+/// The command that adds Vigil to a client with its own `mcp add` (Claude Code, Codex).
+pub fn add_command(client: &str, exe: &str) -> String {
+    format!("{client} mcp add vigil -- \"{exe}\" mcp")
 }
 
 #[cfg(test)]
@@ -438,6 +448,18 @@ mod tests {
             log,
             Budget::default(),
         )
+    }
+
+    #[test]
+    fn the_client_configurations_name_the_executable() {
+        let exe = "C:\\Program Files\\Vigil\\vigil.exe";
+        let json: Value = serde_json::from_str(&json_config(exe)).expect("json");
+        assert_eq!(json["mcpServers"]["vigil"]["command"], exe);
+        assert_eq!(json["mcpServers"]["vigil"]["args"][0], "mcp");
+        assert_eq!(
+            add_command("claude", exe),
+            "claude mcp add vigil -- \"C:\\Program Files\\Vigil\\vigil.exe\" mcp"
+        );
     }
 
     #[test]

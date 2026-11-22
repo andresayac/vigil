@@ -453,6 +453,50 @@ impl StoragePage {
             .collect();
         let chosen_total: f64 = chosen.iter().map(|x| x.n("size")).sum();
         let keys: Vec<String> = chosen.iter().map(|x| x.s("key").to_string()).collect();
+        // What is chosen, in large type, with the one button that frees it: the first thing seen.
+        let summary = div()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap_4()
+            .p_4()
+            .rounded(crate::theme::RADIUS_CARD)
+            .bg(tk.brand_soft)
+            .border_1()
+            .border_color(tk.rule)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(220.))
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(kit::faint(t("storage.chosenTitle"), tk))
+                    .child(
+                        div()
+                            .font_family(crate::theme::FONT_DISPLAY)
+                            .text_size(px(28.))
+                            .line_height(px(34.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(if chosen.is_empty() {
+                                t("storage.nothingSelected")
+                            } else {
+                                size(chosen_total, 1)
+                            }),
+                    )
+                    .child(kit::faint(t("storage.chosenNote"), tk)),
+            )
+            .child(
+                ui::accent_button("st-clean", t("storage.clean"))
+                    .disabled(keys.is_empty() || self.measuring || self.acting.busy)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if this.acting.busy {
+                            return;
+                        }
+                        this.last = "clean";
+                        common::send_json(this, json!({"kind": "cleanup", "keys": keys}), window, cx);
+                    })),
+            );
         let mut left = kit::panel(tk)
             .child(
                 kit::row()
@@ -465,6 +509,7 @@ impl StoragePage {
                     ),
             )
             .child(kit::muted(self.status.clone(), tk))
+            .child(summary)
             .child(list);
         if let Some(f) = focused {
             let mut text = format!("{} {}", f.s("description"), f.s("note")).trim().to_string();
@@ -481,29 +526,6 @@ impl StoragePage {
                 left = left.child(kit::faint(tf("storage.location", &[("paths", &paths)]), tk));
             }
         }
-        left = left.child(
-            kit::row()
-                .child(
-                    kit::body(if chosen.is_empty() {
-                        t("storage.nothingSelected")
-                    } else {
-                        tf("storage.selected", &[("size", &size(chosen_total, 1))])
-                    })
-                    .font_weight(FontWeight::SEMIBOLD),
-                )
-                .child(div().flex_1())
-                .child(
-                    ui::accent_button("st-clean", t("storage.clean"))
-                        .disabled(keys.is_empty() || self.measuring || self.acting.busy)
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            if this.acting.busy {
-                                return;
-                            }
-                            this.last = "clean";
-                            common::send_json(this, json!({"kind": "cleanup", "keys": keys}), window, cx);
-                        })),
-                ),
-        );
         let disabled = !self.ctx.elevated || self.acting.busy;
         let right = kit::panel(tk)
             .child(kit::h2(t("storage.deeper")))

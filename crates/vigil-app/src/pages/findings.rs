@@ -63,7 +63,53 @@ pub struct FindingsPage {
     /// The last export: how it went and, when it was saved, the file.
     export_note: Option<(ui::Severity, String, Option<String>)>,
     focus: FocusHandle,
+    /// The last group ignored at once: its name and findings, so it can be undone.
+    ignored_group: Option<(String, Vec<String>)>,
     _subscriptions: Vec<Subscription>,
+}
+
+/// Findings that share the rule that flagged them (a group of the same kind), when there are at
+/// least this many: they can be shown or ignored together.
+const GROUP_MIN: usize = 3;
+
+/// Groups of open findings flagged by the same rule, largest first: (name, ids).
+fn groups(items: &[Value], ignored: &[String]) -> Vec<(String, Vec<String>)> {
+    let mut by_rule: BTreeMap<String, Vec<&Value>> = BTreeMap::new();
+    for item in items {
+        let id = item.s("id");
+        if ignored.iter().any(|x| x == id) || item.b("trusted") || !matches!(item.s("verdict"), "review" | "no_signals")
+        {
+            continue;
+        }
+        let Some(code) = item.a("flags").first().map(|f| f.s("code").to_string()) else {
+            continue;
+        };
+        if !code.is_empty() {
+            by_rule
+                .entry(format!("{}|{code}", item.s("kind")))
+                .or_default()
+                .push(item);
+        }
+    }
+    let mut out: Vec<(String, Vec<String>)> = by_rule
+        .into_values()
+        .filter(|list| list.len() >= GROUP_MIN)
+        .map(|list| {
+            // The words every title starts with ("Scheduled task hidden from Task Scheduler"), or
+            // the kind of finding.
+            let first = list[0].s("title");
+            let head = first.split_once(": ").map(|(h, _)| h).unwrap_or("");
+            let name = if !head.is_empty() && list.iter().all(|i| i.s("title").starts_with(head)) {
+                head.to_string()
+            } else {
+                kind_label(list[0].s("kind"))
+            };
+            (name, list.iter().map(|i| i.s("id").to_string()).collect())
+        })
+        .collect();
+    out.sort_by_key(|g| std::cmp::Reverse(g.1.len()));
+    out.truncate(3);
+    out
 }
 
 impl Acts for FindingsPage {
@@ -123,6 +169,7 @@ impl FindingsPage {
             verdicts,
             kind: String::new(),
             show_ignored: false,
+            ignored_group: None,
             only_new: false,
             ids: None,
             current: None,
@@ -471,6 +518,121 @@ impl FindingsPage {
                 cx.notify();
             }
         }
+    }
+
+    /// Ignores a group of findings at once (`value` false: stops ignoring them, the undo).
+    fn ignore_group(&mut self, name: String, ids: Vec<String>, value: bool, cx: &mut Context<Self>) {
+        let result = match &self.ctx.core {
+            Some(core) => vigil_core::api::ignored_set_many(core, &ids, value),
+            None => {
+                let mut now = self.ctx.report.read(cx).ignored.clone();
+                now.retain(|x| !ids.contains(x));
+                if value {
+                    now.extend(ids.iter().cloned());
+                }
+                Ok(now)
+            }
+        };
+        match result {
+            Ok(now) => {
+                self.ignored_group = value.then_some((name, ids));
+                self.ctx.report.update(cx, |r, cx| {
+                    r.ignored = now;
+                    cx.notify();
+                });
+                self.fill(cx);
+            }
+            Err(error) => {
+                self.acting.outcome = Some(crate::actions::Outcome::Failed(error));
+                cx.notify();
+            }
+        }
+    }
+
+    /// The groups of findings flagged by the same rule, each with Show and Ignore all, and the
+    /// undo of the last group ignored.
+    fn groups_panel(&self, all: &[Value], ignored: &[String], cx: &mut Context<Self>) -> Option<Div> {
+        let tk = *tokens(cx);
+        let groups = if self.ids.is_none() {
+            groups(all, ignored)
+        } else {
+            Vec::new()
+        };
+        if groups.is_empty() && self.ignored_group.is_none() {
+            return None;
+        }
+        let mut panel = div().flex().flex_col().gap_1();
+        if let Some((name, ids)) = self.ignored_group.clone() {
+            let weak = cx.entity().downgrade();
+            panel = panel.child(
+                kit::row()
+                    .child(kit::colored(
+                        tf(
+                            "findings.groupIgnored",
+                            &[("name", &name), ("count", &ids.len().to_string())],
+                        ),
+                        tk.ok,
+                    ))
+                    .child(kit::link(
+                        "fi-group-undo",
+                        t("findings.groupUndo"),
+                        move |_, cx| {
+                            let _ = weak.update(cx, |this, cx| this.ignore_group(name.clone(), ids.clone(), false, cx));
+                        },
+                        &tk,
+                    )),
+            );
+        }
+        for (index, (name, ids)) in groups.into_iter().enumerate() {
+            let count = ids.len().to_string();
+            let show = cx.entity().downgrade();
+            let ignore = cx.entity().downgrade();
+            let (show_ids, show_name) = (ids.clone(), name.clone());
+            panel = panel.child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_3()
+                    .px_3()
+                    .py_2()
+                    .bg(tk.surface)
+                    .border_1()
+                    .border_color(tk.rule)
+                    .rounded(crate::theme::RADIUS_CARD)
+                    .child(icons::icon(icons::INFO, 14.0, tk.ink2))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(kit::body(tf("findings.group", &[("name", &name), ("count", &count)])))
+                            .child(kit::faint(t("findings.groupNote"), &tk)),
+                    )
+                    .child(
+                        ui::button(("fi-group-show", index), tf("findings.groupShow", &[("count", &count)])).on_click(
+                            move |_, _, cx| {
+                                let _ = show.update(cx, |this, cx| {
+                                    this.ids = Some((show_ids.clone(), show_name.clone()));
+                                    this.fill(cx);
+                                });
+                            },
+                        ),
+                    )
+                    .child(
+                        ui::button(
+                            ("fi-group-ignore", index),
+                            tf("findings.groupIgnore", &[("count", &count)]),
+                        )
+                        .glyph(icons::CHECK)
+                        .tip(t("findings.groupIgnoreTip"))
+                        .on_click(move |_, _, cx| {
+                            let _ =
+                                ignore.update(cx, |this, cx| this.ignore_group(name.clone(), ids.clone(), true, cx));
+                        }),
+                    ),
+            );
+        }
+        Some(panel)
     }
 
     fn copy(&mut self, item: &Value, cx: &mut Context<Self>) {
@@ -1329,6 +1491,7 @@ impl Render for FindingsPage {
                 ))
                 .into_any_element(),
         };
+        let groups_panel = self.groups_panel(&all, &ignored, cx);
         let wide = f32::from(window.viewport_size().width) >= 1100.;
         let body = div()
             .flex_1()
@@ -1390,6 +1553,39 @@ impl Render for FindingsPage {
                 ))
             })
             .child(chips)
+            .when_some(groups_panel, |this, panel| this.child(panel))
             .child(body)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn item(id: &str, title: &str, verdict: &str, code: &str) -> Value {
+        json!({"id": id, "title": title, "kind": "config", "verdict": verdict, "flags": [{"code": code}]})
+    }
+
+    #[test]
+    fn findings_of_the_same_rule_are_grouped() {
+        let mut items: Vec<Value> = (0..5)
+            .map(|i| {
+                item(
+                    &format!("t{i}"),
+                    &format!("Hidden task: \\Microsoft\\T{i}"),
+                    "review",
+                    "task_hidden",
+                )
+            })
+            .collect();
+        items.push(item("p", "Remote access agent: Parsec", "review", "rmm"));
+        items.push(item("x", "Hidden task: \\Other", "remove", "task_hidden"));
+        let found = groups(&items, &["t4".to_string()]);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].0, "Hidden task");
+        assert_eq!(found[0].1, ["t0", "t1", "t2", "t3"]);
+        // Fewer than GROUP_MIN: no group.
+        assert!(groups(&items[..2], &[]).is_empty());
     }
 }

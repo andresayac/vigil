@@ -2,6 +2,23 @@
 
 Each release's full notes are on the repository's Releases page.
 
+## Unreleased — redesign
+
+- The navigation has eight sections instead of 24 pages in one list: Home, Assistant, Security, Live, Cleanup,
+  Apps, System and Activity. A section shows its pages as tabs under its title and opens on the one used last;
+  Security shows how many findings to act on and Activity the unread alerts.
+- Assistant: questions about the computer in your own words, answered by the AI agent chosen in Settings with
+  Vigil's read-only tools (the same consent, destination and anonymization as Investigate with AI). It suggests a
+  question for each section, shows what the agent read and links to the pages where you act; it never changes
+  anything. **Ask**, over every page, opens it with a question about that page.
+- Settings: "Use Vigil from your AI agents (MCP)" gives the line that adds Vigil to Claude Code or Codex and the
+  JSON for Claude Desktop, Cursor, VS Code and other clients, each with a Copy button.
+- Home: the verdict card in the logo's teal with "Review what matters" and "Scan again", and quick actions (free
+  up space, startup apps, Defender scan, restore point, the Assistant).
+- Findings: findings flagged by the same rule (for example, scheduled tasks hidden from Task Scheduler) are
+  grouped above the table, to show them or ignore them together, with Undo.
+- Storage: the space chosen for cleanup and its button lead the Cleanup tab.
+
 ## 2.6.0 — 2026-11-22
 
 - Security release: nothing a standard user's program controls runs with administrator rights. Settings links,

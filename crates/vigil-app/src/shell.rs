@@ -35,61 +35,107 @@ use crate::ui::kit::J as _;
 use crate::ui::{self, FButton, Kind, Severity};
 use gpui_kit::base::Selectable as _;
 
-/// (key, section) of every page, in the order of the navigation pane.
-pub const PAGES: [(&str, &str); 24] = [
-    ("overview", "nav.security"),
-    ("findings", "nav.security"),
-    ("alerts", "nav.security"),
-    ("protection", "nav.security"),
-    ("posture", "nav.security"),
-    ("firewall", "nav.security"),
-    ("accounts", "nav.security"),
-    ("extensions", "nav.security"),
-    ("quarantine", "nav.security"),
-    ("history", "nav.security"),
-    ("performance", "nav.live"),
-    ("processes", "nav.live"),
-    ("network", "nav.live"),
-    ("services", "nav.live"),
-    ("optimize", "nav.maintenance"),
-    ("startup", "nav.maintenance"),
-    ("tasks", "nav.maintenance"),
-    ("programs", "nav.maintenance"),
-    ("storage", "nav.maintenance"),
-    ("restore", "nav.maintenance"),
-    ("system", "nav.maintenance"),
-    ("updates", "nav.maintenance"),
-    ("power", "nav.maintenance"),
-    ("reliability", "nav.maintenance"),
+/// The sections of the navigation pane, in order, with their pages. A section with more than one
+/// page shows them as tabs over the content; the first is the one a section opens with.
+pub const SECTIONS: [(&str, &[&str]); 8] = [
+    ("home", &["overview"]),
+    ("assistant", &["assistant"]),
+    (
+        "security",
+        &["findings", "protection", "posture", "firewall", "accounts"],
+    ),
+    ("live", &["processes", "performance", "network", "services"]),
+    ("cleanup", &["storage", "optimize"]),
+    ("apps", &["startup", "programs", "tasks", "extensions"]),
+    ("system", &["system", "updates", "power", "reliability"]),
+    ("activity", &["history", "alerts", "quarantine", "restore"]),
 ];
 
-/// Element ids of the navigation items (GPUI ids are static strings or numbers).
-const NAV_IDS: [&str; 24] = [
-    "nav-overview",
-    "nav-findings",
-    "nav-alerts",
-    "nav-protection",
-    "nav-posture",
-    "nav-firewall",
-    "nav-accounts",
-    "nav-extensions",
-    "nav-quarantine",
-    "nav-history",
-    "nav-performance",
-    "nav-processes",
-    "nav-network",
-    "nav-services",
-    "nav-optimize",
-    "nav-startup",
-    "nav-tasks",
-    "nav-programs",
-    "nav-storage",
-    "nav-restore",
-    "nav-system",
-    "nav-updates",
-    "nav-power",
-    "nav-reliability",
+/// (key, section) of every page, in the order of the sections and their tabs.
+pub const PAGES: [(&str, &str); 25] = [
+    ("overview", "home"),
+    ("assistant", "assistant"),
+    ("findings", "security"),
+    ("protection", "security"),
+    ("posture", "security"),
+    ("firewall", "security"),
+    ("accounts", "security"),
+    ("processes", "live"),
+    ("performance", "live"),
+    ("network", "live"),
+    ("services", "live"),
+    ("storage", "cleanup"),
+    ("optimize", "cleanup"),
+    ("startup", "apps"),
+    ("programs", "apps"),
+    ("tasks", "apps"),
+    ("extensions", "apps"),
+    ("system", "system"),
+    ("updates", "system"),
+    ("power", "system"),
+    ("reliability", "system"),
+    ("history", "activity"),
+    ("alerts", "activity"),
+    ("quarantine", "activity"),
+    ("restore", "activity"),
 ];
+
+/// Element ids of the navigation items, one per section (GPUI ids are static strings or numbers).
+const NAV_IDS: [&str; 8] = [
+    "nav-home",
+    "nav-assistant",
+    "nav-security",
+    "nav-live",
+    "nav-cleanup",
+    "nav-apps",
+    "nav-system",
+    "nav-activity",
+];
+
+/// Element ids of the tabs, one per page, in the order of [`PAGES`].
+const TAB_IDS: [&str; 25] = [
+    "tab-overview",
+    "tab-assistant",
+    "tab-findings",
+    "tab-protection",
+    "tab-posture",
+    "tab-firewall",
+    "tab-accounts",
+    "tab-processes",
+    "tab-performance",
+    "tab-network",
+    "tab-services",
+    "tab-storage",
+    "tab-optimize",
+    "tab-startup",
+    "tab-programs",
+    "tab-tasks",
+    "tab-extensions",
+    "tab-system",
+    "tab-updates",
+    "tab-power",
+    "tab-reliability",
+    "tab-history",
+    "tab-alerts",
+    "tab-quarantine",
+    "tab-restore",
+];
+
+/// The section a page belongs to (unknown pages: Home).
+pub fn section_of(page: &str) -> &'static str {
+    PAGES
+        .iter()
+        .find(|(key, _)| *key == page)
+        .map_or("home", |(_, section)| *section)
+}
+
+/// The pages of a section, in tab order.
+pub fn pages_of(section: &str) -> &'static [&'static str] {
+    SECTIONS
+        .iter()
+        .find(|(id, _)| *id == section)
+        .map_or(&[], |(_, pages)| *pages)
+}
 
 /// Pages that read live data (the sampler runs only while one is open).
 fn is_live(page: &str) -> bool {
@@ -127,6 +173,12 @@ pub struct Options {
 
 pub struct Shell {
     page: &'static str,
+    /// The page each section showed last: a section opens on it again.
+    last: std::collections::HashMap<&'static str, &'static str>,
+    /// The page the Assistant was opened from (its first question is about that page).
+    pub ask_from: Option<&'static str>,
+    /// The Assistant, kept while the window lives so its conversation survives moving between pages.
+    assistant: Option<Entity<crate::pages::assistant::AssistantPage>>,
     compact: bool,
     pub live: Entity<Live>,
     core: Option<Arc<AppState>>,
@@ -238,6 +290,9 @@ impl Shell {
                 .map_or_else(vigil_sys::elevation::is_elevated, |c| c.admin);
         let mut shell = Self {
             page,
+            last: std::collections::HashMap::new(),
+            ask_from: None,
+            assistant: None,
             compact: false,
             live,
             core,
@@ -353,6 +408,7 @@ impl Shell {
 
     pub fn open(&mut self, page: &'static str, window: &mut Window, cx: &mut Context<Self>) {
         self.page = page;
+        self.last.insert(section_of(page), page);
         let ctx = self.ctx(cx);
         let live = self.live.clone();
         let core = self.core.clone();
@@ -384,6 +440,23 @@ impl Shell {
             "quarantine" => Some(cx.new(|cx| QuarantinePage::new(core, elevated, window, cx)).into()),
             "history" => Some(cx.new(|cx| HistoryPage::new(core, elevated, window, cx)).into()),
             "overview" => Some(cx.new(|cx| crate::pages::overview::OverviewPage::new(ctx, cx)).into()),
+            "assistant" => {
+                let from = self.ask_from.take().unwrap_or("");
+                let page = match self.assistant.clone() {
+                    Some(page) => {
+                        if !from.is_empty() {
+                            page.update(cx, |page, cx| page.prefill(from, window, cx));
+                        }
+                        page
+                    }
+                    None => {
+                        let page = cx.new(|cx| crate::pages::assistant::AssistantPage::new(ctx, from, window, cx));
+                        self.assistant = Some(page.clone());
+                        page
+                    }
+                };
+                Some(page.into())
+            }
             "findings" => Some(
                 cx.new(|cx| crate::pages::findings::FindingsPage::new(ctx, window, cx))
                     .into(),
@@ -861,6 +934,126 @@ impl Shell {
         })
     }
 
+    /// The count a section's navigation item shows: findings to act on (Security), unread alerts
+    /// (Activity). `true`: it asks for attention.
+    fn badge(&self, section: &str, cx: &mut Context<Self>) -> Option<(String, bool)> {
+        match section {
+            "security" => {
+                let report = self.report.read(cx);
+                let count = report
+                    .visible()
+                    .iter()
+                    .filter(|i| matches!(i.s("verdict"), "remove" | "disable"))
+                    .count();
+                (count > 0).then(|| (count.to_string(), true))
+            }
+            "activity" => {
+                let unread = match &self.watcher {
+                    Some(w) => w.status().unread,
+                    None if self.demo => self
+                        .ctx(cx)
+                        .watch_alerts()
+                        .as_array()
+                        .map_or(0, |a| a.iter().filter(|x| !x.b("read")).count()),
+                    None => 0,
+                };
+                (unread > 0).then(|| (unread.to_string(), false))
+            }
+            _ => None,
+        }
+    }
+
+    /// The section's title over the content, and its pages as tabs (when it has more than one).
+    fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let tk = *tokens(cx);
+        let section = section_of(self.page);
+        let title = t(&format!("section.{section}"));
+        let pages = pages_of(section);
+        let tabs = (pages.len() > 1).then(|| {
+            let mut row = div()
+                .id("section-tabs")
+                .role(Role::TabList)
+                .aria_label(title.clone())
+                .flex()
+                .flex_wrap()
+                .gap(px(4.))
+                .border_b_1()
+                .border_color(tk.rule);
+            for page in pages.iter().copied() {
+                let index = PAGES.iter().position(|(key, _)| *key == page).unwrap_or(0);
+                let selected = self.page == page;
+                let label = t(&format!("page.{page}"));
+                row = row.child(
+                    gpui_kit::base::Button::new(TAB_IDS[index])
+                        .role(Role::Tab)
+                        .accessibility_label(label.clone())
+                        .aria_selected(selected)
+                        .relative()
+                        .flex()
+                        .items_center()
+                        .h(px(36.))
+                        .px(px(10.))
+                        .rounded_t(px(4.))
+                        .text_size(px(14.))
+                        .when(selected, |this| {
+                            this.text_color(tk.ink).font_weight(FontWeight::SEMIBOLD).child(
+                                div()
+                                    .absolute()
+                                    .bottom(px(-1.))
+                                    .left(px(10.))
+                                    .right(px(10.))
+                                    .h(px(3.))
+                                    .rounded(px(2.))
+                                    .bg(tk.brand),
+                            )
+                        })
+                        .when(!selected, move |this| {
+                            this.text_color(tk.ink2).hover(move |s| s.bg(tk.hover))
+                        })
+                        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.open(page, window, cx)))
+                        .child(label),
+                );
+            }
+            row
+        });
+        div()
+            .flex_none()
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .px(px(28.))
+            .pt(px(18.))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(12.))
+                    .child(
+                        div()
+                            .font_family(crate::theme::FONT_DISPLAY)
+                            .text_size(px(28.))
+                            .line_height(px(36.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(title),
+                    )
+                    .child(div().flex_1())
+                    .when(section != "assistant", |this| {
+                        this.child(
+                            ui::FButton::new("ask-assistant", Kind::Standard)
+                                .glyph(icons::section("assistant"))
+                                .label(t("assistant.ask"))
+                                .tip(t("assistant.askTip"))
+                                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                                    let from = this.page;
+                                    this.ask_from = Some(from);
+                                    this.open("assistant", window, cx);
+                                })),
+                        )
+                    }),
+            )
+            .children(tabs)
+    }
+
     fn render_nav(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let tk = *tokens(cx);
         let compact = self.compact;
@@ -923,34 +1116,39 @@ impl Shell {
             .flex_1()
             .min_h_0()
             .overflow_y_scroll();
-        let mut previous = "";
-        for (index, (key, section)) in PAGES.iter().enumerate() {
-            if *section != previous {
-                previous = section;
-                list = list.child(if compact {
-                    div().h(px(1.)).mx(px(10.)).my(px(6.)).bg(tk.rule).flex_none()
-                } else {
-                    div()
-                        .px(px(14.))
-                        .pt(px(10.))
-                        .pb(px(4.))
-                        .text_size(px(12.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(tk.ink2)
-                        .flex_none()
-                        .child(t(section))
-                });
+        let current = section_of(self.page);
+        for (index, (section, pages)) in SECTIONS.iter().enumerate() {
+            // Activity (what changed, and what can be undone) sits apart from the sections.
+            if *section == "activity" {
+                list = list.child(div().h(px(1.)).mx(px(10.)).my(px(6.)).bg(tk.rule).flex_none());
             }
-            let key: &'static str = key;
-            list = list.child(
-                item(
-                    NAV_IDS[index],
-                    icons::page(key),
-                    t(&format!("page.{key}")),
-                    self.page == key,
-                )
-                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.open(key, window, cx))),
+            let section: &'static str = section;
+            let first: &'static str = pages[0];
+            let mut entry = item(
+                NAV_IDS[index],
+                icons::section(section),
+                t(&format!("section.{section}")),
+                current == section,
             );
+            if !compact && let Some((count, strong)) = self.badge(section, cx) {
+                entry = entry.child(
+                    div()
+                        .ml_auto()
+                        .flex_none()
+                        .px(px(7.))
+                        .rounded(px(9.))
+                        .text_size(px(11.))
+                        .line_height(px(18.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .when(strong, |this| this.bg(tk.accent).text_color(tk.on_accent))
+                        .when(!strong, |this| this.bg(tk.hover).text_color(tk.ink2))
+                        .child(count),
+                );
+            }
+            list = list.child(entry.on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                let page = this.last.get(section).copied().unwrap_or(first);
+                this.open(page, window, cx);
+            })));
         }
 
         let status = (!compact).then(|| {
@@ -1242,6 +1440,7 @@ impl Render for Shell {
                                 .children(update),
                         )
                     })
+                    .child(self.render_header(cx))
                     .child(div().flex_1().min_h_0().child(body))
                     .children(acting),
             )
@@ -1262,9 +1461,24 @@ mod tests {
 
     #[test]
     fn every_page_has_an_id_and_a_title() {
-        for ((key, _), id) in PAGES.iter().zip(NAV_IDS) {
-            assert_eq!(id, format!("nav-{key}"));
+        for ((key, _), id) in PAGES.iter().zip(TAB_IDS) {
+            assert_eq!(id, format!("tab-{key}"));
             assert!(!vigil_i18n::with_language("en", || t(&format!("page.{key}"))).is_empty());
         }
+        for ((section, _), id) in SECTIONS.iter().zip(NAV_IDS) {
+            assert_eq!(id, format!("nav-{section}"));
+            assert!(!vigil_i18n::with_language("en", || t(&format!("section.{section}"))).is_empty());
+        }
+    }
+
+    #[test]
+    fn every_page_is_in_one_section_in_order() {
+        let flat: Vec<(&str, &str)> = SECTIONS
+            .iter()
+            .flat_map(|(section, pages)| pages.iter().map(move |page| (*page, *section)))
+            .collect();
+        assert_eq!(flat, PAGES.to_vec());
+        assert_eq!(section_of("firewall"), "security");
+        assert_eq!(pages_of("cleanup"), ["storage", "optimize"]);
     }
 }

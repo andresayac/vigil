@@ -52,8 +52,9 @@ crates/
   vigil-core/     the service layer: app state, planner (actions per finding), requests (request -> trusted
                   ActionSpec), native confirmation, the action path (service::run_action), the window's
                   reads (`api.rs`), settings, secrets, the background watch, its notifications and
-                  automatic scans (`autoscan.rs`), the AI investigation, the MCP tool registry and
-                  `vigil mcp`, export, duplicates, restore points, the update check (`version_check.rs`),
+                  automatic scans (`autoscan.rs`), the AI investigation, the Assistant (`assistant.rs`),
+                  the MCP tool registry and `vigil mcp`, export, duplicates, restore points, the update
+                  check (`version_check.rs`),
                   the display sanitizer for untrusted text (`display.rs`), the command lines
   vigil-app/      vigil.exe: the window (gpui-kit), the tray, the command-line entry points; pages in
                   src/pages, Fluent controls in src/ui, the Ctrl+K palette (`search.rs`, `palette.rs`), the

@@ -47,9 +47,9 @@ $logs = Join-Path ([IO.Path]::GetTempPath()) ("vigil-smoke-" + [Guid]::NewGuid()
 New-Item -ItemType Directory -Force $logs | Out-Null
 
 # The pages in the window's order (crates/vigil-app/src/shell.rs PAGES) and the previewable dialogs.
-$pages = @("overview", "findings", "alerts", "protection", "posture", "firewall", "accounts", "extensions",
-    "quarantine", "history", "performance", "processes", "network", "services", "optimize", "startup",
-    "tasks", "programs", "storage", "restore", "system", "updates", "power", "reliability")
+$pages = @("overview", "assistant", "findings", "protection", "posture", "firewall", "accounts", "processes",
+    "performance", "network", "services", "storage", "optimize", "startup", "programs", "tasks", "extensions",
+    "system", "updates", "power", "reliability", "history", "alerts", "quarantine", "restore")
 $dialogs = @("settings", "scan", "run", "search", "welcome")
 $targets = @($pages | ForEach-Object { @{ Name = $_; Args = @("--page", $_) } }) +
     @($dialogs | ForEach-Object { @{ Name = "dialog-$_"; Args = @("--dialog", $_) } })

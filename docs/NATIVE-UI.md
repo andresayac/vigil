@@ -50,7 +50,10 @@ action engine are one language and one process.
   name and state come from the framework.
 - **NavigationView** (`shell.rs`): a hamburger collapses the pane to an icon rail; the selected item has an accent
   pill; the footer has the administrator status (with "Restart as administrator"), "More" (open a report, export
-  HTML, restore point, Defender, Windows tools, About) and "Settings".
+  HTML, restore point, Defender, Windows tools, About) and "Settings". The pane lists eight sections (`SECTIONS`),
+  not pages: the content layer shows the section's title (Title, 28 px) with an **Ask** button that opens the
+  Assistant about the current page, and, for a section with several pages, a TabView-like row of tabs with the
+  brand pill under the selected one. Pages no longer draw their own title (`ui::page_title` keeps only its slot).
 - **Performance** in Task Manager's layout: the resource list with live thumbnails framed in the resource hue,
   and the selected resource with its chart (labels around the plot, a resource-tinted grid), the memory
   composition bar, the statistics in large figures and the hardware facts; 1, 2 and 5 minute ranges, Pause, and
