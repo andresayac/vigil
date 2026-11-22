@@ -102,8 +102,10 @@ const MAX_EVENT_ALERTS: usize = 25;
 const MAX_WMI_SEEN: usize = 200;
 /// The hosts file is read up to this size.
 const MAX_HOSTS: u64 = 4 * 1024 * 1024;
-/// How long a change waits for the other copy of Vigil to finish its own.
-const LOCK_WAIT: Duration = Duration::from_secs(5);
+/// How long a change waits for the other copy of Vigil to finish its own. Generous: a save may
+/// retry its rename for a few seconds while an antivirus has the file open, and a change must not
+/// be lost because the other copy was slow.
+const LOCK_WAIT: Duration = Duration::from_secs(30);
 const FILE: &str = "watch.json";
 const DAMAGED: &str = "watch.json.bad";
 const LOCK: &str = "watch.lock";
