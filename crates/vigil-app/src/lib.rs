@@ -1,29 +1,23 @@
 //! The Vigil desktop app: Tauri window, commands for the UI and the live sampler.
 //!
 //! The web UI only displays data and asks for things. Everything that touches the system runs
-//! here in Rust: a request from the page is rebuilt into an action from Rust's own state, shown in
-//! a native confirmation dialog and run by the action engine, so text coming from the inspected
-//! computer (process names, command lines) can never trigger anything.
+//! in Rust: a request from the page is rebuilt into an action from Rust's own state, shown in a
+//! native confirmation dialog and run by the action engine (`vigil_core::service`), so text coming
+//! from the inspected computer (process names, command lines) can never trigger anything.
 
 mod alerts;
-mod autostart;
-mod cli;
 mod commands;
-mod confirm;
 mod firewall;
 mod live;
 mod notify;
-mod planner;
 mod programs;
 mod protection;
 mod reliability;
-mod requests;
-mod secrets;
-mod settings;
-mod storage_ops;
-mod tools;
 mod tray;
 mod watch;
+
+// The frontend-independent modules, under the names the rest of the app uses.
+use vigil_core::{autostart, confirm, storage_ops};
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
@@ -49,7 +43,7 @@ async fn app_info(app: AppHandle) -> AppInfo {
     let (cpu_name, adapters) = tauri::async_runtime::spawn_blocking(|| (metrics::cpu_name(), metrics::adapters()))
         .await
         .unwrap_or_default();
-    let state = app.state::<commands::AppState>();
+    let state = app.state::<vigil_core::state::AppState>();
     AppInfo {
         version: env!("CARGO_PKG_VERSION").to_string(),
         elevated: elevation::is_elevated(),
@@ -95,18 +89,18 @@ fn restart_elevated(app: AppHandle) -> Result<bool, String> {
 
 /// `vigil scan`: the command-line scan. Returns the exit code.
 pub fn scan_cli(args: &[String]) -> i32 {
-    cli::run(args)
+    vigil_core::scan_cli(args)
 }
 
 /// The read-only commands `vigil list`, `vigil ports`, `vigil services`, `vigil reliability` and
 /// `vigil --help`;
 /// `None` when `command` is not one of them.
 pub fn tool_cli(command: &str, args: &[String]) -> Option<i32> {
-    tools::COMMANDS.contains(&command).then(|| tools::run(command, args))
+    vigil_core::tool_cli(command, args)
 }
 
 pub fn run() {
-    let state = match commands::AppState::new() {
+    let state = match vigil_core::state::AppState::new() {
         Ok(state) => state,
         Err(error) => {
             let parent = windows::Win32::Foundation::HWND(std::ptr::null_mut());

@@ -40,8 +40,10 @@ crates/
                   journal, quarantine, tool runner
   vigil-maint/    maintenance data and primitives: volumes, cleanup targets, space analysis, hardware,
                   tuning state, insights
-  vigil-app/      the Tauri app: commands for the UI, live sampler, planner (actions per finding),
-                  requests (UI request -> trusted ActionSpec), native confirmation, settings, secrets,
+  vigil-core/     the service layer every frontend shares: app state, planner (actions per finding),
+                  requests (UI request -> trusted ActionSpec), native confirmation, the action path
+                  (service::run_action), settings, secrets, the command lines
+  vigil-app/      the Tauri app: commands for the UI (thin wrappers over vigil-core), live sampler,
                   background watch (tray, notifications, alerts)
 ui/               Svelte 5 + TypeScript: pages, components, lib/api.ts (the only module that calls Rust)
 docs/             ARCHITECTURE.md (how it fits together), NATIVE-UI.md (the Windows 11 look)
@@ -60,11 +62,12 @@ Each crate has its tests next to the code (`#[cfg(test)]`) or in `tests/`; recor
 2. **The scan is read-only.** `vigil-sys`, `vigil-scan` and `vigil-maint` never change the system.
    (`vigil-maint::storage` has the cleanup primitives, but they only run through the `storage.*` actions.)
 3. **Every change goes through the action engine.** The UI never runs anything: it sends an `ActionRequest`
-   (see `ui/src/lib/types.ts`). `vigil-app/src/requests.rs` rebuilds the `ActionSpec` from Rust's own state
+   (see `ui/src/lib/types.ts`). `vigil-core/src/requests.rs` rebuilds the `ActionSpec` from Rust's own state
    (the loaded report, the live process list, what it measured), validates every value, and
    `confirm.rs` shows a native Windows dialog. Only then `vigil_actions::execute()` runs the handler,
-   journals it and keeps what is needed to undo it. Never add a Tauri command that changes the system
-   directly, and never let the UI choose an op, a path or a command line that Rust has not checked.
+   journals it and keeps what is needed to undo it. That whole path is `vigil_core::service::run_action`;
+   a frontend only hands it the request. Never add a command that changes the system directly, and never
+   let the UI choose an op, a path or a command line that Rust has not checked.
 4. **Guards stay on.** Never act on critical Windows processes, essential services, `\Microsoft\` scheduled
    tasks, Microsoft-signed files, the Windows folder, Vigil itself or its data folder (see `guards.rs`,
    process protection in `procs.rs`, the registry allowlist). Do not weaken a guard to make a feature work.
@@ -81,7 +84,7 @@ Each crate has its tests next to the code (`#[cfg(test)]`) or in `tests/`; recor
    Do not add a vendor-specific API: a server that speaks one of the standards already works. Nothing is sent
    before the consent dialog; the destination and whether data stays on the computer are always shown. Remote
    endpoints must be HTTPS (plain HTTP only for localhost). Ollama cloud models are never used, since they would
-   send the data off the computer. API keys live in Windows Credential Manager (`vigil-app/src/secrets.rs`),
+   send the data off the computer. API keys live in Windows Credential Manager (`vigil-core/src/secrets.rs`),
    never in settings, reports, logs or the UI. Tests reach no real AI service: fake probes and local servers.
 8. **Never follow links when deleting.** Skip reparse points (junctions, symlinks); open files without
    following links, check the final path is inside the expected root (see `vigil-maint::storage`).
@@ -96,10 +99,10 @@ Each crate has its tests next to the code (`#[cfg(test)]`) or in `tests/`; recor
 1. Write the handler in `vigil-actions` (`fn op_name(params, store) -> Result<Outcome>` and an undo function
    when it can be undone). Re-read the live state first, apply the guards, return an error message for the
    user, and put the undo data in `Outcome.undo`.
-2. Register it in the engine's dispatch table (or with `vigil_actions::register` from `vigil-app` for ops that
+2. Register it in the engine's dispatch table (or with `vigil_actions::register` from `vigil-core` for ops that
    need other crates, like `storage.clean`). `no_admin` only for changes a standard user may make.
 3. Add a readable name to `op_label()` (History page).
-4. Build the `ActionSpec` where it is offered: `vigil-app/src/planner.rs` for findings, `requests.rs` for
+4. Build the `ActionSpec` where it is offered: `vigil-core/src/planner.rs` for findings, `requests.rs` for
    pages. Give it an accurate `explain`, `warning`, `destructive`, `reversible` and `admin`.
 5. If the UI offers it, add the request to `ActionRequest` in `ui/src/lib/types.ts`.
 6. Test it without touching the machine (below).

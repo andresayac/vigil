@@ -1,148 +1,33 @@
-//! The commands the UI calls, and the state they share.
+//! The commands the UI calls.
 //!
-//! Reading commands return data. The one command that changes the system is `run_action`: it
-//! rebuilds the action from the request (requests.rs), confirms it in a native dialog
-//! (confirm.rs) and runs it through the action engine, which journals it.
+//! Reading commands return data. The one command that changes the system is `run_action`: it hands
+//! the request to `vigil_core::service::run_action`, which rebuilds the action from the request
+//! (requests.rs), confirms it in a native dialog (confirm.rs) and runs it through the action engine,
+//! which journals it. The state they share is `vigil_core::state::AppState`.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Mutex;
+use std::sync::atomic::Ordering;
 
 use serde::Serialize;
 use serde_json::{Value, json};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 use tauri_plugin_dialog::DialogExt;
-use vigil_actions::{ActionSpec, QuarantineEntry, Record, Store};
+use vigil_actions::{ActionSpec, QuarantineEntry};
+use vigil_core::confirm::{self, Answer, Prompt};
+use vigil_core::planner;
+use vigil_core::requests::{self, Request};
+use vigil_core::secrets;
+use vigil_core::service::{self, ActionOutcome, record_json};
+use vigil_core::settings::{self, Stored, View};
+pub use vigil_core::state::AppState;
+use vigil_core::state::{Inner, Pending};
 use vigil_maint::hardware::Hardware;
 use vigil_maint::insights::Insight;
 use vigil_maint::storage::{self, CleanupTarget, SpaceScan, Volume};
 use vigil_maint::tuning::TuningState;
-use vigil_scan::model::Analysis;
-
-use crate::confirm::{self, Answer, Prompt};
-use crate::planner::{self, spec};
-use crate::requests::{self, Context, Plan, Request};
-use crate::secrets::{self, CredentialStore, SecretStore};
-use crate::settings::{self, Ignored, Stored, View};
 
 type CmdResult<T> = Result<T, String>;
-
-/// A scan whose inventory is analysed and that waits for the decision on the AI review.
-struct Pending {
-    analysis: Analysis,
-    base: PathBuf,
-    provider: Option<vigil_scan::ai::Provider>,
-    problem: Option<String>,
-    pending: usize,
-}
-
-#[derive(Default)]
-struct Inner {
-    settings: Stored,
-    ignored: Ignored,
-    analysis: Option<Analysis>,
-    /// The report in the form the UI and the planner read (render_json).
-    analysis_json: Option<Value>,
-    report_path: Option<PathBuf>,
-    restore_point_done: bool,
-    pending: Option<Pending>,
-    cleanup: Vec<CleanupTarget>,
-    space_files: Vec<(String, u64)>,
-    hardware: Option<Hardware>,
-}
-
-pub struct AppState {
-    pub root: PathBuf,
-    pub store: Store,
-    pub admin: bool,
-    pub warning: Option<String>,
-    /// API keys (Windows Credential Manager).
-    pub secrets: Box<dyn SecretStore>,
-    inner: Mutex<Inner>,
-    /// One change at a time.
-    acting: AtomicBool,
-    scan_cancel: Arc<AtomicBool>,
-    space_cancel: Arc<AtomicBool>,
-}
-
-impl AppState {
-    pub fn new() -> Result<Self, String> {
-        let root = vigil_actions::data_dir().map_err(|e| e.to_string())?;
-        let store = Store::open(&root).map_err(|e| e.to_string())?;
-        std::fs::create_dir_all(root.join("scans")).map_err(|e| format!("{}: {e}", root.display()))?;
-        let inner = Inner {
-            settings: Stored::load(&root.join("settings.json")),
-            ignored: Ignored::load(root.join("ignored.json")),
-            ..Default::default()
-        };
-        // Texts produced by the core (findings, actions, the AI's answers) follow the chosen language.
-        vigil_i18n::set_language(&inner.settings.language);
-        let state = AppState {
-            warning: vigil_actions::data_dir_warning(),
-            admin: vigil_actions::is_admin(),
-            secrets: Box::new(CredentialStore::default()),
-            root,
-            store,
-            inner: Mutex::new(inner),
-            acting: AtomicBool::new(false),
-            scan_cancel: Arc::new(AtomicBool::new(false)),
-            space_cancel: Arc::new(AtomicBool::new(false)),
-        };
-        state.load_latest();
-        Ok(state)
-    }
-
-    fn lock(&self) -> MutexGuard<'_, Inner> {
-        self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
-
-    fn scans_dir(&self) -> PathBuf {
-        self.root.join("scans")
-    }
-
-    /// Opens the newest report that loads.
-    fn load_latest(&self) {
-        let Ok(entries) = std::fs::read_dir(self.scans_dir()) else {
-            return;
-        };
-        let mut reports: Vec<PathBuf> = entries
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| {
-                let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                name.starts_with("scan-") && name.ends_with("-report.json")
-            })
-            .collect();
-        reports.sort();
-        for path in reports.iter().rev() {
-            if let Ok(analysis) = vigil_scan::pipeline::load_report(path) {
-                self.set_analysis(analysis, Some(path.clone()));
-                return;
-            }
-        }
-    }
-
-    fn set_analysis(&self, analysis: Analysis, path: Option<PathBuf>) {
-        let json = analysis.to_value();
-        let mut inner = self.lock();
-        inner.analysis = Some(analysis);
-        inner.analysis_json = Some(json);
-        inner.report_path = path;
-    }
-
-    /// Saves the current report in place (after an action recorded on one of its findings).
-    fn save_current(&self) {
-        let inner = self.lock();
-        let (Some(analysis), Some(path)) = (&inner.analysis, &inner.report_path) else {
-            return;
-        };
-        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        let Some(stem) = name.strip_suffix("-report.json") else {
-            return;
-        };
-        let base = path.with_file_name(stem);
-        let _ = vigil_scan::pipeline::save_report(analysis, &base, false);
-    }
-}
 
 /// Runs slow work off the async runtime (and off the UI thread).
 async fn blocking<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> CmdResult<T> {
@@ -467,15 +352,6 @@ pub fn ignored_set(state: State<'_, AppState>, item_id: String, value: bool) -> 
 
 // ------------------------------------------------------------------------------------ history
 
-fn record_json(record: &Record) -> Value {
-    let mut value = record.as_value();
-    if let Value::Object(map) = &mut value {
-        map.insert("can_undo".into(), json!(vigil_actions::can_undo(record)));
-        map.insert("op_label".into(), json!(vigil_actions::op_label(record.op())));
-    }
-    value
-}
-
 #[tauri::command]
 pub async fn journal(app: AppHandle) -> CmdResult<Vec<Value>> {
     blocking(move || {
@@ -604,14 +480,8 @@ pub async fn process_affinity(pid: u32, created_ms: i64) -> CmdResult<Affinity> 
 }
 
 async fn cached_hardware(app: &AppHandle, force: bool) -> CmdResult<Hardware> {
-    if !force && let Some(hw) = state(app).lock().hardware.clone() {
-        return Ok(hw);
-    }
-    let hw = blocking(vigil_maint::hardware::hardware)
-        .await?
-        .map_err(|e| e.to_string())?;
-    state(app).lock().hardware = Some(hw.clone());
-    Ok(hw)
+    let worker = app.clone();
+    blocking(move || state(&worker).hardware(force)).await?
 }
 
 #[tauri::command]
@@ -761,492 +631,46 @@ pub async fn ai_models(app: AppHandle, provider: String, endpoint: Option<String
 
 // ------------------------------------------------------------------------------------ actions
 
-#[derive(Serialize, Default)]
-pub struct ActionOutcome {
-    cancelled: bool,
-    records: Vec<Value>,
-    message: String,
-}
-
-impl ActionOutcome {
-    fn cancelled() -> Self {
-        ActionOutcome {
-            cancelled: true,
-            ..Default::default()
-        }
-    }
-    fn message(text: impl Into<String>) -> Self {
-        ActionOutcome {
-            message: text.into(),
-            ..Default::default()
-        }
-    }
-}
-
-/// Ops a standard user may run even when the spec says administrator (they work on own processes).
-const USER_OPS: [&str; 4] = [
-    "process.suspend",
-    "process.resume",
-    "defender.scan_file",
-    "process.terminate",
-];
-
+/// The one command that changes the system. The whole path (checks, native confirmation, the
+/// action engine) is `vigil_core::service::run_action`; this only runs it off the async runtime.
 #[tauri::command]
 pub async fn run_action(app: AppHandle, window: WebviewWindow, request: Request) -> CmdResult<ActionOutcome> {
-    let st = state(&app);
-    let _busy = Busy::take(&st.acting).ok_or_else(|| vigil_i18n::tr!("Wait for the current task to finish."))?;
-    let plan = build_plan(&app, &request).await?;
     let hwnd = window.hwnd().map(|h| h.0 as isize).unwrap_or(0);
-    match plan {
-        Plan::Shell(spec) => run_shell(&app, &spec, hwnd).await,
-        Plan::Run { spec, item } => run_spec(&app, spec, item, hwnd).await,
-        Plan::Undo(id) => {
-            let worker = app.clone();
-            let result = blocking(move || vigil_actions::undo(&id, &state(&worker).store)).await?;
-            match result {
-                Ok(record) => Ok(ActionOutcome::message(
-                    record
-                        .undo_message()
-                        .map_or_else(|| vigil_i18n::tr!("Undone."), str::to_string),
-                )),
-                Err(error) => Err(error.to_string()),
-            }
-        }
-        Plan::UndoBatch(batch) => {
-            let worker = app.clone();
-            let results = blocking(move || vigil_actions::undo_batch(&batch, &state(&worker).store)).await?;
-            let mut lines: Vec<String> = Vec::new();
-            for (record, error) in &results {
-                match error {
-                    Some(error) => lines.push(format!("{}: {error}", record.label())),
-                    None => lines.extend(record.undo_message().map(str::to_string)),
-                }
-            }
-            Ok(ActionOutcome::message(if lines.is_empty() {
-                vigil_i18n::tr!("Nothing to undo.")
-            } else {
-                lines.join("\n")
-            }))
-        }
-        Plan::Restore(id) => quarantine_action(&app, id, false, hwnd).await,
-        Plan::Delete(id) => quarantine_action(&app, id, true, hwnd).await,
-    }
-}
-
-/// Marks the app busy with a change until dropped (Send, unlike a MutexGuard held across awaits).
-struct Busy<'a>(&'a AtomicBool);
-
-impl<'a> Busy<'a> {
-    fn take(flag: &'a AtomicBool) -> Option<Self> {
-        flag.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .ok()
-            .map(|_| Busy(flag))
-    }
-}
-
-impl Drop for Busy<'_> {
-    fn drop(&mut self) {
-        self.0.store(false, Ordering::Release);
-    }
-}
-
-async fn build_plan(app: &AppHandle, request: &Request) -> CmdResult<Plan> {
-    if let Request::Defender {
-        op,
-        setting,
-        list,
-        value,
-    } = request
-    {
-        let live = crate::protection::read_async().await?;
-        return crate::protection::plan(op, setting, list, value, &live);
-    }
-    let processes = match request {
-        Request::Process { .. } => {
-            blocking(|| {
-                vigil_sys::process::ProcessSampler::new()
-                    .and_then(|mut s| s.snapshot())
-                    .map_err(|e| e.to_string())
-            })
-            .await??
-        }
-        _ => Vec::new(),
-    };
-    let power_plans: Vec<(String, String, bool)> = match request {
-        Request::Tuning { op, .. } if op == "power.plan" => blocking(vigil_maint::tuning::tuning_state)
-            .await?
-            .power_plans
-            .into_iter()
-            .map(|p| (p.guid, p.name, p.active))
-            .collect(),
-        _ => Vec::new(),
-    };
-    let drive_media: Vec<(String, String)> = match request {
-        Request::Tuning { op, .. } if op == "disk.optimize" => cached_hardware(app, false)
-            .await?
-            .disks
-            .iter()
-            .flat_map(|d| {
-                d.letters
-                    .iter()
-                    .map(|l| (l.trim_end_matches(':').to_ascii_uppercase(), d.media.clone()))
-            })
-            .collect(),
-        _ => Vec::new(),
-    };
-    let services = match request {
-        Request::Service { .. } => blocking(|| vigil_sys::services::list().map_err(|e| e.to_string())).await??,
-        _ => Vec::new(),
-    };
-    let startup = match request {
-        Request::Startup { .. } => blocking(vigil_sys::startup::list).await?,
-        _ => Vec::new(),
-    };
-    let tasks = match request {
-        Request::Task { .. } => scheduled_tasks().await?,
-        _ => Vec::new(),
-    };
-    let firewall = match request {
-        Request::FirewallRule { .. } => crate::firewall::live_rules().await?,
-        _ => Vec::new(),
-    };
-    let st = state(app);
-    let inner = st.lock();
-    let cleanup: Vec<Value> = inner
-        .cleanup
-        .iter()
-        .filter_map(|t| serde_json::to_value(t).ok())
-        .collect();
-    let ctx = Context {
-        analysis: inner.analysis_json.as_ref(),
-        processes: &processes,
-        cleanup: &cleanup,
-        services: &services,
-        startup: &startup,
-        tasks: &tasks,
-        firewall: &firewall,
-        space_files: &inner.space_files,
-        power_plans: &power_plans,
-        drive_media: &drive_media,
-    };
-    requests::build(request, &ctx)
-}
-
-/// Asks on the main thread (the dialog's owner window lives there) and waits for the answer.
-async fn ask(app: &AppHandle, hwnd: isize, prompt: Prompt) -> Answer {
-    let (tx, rx) = std::sync::mpsc::channel();
-    let sent = app.run_on_main_thread(move || {
-        let parent = windows::Win32::Foundation::HWND(hwnd as *mut core::ffi::c_void);
-        let _ = tx.send(confirm::ask(parent, &prompt));
-    });
-    if sent.is_err() {
-        return Answer::Cancel;
-    }
-    blocking(move || rx.recv().unwrap_or(Answer::Cancel))
-        .await
-        .unwrap_or(Answer::Cancel)
-}
-
-fn prompt_for(spec: &ActionSpec, offer_restore_point: bool) -> Prompt {
-    let mut body = spec.explain.clone();
-    if spec.steps.is_empty() {
-        if !spec.target.is_empty() {
-            body.push_str(&format!("\n\n{}", vigil_i18n::tr!("Target: {0}", spec.target)));
-        }
-    } else {
-        body.push_str(&format!("\n\n{}", vigil_i18n::tr!("Steps, in this order:")));
-        for (n, step) in spec.steps.iter().enumerate() {
-            body.push_str(&format!("\n{}.  {}\n      {}", n + 1, step.label, step.target));
-        }
-    }
-    let undo = if spec.reversible {
-        vigil_i18n::tr!("You can undo this from History.")
-    } else if spec.steps.is_empty() {
-        vigil_i18n::tr!("This cannot be undone.")
-    } else {
-        vigil_i18n::tr!("Ending processes cannot be undone; the other steps can be undone from History.")
-    };
-    body.push_str(&format!("\n\n{undo}"));
-    let mut warnings: Vec<&str> = Vec::new();
-    for warning in std::iter::once(spec.warning.as_str()).chain(spec.steps.iter().map(|s| s.warning.as_str())) {
-        if !warning.is_empty() && !warnings.contains(&warning) {
-            warnings.push(warning);
-        }
-    }
-    let destructive = spec.destructive || spec.steps.iter().any(|s| s.destructive);
-    Prompt {
-        title: spec.label.clone(),
-        body,
-        warning: warnings.join("\n"),
-        confirm: if spec.label.chars().count() < 40 {
-            spec.label.clone()
-        } else {
-            vigil_i18n::tr!("Continue")
-        },
-        destructive,
-        restore_point: if offer_restore_point {
-            Some(true)
-        } else if destructive {
-            Some(false)
-        } else {
-            None
-        },
-    }
-}
-
-async fn run_spec(app: &AppHandle, spec: ActionSpec, item: Option<String>, hwnd: isize) -> CmdResult<ActionOutcome> {
-    let st = state(app);
-    if spec.admin && !st.admin && !USER_OPS.contains(&spec.op.as_str()) {
-        return Err(vigil_i18n::tr!(
-            "This action needs administrator rights. Use “Restart as administrator” in the sidebar."
-        ));
-    }
-    let destructive = spec.destructive || spec.steps.iter().any(|s| s.destructive);
-    let offer = {
-        let inner = st.lock();
-        inner.settings.restore_point
-            && st.admin
-            && destructive
-            && !inner.restore_point_done
-            && spec.op != "system.restore_point"
-    };
-    let Answer::Confirm { restore_point } = ask(app, hwnd, prompt_for(&spec, offer)).await else {
-        return Ok(ActionOutcome::cancelled());
-    };
-    let make_point = restore_point && st.admin;
-    let title = item
-        .as_ref()
-        .and_then(|id| {
-            let inner = st.lock();
-            requests::find_item(inner.analysis_json.as_ref(), id)
-                .and_then(|i| i.get("title").and_then(Value::as_str).map(str::to_string))
-        })
-        .unwrap_or_else(|| spec.target.clone());
     let worker = app.clone();
-    let run = spec.clone();
-    let records = blocking(move || {
-        let st = state(&worker);
-        let mut records = Vec::new();
-        if make_point {
-            let point = spec_restore_point();
-            records.push(vigil_actions::execute(&point, &st.store, None, &title));
-        }
-        let progress = |text: &str| {
-            let _ = worker.emit("action", json!({"text": text}));
-        };
-        records.extend(vigil_actions::execute_plan(&run, &st.store, &title, &progress));
-        records
+    blocking(move || {
+        let ui = TauriUi { app: &worker, hwnd };
+        service::run_action(&state(&worker), &request, &ui)
     })
-    .await?;
-    if make_point && records.first().is_some_and(Record::ok) {
-        st.lock().restore_point_done = true;
-    }
-    if let Some(id) = &item {
-        record_on_item(&st, id, &records);
-    }
-    Ok(ActionOutcome {
-        records: records.iter().map(record_json).collect(),
-        ..Default::default()
-    })
+    .await?
 }
 
-fn spec_restore_point() -> ActionSpec {
-    let mut point = spec(
-        "system.restore_point",
-        vigil_i18n::tr!("Create a restore point"),
-        "Windows",
-        "",
-    );
-    point.group = "fix".into();
-    point.reversible = false;
-    point
+/// The Tauri side of the action path: the dialog on the main thread, progress as events.
+struct TauriUi<'a> {
+    app: &'a AppHandle,
+    hwnd: isize,
 }
 
-/// Keeps what was done on the finding (shown in its detail) and saves the report.
-fn record_on_item(st: &AppState, item_id: &str, records: &[Record]) {
-    let stamp = local_minutes();
-    {
-        let mut inner = st.lock();
-        let Some(analysis) = inner.analysis.as_mut() else {
-            return;
-        };
-        let Some(item) = analysis.items.iter_mut().find(|i| i.id == item_id) else {
-            return;
-        };
-        for record in records.iter().filter(|r| r.op() != "system.restore_point") {
-            item.actions_taken
-                .push(json!({"time": stamp, "label": record.label(), "ok": record.ok(), "message": record.message()}));
-        }
-        inner.analysis_json = inner.analysis.as_ref().map(Analysis::to_value);
-    }
-    st.save_current();
-}
-
-/// Local time to the minute, ISO 8601 (`2026-01-01T10:05`).
-fn local_minutes() -> String {
-    // SAFETY: GetLocalTime only writes the returned structure.
-    let t = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
-    format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}",
-        t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute
-    )
-}
-
-async fn run_shell(app: &AppHandle, spec: &ActionSpec, hwnd: isize) -> CmdResult<ActionOutcome> {
-    use vigil_actions::shell;
-    let text = |key: &str| spec.params.get(key).and_then(Value::as_str).unwrap_or("").to_string();
-    let result = match spec.op.as_str() {
-        "shell.location" => shell::open_location(&text("path")),
-        "shell.properties" => shell::show_properties(&text("path"), hwnd),
-        "shell.folder" => shell::open_folder(&text("path")),
-        "shell.regedit" => shell::open_regedit(&text("key")),
-        "shell.url" => {
-            let url = text("url");
-            if !requests::allowed_url(&url) {
-                return Err(vigil_i18n::tr!("This address is not opened from Vigil."));
-            }
-            shell::open_url(&url)
-        }
-        "shell.browser" => shell::open_browser_extensions(&text("browser")),
-        "shell.hosts" => shell::edit_hosts(),
-        "shell.console" => shell::open_console(&text("name")),
-        "shell.tool" => shell::open_tool(&text("name")),
-        "signature.verify" => {
-            let path = text("path");
-            let shown = path.clone();
-            let info = blocking(move || vigil_actions::verify_signature(Path::new(&path))).await?;
-            let info = info.map_err(|e| e.to_string())?;
-            return Ok(ActionOutcome::message(signature_text(&shown, &info)));
-        }
-        other => return Err(vigil_i18n::tr!("Unknown request: {0}", other)),
-    };
-    let _ = app;
-    result.map_err(|e| e.to_string())?;
-    Ok(ActionOutcome::cancelled())
-}
-
-fn signature_text(path: &str, info: &vigil_actions::SignatureInfo) -> String {
-    use vigil_i18n::{tl, tr};
-    let status = info.sig_status.clone().unwrap_or_else(|| tr!("unknown"));
-    let mut plain = match status.as_str() {
-        "Valid" => tr!("Valid signature"),
-        "NotSigned" => tr!("Not signed"),
-        "HashMismatch" => tr!("BROKEN: the file was modified after it was signed"),
-        "NotTrusted" => tr!("Signed with a certificate Windows does not trust"),
-        other => other.to_string(),
-    };
-    if info.exists == Some(false) {
-        plain = tr!("The file no longer exists");
-    }
-    let mut lines = vec![plain, String::new(), tr!("File: {0}", path)];
-    let fields = [
-        (&info.signer, tl!("Signer: {0}")),
-        (&info.issuer, tl!("Issued by: {0}")),
-        (&info.cert_not_after, tl!("Certificate valid until: {0}")),
-        (&info.company, tl!("Publisher: {0}")),
-        (&info.description, tl!("Description: {0}")),
-        (&info.version, tl!("Version: {0}")),
-    ];
-    for (value, template) in fields {
-        if let Some(value) = value.as_ref().filter(|v| !v.is_empty()) {
-            lines.push(tr!(template, value));
-        }
-    }
-    lines.join("\n")
-}
-
-async fn quarantine_action(app: &AppHandle, id: String, delete: bool, hwnd: isize) -> CmdResult<ActionOutcome> {
-    let st = state(app);
-    let entry = st
-        .store
-        .quarantined()
-        .into_iter()
-        .find(|e| e.id == id)
-        .ok_or_else(|| vigil_i18n::tr!("That file is no longer in quarantine."))?;
-    let prompt = if delete {
-        Prompt {
-            title: vigil_i18n::tr!("Delete {0} permanently", entry.name),
-            body: vigil_i18n::tr!(
-                "The quarantined copy is deleted. It cannot be restored afterwards.\n\nOriginal location: {0}",
-                entry.original_path
-            ),
-            confirm: vigil_i18n::tr!("Delete permanently"),
-            destructive: true,
-            ..Default::default()
-        }
-    } else {
-        Prompt {
-            title: vigil_i18n::tr!("Restore {0}", entry.name),
-            body: vigil_i18n::tr!(
-                "The file goes back to its original location and can run again.\n\nOriginal location: {0}",
-                entry.original_path
-            ),
-            warning: vigil_i18n::tr!("Restore only files you are sure are safe."),
-            confirm: vigil_i18n::tr!("Restore"),
-            ..Default::default()
-        }
-    };
-    if ask(app, hwnd, prompt).await == Answer::Cancel {
-        return Ok(ActionOutcome::cancelled());
-    }
-    let worker = app.clone();
-    let result = blocking(move || {
-        let st = state(&worker);
-        if delete {
-            vigil_actions::delete_quarantined(&id, &st.store)
-        } else {
-            vigil_actions::restore_quarantined(&id, &st.store)
-        }
-    })
-    .await?;
-    result.map(ActionOutcome::message).map_err(|e| e.to_string())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn confirmation_lists_steps_and_warnings_once() {
-        let mut plan = spec("plan.remove", "Remove completely", "Tool", "Ends it.");
-        plan.destructive = true;
-        plan.reversible = false;
-        let mut a = spec("driver.disable", "Disable driver", "driver x", "");
-        a.warning = "Careful.".into();
-        let b = a.clone();
-        plan.steps = vec![a, b];
-        let prompt = prompt_for(&plan, true);
-        assert!(prompt.body.contains("1.  Disable driver"));
-        assert!(prompt.body.contains("Ending processes cannot be undone"));
-        assert_eq!(prompt.warning, "Careful.");
-        assert!(prompt.destructive);
-        assert_eq!(prompt.restore_point, Some(true));
-        let plain = prompt_for(&spec("shell.location", "Open", "C:\\x", "Opens."), false);
-        assert_eq!(plain.restore_point, None);
-        assert!(!plain.destructive);
+impl service::Ui for TauriUi<'_> {
+    fn owner(&self) -> isize {
+        self.hwnd
     }
 
-    #[test]
-    fn confirmation_follows_the_language() {
-        let mut one = spec(
-            "task.disable",
-            "Deshabilitar tarea",
-            "\\Updater",
-            "Deshabilita la tarea.",
-        );
-        one.reversible = true;
-        let spanish = vigil_i18n::with_language("es", || prompt_for(&one, false));
-        assert!(spanish.body.contains("Destino: \\Updater"), "{}", spanish.body);
-        assert!(
-            spanish.body.ends_with("Puede deshacerlo desde Historial."),
-            "{}",
-            spanish.body
-        );
-        let mut plan = spec("plan.remove", "A label longer than forty characters, in total", "", "");
-        plan.steps = vec![spec("task.disable", "Disable", "\\Updater", "")];
-        let chinese = vigil_i18n::with_language("zh", || prompt_for(&plan, false));
-        assert!(chinese.body.contains("步骤（按此顺序）："), "{}", chinese.body);
-        assert_eq!(chinese.confirm, "继续");
+    /// Asks on the main thread (the dialog's owner window lives there) and waits for the answer.
+    fn ask(&self, prompt: Prompt) -> Answer {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let hwnd = self.hwnd;
+        let sent = self.app.run_on_main_thread(move || {
+            let parent = windows::Win32::Foundation::HWND(hwnd as *mut core::ffi::c_void);
+            let _ = tx.send(confirm::ask(parent, &prompt));
+        });
+        if sent.is_err() {
+            return Answer::Cancel;
+        }
+        rx.recv().unwrap_or(Answer::Cancel)
+    }
+
+    fn progress(&self, text: &str) {
+        let _ = self.app.emit("action", json!({"text": text}));
     }
 }
 
@@ -1383,84 +807,10 @@ pub async fn startup_signatures(paths: Vec<String>) -> CmdResult<std::collection
 /// Every scheduled task, read now (read-only).
 #[tauri::command]
 pub async fn tasks_list() -> CmdResult<Vec<vigil_sys::tasks::ScheduledTask>> {
-    scheduled_tasks().await
-}
-
-async fn scheduled_tasks() -> CmdResult<Vec<vigil_sys::tasks::ScheduledTask>> {
-    let mut tasks = blocking(|| vigil_sys::tasks::list().map_err(|e| e.to_string())).await??;
-    for task in &mut tasks {
-        task.user_writable = task_writable(task);
-    }
-    Ok(tasks)
-}
-
-/// A program the task runs (or its COM DLL, or the script a Windows host such as PowerShell runs
-/// for it) is in a folder a standard user can change.
-fn task_writable(task: &vigil_sys::tasks::ScheduledTask) -> bool {
-    task.actions.iter().any(|action| {
-        !action.program.is_empty()
-            && (user_writable(&action.program)
-                || (vigil_sys::startup::is_host(&action.program)
-                    && argument_paths(&action.arguments).iter().any(|p| user_writable(p))))
-    })
-}
-
-/// The absolute paths (`C:\...`, `%LOCALAPPDATA%\...`) a command line's arguments name.
-fn argument_paths(arguments: &str) -> Vec<String> {
-    arguments
-        .split(['"', '\'', ' ', '\t', '=', ','])
-        .map(|word| {
-            let expanded = word
-                .strip_prefix('%')
-                .and_then(|rest| rest.split_once('%'))
-                .and_then(|(name, tail)| std::env::var(name).ok().map(|value| format!("{value}{tail}")));
-            expanded.unwrap_or_else(|| word.to_string())
-        })
-        .filter(|word| {
-            let bytes = word.as_bytes();
-            bytes.len() > 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'\\'
-        })
-        .collect()
+    blocking(vigil_core::inspect::scheduled_tasks).await?
 }
 
 // ------------------------------------------------------------------------------------ process inspector
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ModuleView {
-    name: String,
-    path: String,
-    size: u64,
-    /// Loaded from a folder a standard user can write to (profile, ProgramData, temp): where
-    /// side-loaded DLLs usually come from.
-    user_writable: bool,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProcessDetails {
-    modules: Vec<ModuleView>,
-    modules_error: Option<String>,
-    services: Vec<vigil_sys::inspect::HostedService>,
-}
-
-fn user_writable(path: &str) -> bool {
-    let low = path.to_lowercase();
-    let under = |var: &str| {
-        std::env::var(var)
-            .ok()
-            .map(|dir| dir.trim_end_matches('\\').to_lowercase())
-            .filter(|dir| !dir.is_empty())
-            .is_some_and(|dir| low.starts_with(&format!("{dir}\\")))
-    };
-    let users = std::env::var("SystemDrive")
-        .map(|d| format!(r"{}\users\", d.to_lowercase()))
-        .unwrap_or_default();
-    (under("USERPROFILE") || under("ProgramData") || under("TEMP") || (!users.is_empty() && low.starts_with(&users)))
-        && !under("SystemRoot")
-        && !under("ProgramFiles")
-        && !under("ProgramFiles(x86)")
-}
 
 /// Program icons for the process list, as PNG data URLs keyed by the path asked for (paths without
 /// an icon are left out). Read-only; each executable is read once and cached.
@@ -1486,76 +836,6 @@ pub async fn process_icons(paths: Vec<String>) -> CmdResult<std::collections::Ha
 
 /// Modules and hosted services of one process (read-only).
 #[tauri::command]
-pub async fn process_details(pid: u32) -> CmdResult<ProcessDetails> {
-    blocking(move || {
-        let (modules, modules_error) = match vigil_sys::inspect::modules(pid) {
-            Ok(list) => (list, None),
-            Err(error) => (Vec::new(), Some(error.to_string())),
-        };
-        let modules = modules
-            .into_iter()
-            .map(|m| ModuleView {
-                user_writable: user_writable(&m.path),
-                name: m.name,
-                path: m.path,
-                size: m.size,
-            })
-            .collect();
-        let services = vigil_sys::inspect::hosted_services(pid).unwrap_or_default();
-        ProcessDetails {
-            modules,
-            modules_error,
-            services,
-        }
-    })
-    .await
-}
-
-#[cfg(test)]
-mod inspector_tests {
-    use super::{argument_paths, task_writable, user_writable};
-
-    #[test]
-    fn writable_folders_are_flagged() {
-        let profile = std::env::var("USERPROFILE").unwrap_or_default();
-        let root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
-        assert!(user_writable(&format!(r"{profile}\AppData\Local\Temp\x.dll")));
-        assert!(!user_writable(&format!(r"{root}\System32\ntdll.dll")));
-        assert!(!user_writable(r"C:\Program Files\App\app.dll"));
-    }
-
-    #[test]
-    fn tasks_that_run_files_from_writable_folders_are_flagged() {
-        let root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
-        let action = |program: &str, arguments: &str| vigil_sys::tasks::TaskAction {
-            kind: "exec".into(),
-            program: program.into(),
-            arguments: arguments.into(),
-            ..Default::default()
-        };
-        let task = |actions: Vec<vigil_sys::tasks::TaskAction>| vigil_sys::tasks::ScheduledTask {
-            actions,
-            ..Default::default()
-        };
-        let powershell = format!(r"{root}\System32\WindowsPowerShell\v1.0\powershell.exe");
-        assert!(task_writable(&task(vec![action(
-            &powershell,
-            r#"-NoProfile -File "%LOCALAPPDATA%\Vendor\sync.ps1""#
-        )])));
-        let profile = std::env::var("USERPROFILE").unwrap_or_default();
-        assert!(task_writable(&task(vec![action(
-            &format!(r"{profile}\AppData\Local\Temp\x.exe"),
-            ""
-        )])));
-        assert!(!task_writable(&task(vec![action(&powershell, "-Command Get-Date")])));
-        assert!(!task_writable(&task(vec![action(
-            r"C:\Program Files\Vendor\updater.exe",
-            "/check"
-        )])));
-        assert!(!task_writable(&task(Vec::new())));
-        assert_eq!(
-            argument_paths(r#"/a="C:\One Two\x.ps1",D:\y.dll -z"#),
-            [r"C:\One", r"D:\y.dll"]
-        );
-    }
+pub async fn process_details(pid: u32) -> CmdResult<vigil_core::inspect::ProcessDetails> {
+    blocking(move || vigil_core::inspect::process_details(pid)).await
 }

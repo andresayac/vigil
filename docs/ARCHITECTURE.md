@@ -27,10 +27,11 @@ crates/
                         agents), anonymization, VirusTotal
   vigil-actions/        action engine: guards, journal, quarantine, undo, tool runner, tuning actions
   vigil-maint/          volumes, junk cleanup, space analyzer, Recycle Bin, hardware, tuning state, insights
-  vigil-app/            Tauri app (binary: vigil.exe): commands, live sampler, planner, request validation,
-                        native confirmation, settings and secrets, the background watch (tray icon,
-                        notifications, alerts), the read-only command lines (`vigil scan`, `list`, `ports`,
-                        `services`)
+  vigil-core/           the service layer every frontend shares: app state, planner, request validation,
+                        native confirmation, the action path (`service::run_action`), settings and
+                        secrets, the read-only command lines (`vigil scan`, `list`, `ports`, `services`)
+  vigil-app/            Tauri app (binary: vigil.exe): commands (thin wrappers over vigil-core), live
+                        sampler, the background watch (tray icon, notifications, alerts)
 ui/                     Svelte 5 + TypeScript, built by Vite into ui/dist and embedded in vigil.exe
 package.json            UI toolchain (npm)
 ```
@@ -38,7 +39,7 @@ package.json            UI toolchain (npm)
 ## Security model
 
 - The web UI displays data and asks for things; it never decides. It sends small requests (`ActionRequest` in
-  `ui/src/lib/types.ts`); `vigil-app/src/requests.rs` rebuilds the action from the core's own state (the loaded
+  `ui/src/lib/types.ts`); `vigil-core/src/requests.rs` rebuilds the action from the core's own state (the loaded
   report, the live process list, the targets it measured) and validates every value.
 - Every change is confirmed in a **native** Windows task dialog shown by the core (`confirm.rs`), not in the web
   page, so text that comes from the inspected computer cannot trigger an action even if it managed to inject markup.
@@ -69,7 +70,7 @@ next to each crate keeps them stable:
 | What | Where | Checked |
 |---|---|---|
 | Analysis of two fictitious infected computers | `vigil-scan/tests/data` | items, ids, verdicts, levels, scores, flags, summary, HTML |
-| Actions offered per finding (planner) | `vigil-app/tests/data` | the 61 actions of the 23 items |
+| Actions offered per finding (planner) | `vigil-core/tests/data` | the 61 actions of the 23 items |
 | A journal, a quarantined file and a task backup | `vigil-actions/tests/data/formats` | read, undone, restored byte for byte |
 | Insights and cleanup targets | `vigil-maint/tests/data` | texts and order |
 

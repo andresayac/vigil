@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/vigil-i18n", "crates/vigil-sys", "crates/vigil-scan", "crates/vigil-actions", "crates/vigil-maint", "crates/vigil-app"]
+members = ["crates/vigil-i18n", "crates/vigil-sys", "crates/vigil-scan", "crates/vigil-actions", "crates/vigil-maint", "crates/vigil-core", "crates/vigil-app"]
 
 [workspace.package]
 version = "1.4.0"
