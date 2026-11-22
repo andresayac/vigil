@@ -1,6 +1,7 @@
 //! Orchestrates the local analysis: from the raw inventory to the set of findings.
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 
 use serde_json::{Map, Value, json};
 
@@ -79,6 +80,8 @@ pub(crate) struct Live<'a> {
     pub(crate) vt_limit: usize,
     pub(crate) progress: &'a dyn Fn(&str),
     pub(crate) cancel: &'a AtomicBool,
+    /// The signature cache of the data folder (`sigcache.rs`); `None` verifies every file.
+    pub(crate) cache: Option<&'a std::path::Path>,
 }
 
 /// Evaluates the inventory. `live = None` does not touch the system (saved or test inventories).
@@ -89,6 +92,13 @@ pub(crate) fn analyze(raw: &mut Value, live: Option<&Live>) -> Analysis {
         }
     };
     let cancelled = || live.is_some_and(|l| l.cancel.load(Ordering::Relaxed));
+    // Seconds per analysis phase, kept in `meta.timings` next to the collectors' (live scans only).
+    let mut phases: Vec<(&str, f64)> = Vec::new();
+    let mut clock = Instant::now();
+    let mut lap = |name: &'static str, phases: &mut Vec<(&str, f64)>| {
+        phases.push((name, clock.elapsed().as_secs_f64()));
+        clock = Instant::now();
+    };
     let (refs, aux) = analyze::build_references(raw);
     let mut files: Files = obj(raw.at("files")).clone();
     // The accessibility programs are checked even when nothing references them: a copy of cmd.exe
@@ -104,7 +114,20 @@ pub(crate) fn analyze(raw: &mut Value, live: Option<&Live>) -> Analysis {
         && !missing.is_empty()
         && !cancelled()
     {
-        say(&tr!("  verifying the digital signature of {0} files...", missing.len()));
+        // Files verified recently and unchanged since come from the cache.
+        let mut cache = live.cache.map(crate::sigcache::SigCache::open);
+        if let Some(cache) = cache.as_mut() {
+            missing.retain(|path| match cache.get(path) {
+                Some(info) => {
+                    files.insert(lower(path), info);
+                    false
+                }
+                None => true,
+            });
+        }
+        if !missing.is_empty() {
+            say(&tr!("  verifying the digital signature of {0} files...", missing.len()));
+        }
         let own_dir;
         let workdir = match live.workdir {
             Some(dir) => Some(dir.to_path_buf()),
@@ -114,16 +137,29 @@ pub(crate) fn analyze(raw: &mut Value, live: Option<&Live>) -> Analysis {
             }
         };
         match workdir {
+            _ if missing.is_empty() => {}
             Some(dir) => match crate::collect::collect_signatures(&missing, &dir, live.cancel) {
-                Ok(found) => files.extend(found),
+                Ok(found) => {
+                    if let Some(cache) = cache.as_mut() {
+                        found.values().for_each(|info| cache.put(info));
+                    }
+                    files.extend(found);
+                }
                 Err(error) => push_note(raw, "signatures", &tr!("could not be verified: {0}", error)),
             },
             None => push_note(raw, "signatures", &tr!("could not be verified: no temporary folder")),
         }
+        if let Some(cache) = cache
+            && !live.cancel.load(Ordering::Relaxed)
+        {
+            cache.save();
+        }
+        files = in_path_order(files);
     }
     if let Some(map) = raw.as_object_mut() {
         map.insert("files".into(), Value::Object(files.clone()));
     }
+    lap("analysis_signatures", &mut phases);
 
     let mut items = analyze::evaluate_entities(raw, refs, &files);
     items.extend(posture::program_items(raw));
@@ -131,6 +167,7 @@ pub(crate) fn analyze(raw: &mut Value, live: Option<&Live>) -> Analysis {
     items.extend(posture::event_items(raw));
     let (config, state) = posture::config_items(raw, &aux);
     items.extend(config);
+    lap("analysis_rules", &mut phases);
 
     let mut vt_note = None;
     if let Some(live) = live
@@ -158,6 +195,7 @@ pub(crate) fn analyze(raw: &mut Value, live: Option<&Live>) -> Analysis {
             say(&tr!("  VirusTotal: {0} files looked up", checked));
         }
     }
+    lap("analysis_hashes", &mut phases);
 
     for item in items.iter_mut() {
         local_verdict(item);
@@ -170,6 +208,14 @@ pub(crate) fn analyze(raw: &mut Value, live: Option<&Live>) -> Analysis {
         }
     }
 
+    lap("analysis_finish", &mut phases);
+    if live.is_some()
+        && let Some(Value::Object(timings)) = raw.get_mut("meta").and_then(|m| m.get_mut("timings"))
+    {
+        for (name, seconds) in phases {
+            timings.insert(name.to_string(), json!((seconds * 10.0).round() / 10.0));
+        }
+    }
     let meta = obj(raw.at("meta")).clone();
     let mut notes: Vec<Value> = list(raw.at("notes")).to_vec();
     if !truthy(meta.at("is_admin")) {
@@ -232,6 +278,14 @@ pub(crate) fn analyze(raw: &mut Value, live: Option<&Live>) -> Analysis {
     }
 }
 
+/// The verified files ordered by path: results come from the cache and from several collectors
+/// finishing in any order, and the inventory must read the same whatever that order was.
+fn in_path_order(files: Files) -> Files {
+    let mut entries: Vec<(String, Value)> = files.into_iter().collect();
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    entries.into_iter().collect()
+}
+
 fn bump(counter: &mut Map<String, Value>, key: &str) {
     let n = counter.get(key).and_then(Value::as_u64).unwrap_or(0);
     counter.insert(key.to_string(), json!(n + 1));
@@ -246,5 +300,32 @@ fn push_note(raw: &mut Value, area: &str, message: &str) {
         if let Some(list) = notes.as_array_mut() {
             list.push(json!({"area": area, "message": message}));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verified_files_read_the_same_whatever_order_they_arrived_in() {
+        let entry = |path: &str| {
+            (
+                lower(path),
+                json!({"path": path, "exists": true, "sig_status": "Valid"}),
+            )
+        };
+        let paths = [r"C:\b.exe", r"C:\a.dll", r"D:\z\c.sys", r"C:\Windows\x.exe"];
+        let forward: Files = paths.iter().map(|p| entry(p)).collect();
+        let backward: Files = paths.iter().rev().map(|p| entry(p)).collect();
+        // Cache hits first, then the collectors' results, in another split.
+        let mixed: Files = [paths[2], paths[0], paths[3], paths[1]]
+            .iter()
+            .map(|p| entry(p))
+            .collect();
+        let a = serde_json::to_string(&in_path_order(forward)).expect("json");
+        assert_eq!(a, serde_json::to_string(&in_path_order(backward)).expect("json"));
+        assert_eq!(a, serde_json::to_string(&in_path_order(mixed)).expect("json"));
+        assert!(a.find("a.dll").expect("a") < a.find("b.exe").expect("b"));
     }
 }

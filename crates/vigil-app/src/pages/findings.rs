@@ -13,10 +13,12 @@ use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::table::TableState;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AnyElement, ClipboardItem, Context, Div, ElementId, Entity, FocusHandle, FontWeight, InteractiveElement as _,
-    IntoElement, ParentElement, Render, StatefulInteractiveElement as _, Styled, Subscription, Window, div, px,
+    AnyElement, AppContext as _, ClipboardItem, Context, Div, ElementId, Entity, FocusHandle, FontWeight,
+    InteractiveElement as _, IntoElement, ParentElement, Render, StatefulInteractiveElement as _, Styled, Subscription,
+    Window, div, px,
 };
 use serde_json::{Value, json};
+use vigil_core::export::Format;
 use vigil_core::state::AppState;
 
 use crate::app::{Ctx, Focus, Report};
@@ -54,6 +56,10 @@ pub struct FindingsPage {
     copied: bool,
     investigation: Investigation,
     acting: Acting,
+    /// The Export menu's "replace names" choice.
+    export_anonymize: bool,
+    /// The last export: how it went and, when it was saved, the file.
+    export_note: Option<(ui::Severity, String, Option<String>)>,
     focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -122,6 +128,8 @@ impl FindingsPage {
             copied: false,
             investigation: Investigation::default(),
             acting: Acting::default(),
+            export_anonymize: false,
+            export_note: None,
             focus: cx.focus_handle(),
             _subscriptions: subscriptions,
         };
@@ -154,6 +162,129 @@ impl FindingsPage {
             page.selection_changed(cx);
         }
         page
+    }
+
+    /// "Export": the loaded report's findings (or the page) as a file the user names. The report
+    /// is read-only here; only the chosen file is written.
+    fn export(&mut self, format: Format, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(report) = self.ctx.report.read(cx).analysis.clone() else {
+            self.export_note = Some((ui::Severity::Info, t("findings.runScan"), None));
+            cx.notify();
+            return;
+        };
+        let options = vigil_core::export::Options {
+            anonymize: self.export_anonymize,
+            include_trusted: false,
+        };
+        let name = vigil_core::export::suggested_name(&report, format);
+        let documents = std::env::var_os("USERPROFILE")
+            .map(|p| std::path::PathBuf::from(p).join("Documents"))
+            .unwrap_or_default();
+        let picked = cx.prompt_for_new_path(&documents, Some(&name));
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(Ok(Some(path))) = picked.await else { return };
+            let shown = path.display().to_string();
+            let written = cx
+                .background_spawn(async move {
+                    let bytes = vigil_core::export::render_report(&report, format, options);
+                    std::fs::write(&path, bytes)
+                })
+                .await;
+            let _ = this.update(cx, |page, cx| {
+                page.export_note = Some(match written {
+                    Ok(()) => {
+                        let key = if options.anonymize {
+                            "findings.exportedAnonymized"
+                        } else {
+                            "findings.exported"
+                        };
+                        (ui::Severity::Success, tf(key, &[("path", &shown)]), Some(shown))
+                    }
+                    Err(error) => (
+                        ui::Severity::Error,
+                        tf("findings.exportFailed", &[("error", &error.to_string())]),
+                        None,
+                    ),
+                });
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// The Export menu button.
+    fn export_menu(&self, has_report: bool, cx: &mut Context<Self>) -> impl IntoElement {
+        let weak = cx.entity().downgrade();
+        let anonymize = self.export_anonymize;
+        FButton::new("fi-export", Kind::Standard)
+            .glyph(icons::EXPORT)
+            .label(t("findings.export"))
+            .chevron()
+            .disabled(!has_report)
+            .dropdown_menu(move |menu, _, _| {
+                let pick = |label: String, format: Format| {
+                    let weak = weak.clone();
+                    PopupMenuItem::new(label).on_click(move |_, window, cx| {
+                        let _ = weak.update(cx, |this, cx| this.export(format, window, cx));
+                    })
+                };
+                let toggle = {
+                    let weak = weak.clone();
+                    PopupMenuItem::new(t("findings.exportAnonymize"))
+                        .checked(anonymize)
+                        .on_click(move |_, _, cx| {
+                            let _ = weak.update(cx, |this, cx| {
+                                this.export_anonymize = !this.export_anonymize;
+                                cx.notify();
+                            });
+                        })
+                };
+                menu.item(pick(t("findings.exportCsv"), Format::Csv))
+                    .item(pick(t("findings.exportSarif"), Format::Sarif))
+                    .item(pick(t("findings.exportHtml"), Format::Html))
+                    .separator()
+                    .item(toggle)
+            })
+    }
+
+    /// The result of the last export, with "Open folder" when a file was saved.
+    fn export_bar(&self, cx: &mut Context<Self>) -> Option<Div> {
+        let tk = *tokens(cx);
+        let (severity, message, path) = self.export_note.clone()?;
+        let weak = cx.entity().downgrade();
+        let close: ui::OnClose = Box::new(move |_, cx| {
+            let _ = weak.update(cx, |this, cx| {
+                this.export_note = None;
+                cx.notify();
+            });
+        });
+        let mut row =
+            kit::row().child(
+                div()
+                    .flex_1()
+                    .child(ui::info_bar("fi-export-note", severity, message, Some(close), &tk)),
+            );
+        if let Some(path) = path.filter(|_| self.ctx.core.is_some()) {
+            let weak = cx.entity().downgrade();
+            row = row.child(
+                FButton::new("fi-export-folder", Kind::Standard)
+                    .glyph(icons::FOLDER)
+                    .label(t("findings.exportOpenFolder"))
+                    .on_click(move |_, window, cx| {
+                        let path = path.clone();
+                        let _ = weak.update(cx, |this, cx| {
+                            let request = vigil_core::requests::Request::Shell {
+                                op: "location".into(),
+                                path: Some(path),
+                                url: None,
+                                name: None,
+                            };
+                            common::send(this, request, window, cx);
+                        });
+                    }),
+            );
+        }
+        Some(row)
     }
 
     fn item(&self, id: &str, cx: &gpui_kit::App) -> Option<Value> {
@@ -1210,8 +1341,10 @@ impl Render for FindingsPage {
                 kit::row()
                     .child(ui::page_title(t("page.findings")))
                     .child(div().flex_1())
+                    .child(self.export_menu(has_report, cx))
                     .child(div().w(px(320.)).child(ui::search_box(&self.search, &tk))),
             )
+            .when_some(self.export_bar(cx), |this, bar| this.child(bar))
             .when(view_only, |this| {
                 this.child(ui::info_bar(
                     "fi-view-only",

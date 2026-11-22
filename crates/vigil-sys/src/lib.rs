@@ -13,6 +13,7 @@ mod xml;
 
 pub mod accounts;
 pub mod apps;
+pub mod bits;
 pub mod certs;
 pub mod cpusets;
 pub mod defender;

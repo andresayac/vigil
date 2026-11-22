@@ -567,7 +567,9 @@ fn autorun_refs(raw: &Value) -> (Vec<Ref>, Vec<Map<String, Value>>) {
     }
     let userinit_default = lower(&join(&SYSTEM32, &["userinit.exe"]));
 
-    for entry in list(raw.at("autoruns")) {
+    // BITS jobs with a notify command line come from `sysconfig.bits`.
+    let bits = crate::bits::autoruns(raw.at("sysconfig").at(crate::bits::SECTION));
+    for entry in list(raw.at("autoruns")).iter().chain(bits.iter()) {
         let source_value = entry.at("source").clone();
         let source = source_value.as_str().unwrap_or("");
         let name = text(entry.at("name"));
@@ -1033,6 +1035,36 @@ fn autorun_refs(raw: &Value) -> (Vec<Ref>, Vec<Map<String, Value>>) {
                 None,
                 None,
             ),
+            // A BITS job's notify command line: BITS runs it when the job finishes or fails, and
+            // keeps the job across restarts. Few normal programs use it; the program is judged as a
+            // file on top of this signal.
+            "bits_notify" => {
+                let detail = map(vec![
+                    ("source", source_value.clone()),
+                    ("job", or_empty(entry.at("job"))),
+                    ("owner", or_empty(entry.at("owner"))),
+                    ("value", or_empty(entry.at("name"))),
+                ]);
+                let file = text(entry.at("file"));
+                let parsed = (!file.is_empty()).then(|| ParsedCommand {
+                    program: Some(file.clone()),
+                    certain: true,
+                    ..ParsedCommand::new(&command)
+                });
+                add(
+                    &command,
+                    tr!("BITS job \"{0}\" runs it when it finishes ({1})", name, location),
+                    vec![Flag::new(
+                        "bits_notify",
+                        30,
+                        tr!(
+                            "a background transfer (BITS) job runs this program when it finishes or fails; BITS keeps the job across restarts, which malware uses to start again"
+                        ),
+                    )],
+                    Some(detail),
+                    parsed,
+                );
+            }
             // Office: the DLL is judged as a file (signature, folder); a signed vendor add-in in
             // its own folder carries no signal of its own.
             "office_test" | "office_addin" | "office_startup" => {

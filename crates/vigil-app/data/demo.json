@@ -8185,6 +8185,16 @@
     "detail": "\\??\\D:\\Tools\\Fabrikam\\fabrikamfs.sys"
    },
    {
+    "id": 11,
+    "time": 1795322422374,
+    "kind": "bits",
+    "severity": "critical",
+    "target": "alerts",
+    "read": false,
+    "title": "New background transfer job runs a program: Contoso sync",
+    "detail": "BITS runs C:\\Users\\jdoe\\AppData\\Local\\Temp\\run.exe --quiet when job {11111111-2222-3333-4444-555555555555} finishes or fails."
+   },
+   {
     "id": 6,
     "time": 1795322392374,
     "kind": "startup",
@@ -8247,6 +8257,16 @@
    "read": false,
    "title": "New driver outside the Windows driver folders: fabrikamfs",
    "detail": "\\??\\D:\\Tools\\Fabrikam\\fabrikamfs.sys"
+  },
+  {
+   "id": 11,
+   "time": 1795322422374,
+   "kind": "bits",
+   "severity": "critical",
+   "target": "alerts",
+   "read": false,
+   "title": "New background transfer job runs a program: Contoso sync",
+   "detail": "BITS runs C:\\Users\\jdoe\\AppData\\Local\\Temp\\run.exe --quiet when job {11111111-2222-3333-4444-555555555555} finishes or fails."
   },
   {
    "id": 6,

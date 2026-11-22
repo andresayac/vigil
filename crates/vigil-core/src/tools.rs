@@ -21,6 +21,7 @@ Usage:
   vigil services [options]    Windows services
   vigil programs [options]    installed programs
   vigil reliability [options] crashes, blue screens and other problems
+  vigil export [options]      a saved report as CSV, SARIF, HTML or JSON
   vigil mcp [options]         read-only tools for AI clients (MCP server)
 
   --no-elevate                open the app without asking for administrator rights
@@ -54,12 +55,13 @@ Usage: vigil services [--running] [--json] [--lang CODE]
   --json       machine-readable output");
 
 /// The commands handled here.
-pub const COMMANDS: [&str; 8] = [
+pub const COMMANDS: [&str; 9] = [
     "list",
     "ports",
     "services",
     "programs",
     "reliability",
+    "export",
     "help",
     "--help",
     "-h",
@@ -80,6 +82,7 @@ pub fn run(command: &str, args: &[String]) -> i32 {
         "services" => services(args),
         "programs" => crate::programs::cli(args),
         "reliability" => crate::reliability::cli(args),
+        "export" => crate::export::cli(args),
         _ => {
             say(&tr!(TOP_HELP));
             Ok(())

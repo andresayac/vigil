@@ -59,6 +59,23 @@ ExampleSvc                    Running     Automatic                   2210     E
 
 Exit codes: 0 when it worked, 2 for a wrong option or a read that failed.
 
+### Export
+
+A scan's findings can go to an IT person or another tool as **CSV** (one row per finding, for a spreadsheet) or
+**SARIF 2.1.0** (for security tools), besides the HTML report page. In the app: **Findings → Export**. From a
+terminal:
+
+```bat
+vigil export --format csv --out findings.csv                  :: the newest saved report
+vigil export --report scan-20260101-1000-report.json --format sarif --out findings.sarif --anonymize
+vigil scan --ai off --format sarif --out findings.sarif       :: scan and export in one go
+```
+
+`--anonymize` replaces the user, computer, account and profile folder names, as the AI review does. Secrets the
+scan finds are never exported, only where they are and what kind they are; command lines are masked the same way
+as in the report. CSV cells that a spreadsheet would read as a formula are neutralised. An existing file is kept
+unless `--force` is given; Microsoft components verified automatically are left out unless `--all` is.
+
 ## The AI agent
 
 The local rules decide first; the agent reviews what is left and explains it in plain words. You choose the agent in
@@ -179,7 +196,10 @@ scanning off, the trusted root certificate stores (a new root outside Microsoft'
 Defender exclusions (the non-policy exclusions only as administrator). It also reads a few Windows logs from where the last check stopped, which catches
 changes undone within the minute: a service installed, a log cleared, a new account or administrator and a scheduled
 task created (the Security log only as administrator), Microsoft Defender detections and changes, and new permanent WMI
-subscriptions. A change already reported from the fingerprint is not reported again from a log. Each difference becomes
+subscriptions. Every five minutes, while the BITS service already runs, it also lists background transfer jobs that
+run a program when they finish. A change already reported from the fingerprint is not reported again from a log. An
+item that disappears is remembered for a week, so one that comes back (a service whose permissions hide it from the
+list now and then, a value briefly unreadable) is not reported as new again. Each difference becomes
 an alert on the **Alerts** page and, if you want, a Windows notification, most important first. The fingerprint is saved, so changes
 made while Vigil was closed are reported at the next start. A part that could not be read is skipped, never taken as
 "everything was removed". The watch only reads; it tells you about a change, it does not block it.
@@ -337,6 +357,12 @@ are never "optimizations").
      gateway, and tunnel adapters or network filter drivers from vendors that are neither Microsoft nor a known
      VPN, virtualization, capture or security company. LLMNR and NetBIOS are a posture fact, worth a look only
      while a public network is connected;
+   - background transfers (BITS): a job's notify command line, the program BITS runs when the job finishes or
+     fails (a way to start again after restarts), is judged like any startup entry; a job that downloads a
+     program or script into a folder anyone can change, more so from a bare IP address or over plain HTTP; and,
+     from the Bits-Client log, recent transfers of programs from such places or jobs created by a program in such
+     a folder. Windows' own jobs are quiet. Jobs are listed only while the BITS service already runs (listing
+     them would start it); a standard user sees only their own;
 2. **Grouping**: every reference is resolved to the file that really decides what runs (the DLL behind `rundll32`,
    the script behind `wscript`, the payload of an encoded PowerShell command...), so each file is judged once.
 3. **Local rules**: digital signatures, locations, names that imitate Windows, command-line patterns (miners,
@@ -348,6 +374,11 @@ are never "optimizations").
 Scans are saved as `scan-YYYYMMDD-HHMMSS-report.json` (findings and verdicts), `-inventory.json` (raw data) and
 `-sent-to-ai.json` (what was sent). **More → Export HTML report** writes a self-contained page. They contain a
 detailed inventory of the computer: treat them as private.
+
+Verifying digital signatures is the slowest part of a scan, so `signature-cache.json` in the data folder keeps each
+result with the file's size, last-write time and file ID. A later scan reuses it only for a file that is still the
+same, verified in the last 7 days on the same Windows build; everything else is verified again. A repeat scan takes
+well under half the time of the first. The elevated copy keeps its own cache where only administrators can write.
 
 ## Languages
 

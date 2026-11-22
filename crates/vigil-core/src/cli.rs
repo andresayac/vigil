@@ -36,6 +36,10 @@ Usage: vigil scan [options]
   --output DIR     folder for the reports (default: %USERPROFILE%\\Vigil\\reports)
   --virustotal     look up suspicious file hashes on VirusTotal
   --open           open the HTML report when the scan finishes
+  --format NAME    also write the findings as csv, sarif, html or json (see vigil export)
+  --out FILE       where to write that file (default: next to the report)
+  --anonymize      in that file, replace the user, computer, account and profile folder names
+  --force          replace that file if it exists
   --version        print the version
 
 API keys come from the Windows Credential Manager (saved in the app's Settings) or from the
@@ -57,6 +61,11 @@ struct Options {
     output: PathBuf,
     virustotal: bool,
     open: bool,
+    /// `--format`: the findings also written in this format.
+    format: Option<vigil_scan::export::Format>,
+    out: Option<PathBuf>,
+    anonymize: bool,
+    force: bool,
 }
 
 pub(crate) fn say(text: &str) {
@@ -95,6 +104,10 @@ fn parse(args: &[String]) -> Result<Option<Options>, String> {
         output: home.join("Vigil").join("reports"),
         virustotal: false,
         open: false,
+        format: None,
+        out: None,
+        anonymize: false,
+        force: false,
     };
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
@@ -148,8 +161,20 @@ fn parse(args: &[String]) -> Result<Option<Options>, String> {
             "--output" => options.output = PathBuf::from(value("--output")?),
             "--virustotal" => options.virustotal = true,
             "--open" => options.open = true,
+            "--format" => {
+                let name = value("--format")?;
+                options.format = Some(
+                    vigil_scan::export::Format::parse(&name).ok_or(tr!("--format must be csv, sarif, html or json"))?,
+                );
+            }
+            "--out" => options.out = Some(PathBuf::from(value("--out")?)),
+            "--anonymize" => options.anonymize = true,
+            "--force" => options.force = true,
             other => return Err(tr!("unknown option {0} (see vigil scan --help)", other)),
         }
+    }
+    if options.format.is_none() && (options.out.is_some() || options.anonymize || options.force) {
+        return Err(tr!("--out, --anonymize and --force go with --format"));
     }
     Ok(Some(options))
 }
@@ -386,8 +411,17 @@ pub fn run(args: &[String]) -> i32 {
     let cancel = AtomicBool::new(false);
     let progress = |text: &str| say(&format!("  {text}"));
     say(&format!("\n{}", tr!("Collecting the inventory...")));
-    let (raw, mut analysis) = match vigil_scan::collect_and_analyze(options.days, vt_key.as_deref(), &progress, &cancel)
-    {
+    // The same signature cache as the app, in the data folder of this user or of the elevated copy.
+    let cache = vigil_actions::data_dir()
+        .ok()
+        .map(|root| root.join(crate::api::SIGNATURE_CACHE));
+    let (raw, mut analysis) = match vigil_scan::collect_and_analyze_cached(
+        options.days,
+        vt_key.as_deref(),
+        cache.as_deref(),
+        &progress,
+        &cancel,
+    ) {
         Ok(result) => result,
         Err(error) => {
             say(&tr!("The scan failed: {0}", error));
@@ -433,6 +467,20 @@ pub fn run(args: &[String]) -> i32 {
         say(&format!("\n{}", tr!("Report: {0}", html.display())));
     }
     say(&tr!("Data: {0}", json_path.display()));
+    if let Some(format) = options.format {
+        let out = options
+            .out
+            .clone()
+            .unwrap_or_else(|| base.with_file_name(format!("{name}-findings.{}", format.extension())));
+        let export = vigil_scan::export::Options {
+            anonymize: options.anonymize,
+            include_trusted: false,
+        };
+        if let Err(problem) = crate::export::write_export(&analysis, format, export, &out, options.force) {
+            say(&problem);
+            return 1;
+        }
+    }
     if let Some(log) = analysis.ai.get("sent_log").and_then(Value::as_str) {
         say(&tr!("Sent to the AI (for your review): {0}", log));
     }
@@ -503,6 +551,13 @@ mod tests {
         assert!(parse(&args(&["--lang", "de"])).is_err());
         assert!(parse(&args(&["--days"])).is_err());
         assert!(parse(&args(&["--rm"])).is_err());
+        let export = parse(&args(&["--format", "csv", "--out", "a.csv", "--anonymize", "--force"]));
+        assert!(
+            matches!(export, Ok(Some(ref o)) if o.format == Some(vigil_scan::export::Format::Csv)
+            && o.out.as_deref() == Some(std::path::Path::new("a.csv")) && o.anonymize && o.force)
+        );
+        assert!(parse(&args(&["--format", "pdf"])).is_err());
+        assert!(parse(&args(&["--out", "a.csv"])).is_err(), "--out needs --format");
     }
 
     #[test]

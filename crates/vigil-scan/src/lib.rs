@@ -17,6 +17,7 @@ pub mod ai;
 pub mod browsers;
 pub mod cmdline;
 pub mod diff;
+pub mod export;
 pub mod model;
 pub mod pipeline;
 pub mod privacy;
@@ -27,6 +28,7 @@ pub mod vt;
 
 mod amsi;
 mod analyze;
+mod bits;
 mod certs;
 mod collect;
 mod com;
@@ -42,6 +44,7 @@ mod persist;
 mod posture;
 mod rmm;
 mod secrets;
+mod sigcache;
 mod svcsec;
 mod winreg;
 
@@ -68,6 +71,19 @@ pub fn collect_and_analyze(
     progress: &dyn Fn(&str),
     cancel: &AtomicBool,
 ) -> Result<(Value, model::Analysis), ScanError> {
+    collect_and_analyze_cached(days, vt_key, None, progress, cancel)
+}
+
+/// [`collect_and_analyze`] with a signature cache: `signature_cache` is a file in the data folder
+/// of the copy that scans. Files verified recently and unchanged since (same size, last-write time
+/// and file ID, same Windows build) are not verified again; everything else is.
+pub fn collect_and_analyze_cached(
+    days: u32,
+    vt_key: Option<&str>,
+    signature_cache: Option<&std::path::Path>,
+    progress: &dyn Fn(&str),
+    cancel: &AtomicBool,
+) -> Result<(Value, model::Analysis), ScanError> {
     let workdir = collect::WorkDir::create()
         .map_err(|e| ScanError::Collector(format!("could not create a temporary folder: {e}")))?;
     let mut raw = collect::collect_all(workdir.path(), days, progress, cancel);
@@ -80,6 +96,7 @@ pub fn collect_and_analyze(
         vt_limit: 25,
         progress,
         cancel,
+        cache: signature_cache,
     };
     let analysis = engine::analyze(&mut raw, Some(&live));
     if cancel.load(Ordering::Relaxed) {
@@ -101,6 +118,7 @@ pub fn run_analysis(raw: &Value, live: bool) -> model::Analysis {
             vt_limit: 25,
             progress: &quiet,
             cancel: &cancel,
+            cache: None,
         };
         engine::analyze(&mut raw, Some(&options))
     } else {

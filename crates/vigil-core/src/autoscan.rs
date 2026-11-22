@@ -698,8 +698,14 @@ pub fn run_scan(dir: &Path) -> Result<Outcome, Failure> {
         .days
         .clamp(1, 365);
     let quiet = |_: &str| {};
-    let (_, mut analysis) =
-        vigil_scan::collect_and_analyze(days, None, &quiet, &CANCEL).map_err(|e| Failure::Failed(e.to_string()))?;
+    let (_, mut analysis) = vigil_scan::collect_and_analyze_cached(
+        days,
+        None,
+        Some(&root.join(crate::api::SIGNATURE_CACHE)),
+        &quiet,
+        &CANCEL,
+    )
+    .map_err(|e| Failure::Failed(e.to_string()))?;
     if CANCEL.load(Ordering::Acquire) {
         return Err(Failure::Failed(tr!("Vigil was closed during the scan")));
     }

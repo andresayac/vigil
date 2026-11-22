@@ -17,6 +17,9 @@ use crate::secrets;
 use crate::settings::{self, View};
 use crate::state::{AppState, Inner, Pending};
 
+/// The scan's signature cache, in the data folder (see vigil-scan's `sigcache.rs`).
+pub const SIGNATURE_CACHE: &str = "signature-cache.json";
+
 /// What a scan offers before the AI review: the items that would be sent and where they go.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -71,8 +74,10 @@ pub fn scan_collect(
             "VirusTotal: no API key in Settings; the scan continues without it"
         ));
     }
-    let (raw, analysis) = vigil_scan::collect_and_analyze(settings.days, vt_key.as_deref(), &progress, &cancel)
-        .map_err(|e| e.to_string())?;
+    let cache = st.root.join(SIGNATURE_CACHE);
+    let (raw, analysis) =
+        vigil_scan::collect_and_analyze_cached(settings.days, vt_key.as_deref(), Some(&cache), &progress, &cancel)
+            .map_err(|e| e.to_string())?;
     if let Err(error) = std::fs::write(&inventory, raw.to_string()) {
         progress(&vigil_i18n::tr!("The raw inventory could not be saved ({0})", error));
     }

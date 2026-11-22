@@ -16,6 +16,8 @@ pub const CHEVRON_RIGHT: char = '\u{E76C}';
 pub const CHEVRON_DOWN: char = '\u{E70D}';
 pub const INFO: char = '\u{E946}';
 pub const FOLDER: char = '\u{E838}';
+/// Save (exporting findings to a file).
+pub const EXPORT: char = '\u{E74E}';
 pub const CHECK: char = '\u{E73E}';
 pub const SUCCESS: char = '\u{E930}';
 pub const WARNING: char = '\u{E7BA}';

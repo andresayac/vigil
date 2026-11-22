@@ -1655,6 +1655,7 @@ pub(crate) fn config_items(raw: &Value, aux: &Aux) -> (Vec<Item>, Map<String, Va
     items.extend(crate::rmm::items(raw));
     items.extend(crate::certs::items(raw));
     items.extend(crate::amsi::items(raw));
+    items.extend(crate::bits::items(raw));
 
     // --- pathless processes and findings from the registry
     let odd: BTreeSet<&String> = aux

@@ -18,8 +18,8 @@ use crate::theme::tokens;
 use crate::ui;
 use crate::ui::kit::{self, J as _};
 
-const KINDS: [&str; 11] = [
-    "startup", "service", "task", "security", "port", "hook", "driver", "hosts", "network", "event", "scan",
+const KINDS: [&str; 12] = [
+    "startup", "service", "task", "security", "port", "hook", "driver", "hosts", "network", "bits", "event", "scan",
 ];
 
 pub struct AlertsPage {

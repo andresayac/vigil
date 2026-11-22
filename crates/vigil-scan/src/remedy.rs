@@ -200,6 +200,23 @@ fn role_steps(role: &Role) -> Vec<Step> {
                         .danger(),
                 ];
             }
+            if source == "bits_notify" {
+                let job = text(detail.at("job"));
+                let Some(quoted) = ps_quote(Some(&job)) else {
+                    return vec![];
+                };
+                return vec![
+                    Step::new(tr!("Cancel the BITS job"))
+                        .command(format!(
+                            "Get-BitsTransfer -AllUsers | Where-Object JobId -eq {quoted} | Remove-BitsTransfer"
+                        ))
+                        .note(tr!(
+                            "Cancelling the job also stops it from running its program. Without administrator rights only your own jobs can be cancelled (leave out -AllUsers)."
+                        ))
+                        .admin(true)
+                        .danger(),
+                ];
+            }
             if source == "com_hijack"
                 && let Some(key) = &key
             {
@@ -391,6 +408,12 @@ fn config_steps(topic: &str) -> Vec<Step> {
             .note(tr!(
                 "Open certlm.msc as an administrator (or certmgr.msc) → Trusted Publishers → Certificates and delete the ones you do not need; their programs then show the usual prompt again."
             ))],
+        "bits_download_program" | "bits_recent_download" => vec![Step::new(tr!("Find out which program created the job"))
+            .command("Get-BitsTransfer -AllUsers | Format-List DisplayName, JobId, OwnerAccount, JobState, FileList")
+            .note(tr!(
+                "If nothing you use explains it, cancel the job with Remove-BitsTransfer and scan the downloaded file with Microsoft Defender."
+            ))
+            .admin(true)],
         "amsi_disabled" => vec![Step::new(tr!("Turn script scanning back on"))
             .note(tr!(
                 "Delete the AmsiEnable value shown here with regedit (or set it to 1), then run a full Microsoft Defender scan."

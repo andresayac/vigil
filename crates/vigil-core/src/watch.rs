@@ -79,6 +79,13 @@ pub const PAUSE_MS: i64 = 60 * 60 * 1000;
 const MAX_TASKS: usize = 5000;
 /// A listening port counts as closed after this many checks in a row without it.
 pub const PORT_GRACE: u32 = 5;
+/// How long an item that disappeared from a section read by the watch is still remembered: one
+/// that comes back within this time is not news (a service its own permissions hide from the
+/// listing now and then, a driver or task briefly unreadable). After it, the item is forgotten
+/// and a return is reported as new.
+pub const ABSENT_GRACE_MS: i64 = 7 * 24 * 60 * 60 * 1000;
+/// BITS jobs are read at most this often, and only while the BITS service already runs.
+pub const BITS_EVERY_MS: i64 = 5 * 60 * 1000;
 /// The fingerprint's format. 2: Run keys set by policy are read (entries found there by the first
 /// check of a newer Vigil are not news). 3: hook values, drivers, the hosts file and log marks
 /// (new sections: the first check that reads them only records them).
@@ -166,7 +173,7 @@ impl WatchSettings {
             "task" => self.notify_tasks,
             "security" => self.notify_security,
             "port" => self.notify_ports,
-            "hook" | "driver" | "hosts" | "network" => self.notify_hooks,
+            "hook" | "driver" | "hosts" | "network" | "bits" => self.notify_hooks,
             "event" => self.notify_events,
             _ => true,
         }
@@ -297,6 +304,24 @@ pub struct Fingerprint {
     /// Logs this check could not read (not saved).
     #[serde(skip)]
     pub logs_hidden: Vec<String>,
+    /// Items missing from a section since that moment (ms), by `section|key` (`hook:<source>|<name>`
+    /// for hook values). They stay in the baseline for [`ABSENT_GRACE_MS`], so one that comes back
+    /// is not reported as new; after that they are dropped from both.
+    pub absent: BTreeMap<String, i64>,
+    /// BITS jobs that run a program when they finish (job id -> job); `None` when not read.
+    pub bits: Option<BTreeMap<String, BitsPrint>>,
+    /// When the BITS jobs were last read (ms), so they are read at most every [`BITS_EVERY_MS`].
+    pub bits_read: i64,
+}
+
+/// A BITS job with a notify command line: the program BITS runs when the job finishes or fails.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct BitsPrint {
+    pub name: String,
+    pub program: String,
+    pub parameters: String,
+    pub owner: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -538,7 +563,51 @@ pub fn diff(old: &Fingerprint, new: &Fingerprint) -> Vec<Alert> {
     if let (Some(old), Some(new)) = (&old.network, &new.network) {
         out.extend(network_alerts(old, new));
     }
+    if let (Some(old), Some(new)) = (&old.bits, &new.bits) {
+        out.extend(bits_alerts(old, new));
+    }
     out.extend(event_alerts(&new.event_hits, old, new));
+    out
+}
+
+/// A new BITS job that runs a program, or a job that now runs another one. Critical when the
+/// program sits in a folder any program can change (the full scan also checks its signature).
+pub fn bits_alerts(old: &BTreeMap<String, BitsPrint>, new: &BTreeMap<String, BitsPrint>) -> Vec<Alert> {
+    let mut out = Vec::new();
+    for (id, job) in new {
+        let severity = if user_writable(&job.program) {
+            "critical"
+        } else {
+            "warning"
+        };
+        let name = if job.name.is_empty() {
+            id.as_str()
+        } else {
+            job.name.as_str()
+        };
+        let runs = if job.parameters.is_empty() {
+            job.program.clone()
+        } else {
+            format!("{} {}", job.program, job.parameters)
+        };
+        match old.get(id) {
+            None => out.push(alert(
+                "bits",
+                severity,
+                "alerts",
+                tr!("New background transfer job runs a program: {0}", name),
+                tr!("BITS runs {0} when job {1} finishes or fails.", runs, id),
+            )),
+            Some(before) if !before.program.eq_ignore_ascii_case(&job.program) => out.push(alert(
+                "bits",
+                severity,
+                "alerts",
+                tr!("Background transfer job now runs another program: {0}", name),
+                tr!("{0} (was {1})", runs, before.program),
+            )),
+            Some(_) => {}
+        }
+    }
     out
 }
 
@@ -606,8 +675,42 @@ fn security_text(switch: &str) -> Option<(&'static str, String, String)> {
 
 /// The next baseline: each section read now replaces the old one; a section not read keeps it.
 /// A security switch that could not be read keeps its last value; a port that disappeared stays
-/// for [`PORT_GRACE`] checks, so a listener that comes back is not news.
+/// for [`PORT_GRACE`] checks, so a listener that comes back is not news; any other item that
+/// disappeared stays for [`ABSENT_GRACE_MS`] (see [`kept`]).
 pub fn merged(old: &Fingerprint, new: Fingerprint) -> Fingerprint {
+    merged_at(old, new, now_ms())
+}
+
+/// `new` plus the items of `old` missing from it for less than [`ABSENT_GRACE_MS`] (`section`
+/// names them in `absent`). Only called for a section read now: `absent` loses that section's
+/// old entries and gets the ones still within the grace period.
+fn kept<V: Clone>(
+    section: &str,
+    old: Option<&BTreeMap<String, V>>,
+    mut new: BTreeMap<String, V>,
+    before: &BTreeMap<String, i64>,
+    absent: &mut BTreeMap<String, i64>,
+    now: i64,
+) -> BTreeMap<String, V> {
+    let prefix = format!("{section}|");
+    absent.retain(|key, _| !key.starts_with(&prefix));
+    for (key, value) in old.into_iter().flatten() {
+        if new.contains_key(key) {
+            continue;
+        }
+        let id = format!("{prefix}{key}");
+        // A time in the future (the clock was set back) counts from now.
+        let since = before.get(&id).copied().filter(|since| *since <= now).unwrap_or(now);
+        if now - since < ABSENT_GRACE_MS {
+            new.insert(key.clone(), value.clone());
+            absent.insert(id, since);
+        }
+    }
+    new
+}
+
+/// [`merged`] at a given time (ms since 1970).
+pub fn merged_at(old: &Fingerprint, new: Fingerprint, now: i64) -> Fingerprint {
     let security = match (&old.security, new.security) {
         (Some(before), Some(now)) => {
             let mut all = before.clone();
@@ -634,9 +737,49 @@ pub fn merged(old: &Fingerprint, new: Fingerprint) -> Fingerprint {
         }
         None => (old.ports.clone(), old.ports_absent.clone()),
     };
-    // A hook source read now replaces the old one; one not read keeps it.
+    let mut absent = old.absent.clone();
+    let startup = kept_or(
+        "startup",
+        old.startup.as_ref(),
+        new.startup,
+        &old.absent,
+        &mut absent,
+        now,
+    );
+    let services = kept_or(
+        "service",
+        old.services.as_ref(),
+        new.services,
+        &old.absent,
+        &mut absent,
+        now,
+    );
+    let tasks = kept_or("task", old.tasks.as_ref(), new.tasks, &old.absent, &mut absent, now);
+    let task_files = kept_or(
+        "taskfile",
+        old.task_files.as_ref(),
+        new.task_files,
+        &old.absent,
+        &mut absent,
+        now,
+    );
+    let drivers = kept_or(
+        "driver",
+        old.drivers.as_ref(),
+        new.drivers,
+        &old.absent,
+        &mut absent,
+        now,
+    );
+    let bits = kept_or("bits", old.bits.as_ref(), new.bits, &old.absent, &mut absent, now);
+    // A hook source read now replaces the old one (keeping values missing for less than the grace
+    // period); one not read keeps it.
     let mut hooks = old.hooks.clone();
-    hooks.extend(new.hooks);
+    for (source, values) in new.hooks {
+        let section = format!("hook:{source}");
+        let values = kept(&section, old.hooks.get(&source), values, &old.absent, &mut absent, now);
+        hooks.insert(source, values);
+    }
     let mut events = old.events.clone();
     events.extend(new.events);
     let mut wmi_seen = old.wmi_seen.clone();
@@ -649,22 +792,40 @@ pub fn merged(old: &Fingerprint, new: Fingerprint) -> Fingerprint {
     let excess = wmi_seen.len().saturating_sub(MAX_WMI_SEEN);
     wmi_seen.drain(..excess);
     Fingerprint {
-        startup: new.startup.or_else(|| old.startup.clone()),
-        services: new.services.or_else(|| old.services.clone()),
-        tasks: new.tasks.or_else(|| old.tasks.clone()),
-        task_files: new.task_files.or_else(|| old.task_files.clone()),
+        startup,
+        services,
+        tasks,
+        task_files,
         security,
         ports,
         ports_absent,
         version: FINGERPRINT_VERSION,
         hooks,
-        drivers: new.drivers.or_else(|| old.drivers.clone()),
+        drivers,
         hosts: new.hosts.or_else(|| old.hosts.clone()),
         network: new.network.or_else(|| old.network.clone()),
         events,
         wmi_seen,
         event_hits: Vec::new(),
         logs_hidden: Vec::new(),
+        absent,
+        bits,
+        bits_read: old.bits_read.max(new.bits_read),
+    }
+}
+
+/// [`kept`] for a section read now (`Some`), the old section otherwise.
+fn kept_or<V: Clone>(
+    section: &str,
+    old: Option<&BTreeMap<String, V>>,
+    new: Option<BTreeMap<String, V>>,
+    before: &BTreeMap<String, i64>,
+    absent: &mut BTreeMap<String, i64>,
+    now: i64,
+) -> Option<BTreeMap<String, V>> {
+    match new {
+        Some(map) => Some(kept(section, old, map, before, absent, now)),
+        None => old.cloned(),
     }
 }
 
@@ -682,6 +843,7 @@ pub fn read_fingerprint(elevated: bool, previous: &Fingerprint) -> Fingerprint {
         (None, None)
     };
     let (events, event_hits, logs_hidden) = read_events(&WindowsLogs, &previous.events, now_ms());
+    let (bits, bits_read) = read_bits(elevated, previous.bits_read, now_ms());
     Fingerprint {
         startup: startup_print(),
         services: vigil_sys::services::list_light().ok().map(|list| service_print(&list)),
@@ -699,7 +861,39 @@ pub fn read_fingerprint(elevated: bool, previous: &Fingerprint) -> Fingerprint {
         wmi_seen: Vec::new(),
         event_hits,
         logs_hidden,
+        absent: BTreeMap::new(),
+        bits,
+        bits_read,
     }
+}
+
+/// The BITS jobs that run a program, every [`BITS_EVERY_MS`] and only while the BITS service
+/// already runs (creating the BITS object would start it). `None` when not read this time.
+fn read_bits(elevated: bool, last: i64, now: i64) -> (Option<BTreeMap<String, BitsPrint>>, i64) {
+    if (0..BITS_EVERY_MS).contains(&(now - last)) || vigil_sys::bits::service_running() != Some(true) {
+        return (None, last);
+    }
+    match vigil_sys::bits::list(elevated) {
+        Ok(found) => (Some(bits_print(&found.jobs)), now),
+        Err(_) => (None, last),
+    }
+}
+
+pub fn bits_print(jobs: &[vigil_sys::bits::BitsJob]) -> BTreeMap<String, BitsPrint> {
+    jobs.iter()
+        .filter(|job| !job.notify_program.is_empty())
+        .map(|job| {
+            (
+                job.id.clone(),
+                BitsPrint {
+                    name: job.name.clone(),
+                    program: job.notify_program.clone(),
+                    parameters: job.notify_parameters.clone(),
+                    owner: job.owner.clone(),
+                },
+            )
+        })
+        .collect()
 }
 
 /// The startup entries; `None` when a key or folder could not be read completely.
@@ -3087,6 +3281,194 @@ mod tests {
         // The clock was set back by hours: the pause does not last that long.
         assert!(!file.notifications_paused(5_000 - PAUSE_MS - 1));
     }
+
+    const HOUR: i64 = 60 * 60 * 1000;
+
+    fn without_service(base: &Fingerprint, name: &str) -> Fingerprint {
+        let mut next = base.clone();
+        if let Some(services) = next.services.as_mut() {
+            services.remove(name);
+        }
+        next
+    }
+
+    #[test]
+    fn a_service_that_hides_now_and_then_is_not_new_again() {
+        vigil_i18n::with_language("en", || {
+            let start = 1_700_000_000_000;
+            let mut base = baseline();
+            base.services
+                .as_mut()
+                .expect("services")
+                .insert("ztdnshelper".into(), service("ZTDNS Helper service", "demand", ""));
+            // Hidden from the listing for three hours, then listed again.
+            let hidden = without_service(&base, "ztdnshelper");
+            assert!(diff(&base, &hidden).is_empty());
+            let mut kept_base = merged_at(&base, hidden.clone(), start);
+            assert!(
+                kept_base
+                    .services
+                    .as_ref()
+                    .is_some_and(|s| s.contains_key("ztdnshelper"))
+            );
+            assert_eq!(kept_base.absent.get("service|ztdnshelper"), Some(&start));
+            kept_base = merged_at(&kept_base, hidden, start + 3 * HOUR);
+            assert_eq!(
+                kept_base.absent.get("service|ztdnshelper"),
+                Some(&start),
+                "first missing time is kept"
+            );
+            assert!(diff(&kept_base, &base).is_empty(), "it came back: not news");
+            let back = merged_at(&kept_base, base.clone(), start + 3 * HOUR);
+            assert!(back.absent.is_empty(), "present again: nothing pending");
+        });
+    }
+
+    #[test]
+    fn an_item_gone_longer_than_the_grace_period_is_new_again() {
+        vigil_i18n::with_language("en", || {
+            let start = 1_700_000_000_000;
+            let base = baseline();
+            let gone = without_service(&base, "updatersvc");
+            let mut next = merged_at(&base, gone.clone(), start);
+            next = merged_at(&next, gone.clone(), start + ABSENT_GRACE_MS - 1);
+            assert!(next.services.as_ref().is_some_and(|s| s.contains_key("updatersvc")));
+            next = merged_at(&next, gone, start + ABSENT_GRACE_MS);
+            assert!(
+                next.services.as_ref().is_some_and(|s| !s.contains_key("updatersvc")),
+                "forgotten after the grace period"
+            );
+            assert!(next.absent.is_empty(), "and pruned");
+            assert_eq!(
+                kinds(&diff(&next, &base)),
+                [("service".to_string(), "New service: Example Updater".to_string())]
+            );
+        });
+    }
+
+    #[test]
+    fn a_present_item_that_changes_is_still_reported() {
+        vigil_i18n::with_language("en", || {
+            let start = 1_700_000_000_000;
+            let base = baseline();
+            let next = merged_at(&base, without_service(&base, "updatersvc"), start);
+            let mut changed = base.clone();
+            changed.services.as_mut().expect("services").insert(
+                "updatersvc".into(),
+                service("Example Updater", "demand", r"C:\Users\Public\svc.exe"),
+            );
+            assert_eq!(
+                kinds(&diff(&next, &changed)),
+                [(
+                    "service".to_string(),
+                    "Service program changed: Example Updater".to_string()
+                )]
+            );
+        });
+    }
+
+    #[test]
+    fn grace_covers_tasks_drivers_startup_and_hook_values() {
+        let start = 1_700_000_000_000;
+        let mut base = baseline();
+        base.tasks = Some(BTreeMap::from([(r"\sync".into(), r"\Sync".into())]));
+        base.drivers = Some(BTreeMap::from([("contosoflt".into(), DriverPrint::default())]));
+        base.hooks = BTreeMap::from([(
+            "ifeo".to_string(),
+            BTreeMap::from([("sethc.exe".to_string(), r"C:\Windows\System32\cmd.exe".to_string())]),
+        )]);
+        let mut missing = base.clone();
+        missing.tasks = Some(BTreeMap::new());
+        missing.drivers = Some(BTreeMap::new());
+        missing.startup.as_mut().expect("startup").remove("reg:a");
+        missing.hooks = BTreeMap::from([("ifeo".to_string(), BTreeMap::new())]);
+        let next = merged_at(&base, missing, start);
+        assert!(next.tasks.as_ref().is_some_and(|t| t.contains_key(r"\sync")));
+        assert!(next.drivers.as_ref().is_some_and(|d| d.contains_key("contosoflt")));
+        assert!(next.startup.as_ref().is_some_and(|s| s.contains_key("reg:a")));
+        assert!(next.hooks["ifeo"].contains_key("sethc.exe"));
+        let keys: Vec<&str> = next.absent.keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            [
+                "driver|contosoflt",
+                "hook:ifeo|sethc.exe",
+                "startup|reg:a",
+                r"task|\sync"
+            ]
+        );
+        // A section not read this time keeps its pending entries.
+        let mut unread = base.clone();
+        unread.tasks = None;
+        let later = merged_at(&next, unread, start + HOUR);
+        assert_eq!(later.absent.get(r"task|\sync"), Some(&start));
+    }
+
+    #[test]
+    fn older_watch_files_load_and_stay_quiet() {
+        // A file saved before items were remembered: no `absent`, no `bits`.
+        let old: Fingerprint = serde_json::from_str(
+            r#"{"services": {"svc": {"display": "Svc", "start": "auto", "path": ""}}, "version": 3}"#,
+        )
+        .expect("old fingerprint");
+        assert!(old.absent.is_empty() && old.bits.is_none() && old.bits_read == 0);
+        let mut now = old.clone();
+        now.bits = Some(BTreeMap::from([(
+            "{1}".to_string(),
+            BitsPrint {
+                name: "x".into(),
+                program: r"C:\Users\Public\run.exe".into(),
+                ..BitsPrint::default()
+            },
+        )]));
+        assert!(diff(&old, &now).is_empty(), "the first BITS read is a baseline");
+    }
+
+    #[test]
+    fn bits_jobs_that_run_programs_raise_alerts() {
+        vigil_i18n::with_language("en", || {
+            let job = |program: &str| BitsPrint {
+                name: "Contoso sync".into(),
+                program: program.into(),
+                parameters: "--quiet".into(),
+                owner: "S-1-5-21-1-2-3-1001".into(),
+            };
+            let old = BTreeMap::new();
+            let writable = BTreeMap::from([("{A}".to_string(), job(r"C:\Users\jdoe\AppData\Local\Temp\run.exe"))]);
+            let alerts = bits_alerts(&old, &writable);
+            assert_eq!(alerts.len(), 1);
+            assert_eq!(
+                (alerts[0].kind.as_str(), alerts[0].severity.as_str()),
+                ("bits", "critical")
+            );
+            let program_files = BTreeMap::from([("{A}".to_string(), job(r"C:\Program Files\Contoso\notify.exe"))]);
+            assert_eq!(bits_alerts(&old, &program_files)[0].severity, "warning");
+            assert!(bits_alerts(&program_files, &program_files).is_empty());
+            let swapped = bits_alerts(&program_files, &writable);
+            assert_eq!(
+                swapped[0].title,
+                "Background transfer job now runs another program: Contoso sync"
+            );
+            assert!(WatchSettings::default().notifies("bits"));
+        });
+    }
+
+    #[test]
+    fn bits_print_keeps_only_jobs_with_a_program() {
+        let jobs = vec![
+            vigil_sys::bits::BitsJob {
+                id: "{A}".into(),
+                notify_program: r"C:\Users\Public\run.exe".into(),
+                ..vigil_sys::bits::BitsJob::default()
+            },
+            vigil_sys::bits::BitsJob {
+                id: "{B}".into(),
+                ..vigil_sys::bits::BitsJob::default()
+            },
+        ];
+        let print = bits_print(&jobs);
+        assert_eq!(print.keys().collect::<Vec<_>>(), ["{A}"]);
+    }
 }
 
 #[cfg(test)]
@@ -3117,6 +3499,14 @@ mod live {
             previous.hosts.as_ref().map(|h| h.redirects.len()),
             previous.events.len(),
             read_fingerprint(false, &previous).logs_hidden,
+        );
+        let start = Instant::now();
+        let running = vigil_sys::bits::service_running();
+        let status = start.elapsed();
+        println!(
+            "bits: service running {running:?} ({status:?}); jobs with a program {:?}; absent pending {}",
+            previous.bits.as_ref().map(BTreeMap::len),
+            previous.absent.len()
         );
     }
 }

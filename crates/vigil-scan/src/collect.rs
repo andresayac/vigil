@@ -1267,6 +1267,7 @@ pub(crate) fn collect_sysconfig() -> Value {
     cfg.insert("remote_agents".into(), crate::rmm::collect_config());
     cfg.insert(crate::certs::SECTION.into(), crate::certs::collect());
     cfg.insert(crate::amsi::SECTION.into(), crate::amsi::collect_config());
+    cfg.insert(crate::bits::SECTION.into(), crate::bits::collect(is_admin()));
     Value::Object(cfg)
 }
 
@@ -1287,6 +1288,8 @@ pub(crate) fn collect_signatures(
     if unique.is_empty() {
         return Ok(Map::new());
     }
+    // One PowerShell per 40 files, at most 4: measured on a 16-thread machine, 8 instances were
+    // slower than 4 (catalog lookups contend), so the cache, not more instances, is what helps.
     let workers = (unique.len() / 40 + 1).clamp(1, 4);
     let chunks: Vec<Vec<&String>> = (0..workers)
         .map(|i| unique.iter().skip(i).step_by(workers).copied().collect())
@@ -1600,6 +1603,7 @@ pub(crate) fn collect_all(workdir: &Path, days: u32, progress: &dyn Fn(&str), ca
         notes.extend(list(config.at(crate::svcsec::SECTION).at("notes")).iter().cloned());
         notes.extend(list(config.at(crate::secrets::SECTION).at("notes")).iter().cloned());
         notes.extend(list(config.at(crate::certs::SECTION).at("notes")).iter().cloned());
+        notes.extend(list(config.at(crate::bits::SECTION).at("notes")).iter().cloned());
         if truthy(config.at("com_classes").at("capped")) {
             notes.push(json!({
                 "area": tr!("COM classes"),

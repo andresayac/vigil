@@ -1214,3 +1214,35 @@ fn services_standard_users_can_take_over() {
     assert_eq!(safe.len(), 1);
     assert_eq!(safe[0].score, 0, "an unquoted path nobody can use is information only");
 }
+
+#[test]
+fn bits_jobs_are_judged() {
+    let mut files = serde_json::Map::new();
+    files.insert(r"c:\users\jdoe\appdata\local\temp\run.exe".into(), unsigned_file());
+    let raw = mini(json!({
+        "files": files,
+        "sysconfig": {"bits": {"all_users": true, "transfers": [], "jobs": [
+            {"id": "{11111111-2222-3333-4444-555555555555}", "name": "Contoso helper", "owner": "S-1-5-21-1-2-3-1001",
+             "state": "transferred", "kind": "download", "created": 1_700_000_000_000_i64, "file_count": 1,
+             "files": [{"remote": "http://203.0.113.5/p.exe", "local": r"C:\Users\jdoe\AppData\Local\Temp\p.exe"}],
+             "notify_program": r"C:\Users\jdoe\AppData\Local\Temp\run.exe", "notify_parameters": "--quiet"},
+            {"id": "{66666666-2222-3333-4444-555555555555}", "name": "Windows Update", "owner": "S-1-5-18",
+             "state": "transferring", "kind": "download", "created": 1_700_000_000_000_i64, "file_count": 1,
+             "files": [{"remote": "http://au.download.windowsupdate.com/u.exe",
+                        "local": r"C:\Windows\SoftwareDistribution\Download\u.exe"}],
+             "notify_program": "", "notify_parameters": ""},
+        ]}},
+    }));
+    let analysis = run_analysis(&raw, false);
+    let notify = with_flag(&analysis, "bits_notify");
+    assert_eq!(notify.len(), 1, "the job's notify program becomes a judged item");
+    assert!(
+        notify[0]
+            .path
+            .as_deref()
+            .is_some_and(|p| p.to_lowercase().ends_with(r"\temp\run.exe"))
+    );
+    let downloads = with_flag(&analysis, "bits_download_program");
+    assert_eq!(downloads.len(), 1, "only the non-Windows job is reported");
+    assert!(downloads[0].score >= 50, "a program from a bare IP into a user folder");
+}

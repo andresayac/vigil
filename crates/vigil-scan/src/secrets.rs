@@ -1702,12 +1702,33 @@ mod tests {
             to_ai.contains("unattend.xml"),
             "the secret findings do reach the AI, without values"
         );
+        let exports = exports_of(&analysis);
+        assert!(
+            exports[0].contains("unattend.xml"),
+            "the CSV export lists the findings: {}",
+            exports[0]
+        );
         for fake in fakes() {
             assert!(!json_report.contains(fake), "report JSON holds {fake}");
             assert!(!html.contains(fake), "report HTML holds {fake}");
             assert!(!to_ai.contains(fake), "AI payload holds {fake}");
             assert!(!saved.contains(fake), "sent-to-ai file holds {fake}");
+            for export in &exports {
+                assert!(!export.contains(fake), "an export holds {fake}");
+            }
         }
+    }
+
+    /// The CSV and SARIF exports of every finding, trusted ones included.
+    fn exports_of(analysis: &crate::model::Analysis) -> Vec<String> {
+        let options = crate::export::Options {
+            anonymize: false,
+            include_trusted: true,
+        };
+        [crate::export::Format::Csv, crate::export::Format::Sarif]
+            .into_iter()
+            .map(|format| String::from_utf8(crate::export::render(analysis, format, options)).unwrap_or_default())
+            .collect()
     }
 
     /// A risky PowerShell history line and a flagged profile become findings with an excerpt; the
@@ -1755,10 +1776,19 @@ mod tests {
         );
         let _ = crate::ai::ai_analyze(&mut analysis, &provider, true, &|_| {}, None);
         let to_ai = sent.lock().map(|s| s.clone()).unwrap_or_default();
+        let exports = exports_of(&analysis);
+        assert!(
+            exports[0].contains("DownloadString"),
+            "the CSV export keeps the excerpts: {}",
+            exports[0]
+        );
         for fake in [FAKE_PASSWORD, FAKE_GEMINI, FAKE_AWS] {
             assert!(!json_report.contains(fake), "report JSON holds {fake}");
             assert!(!html.contains(fake), "report HTML holds {fake}");
             assert!(!to_ai.contains(fake), "AI payload holds {fake}");
+            for export in &exports {
+                assert!(!export.contains(fake), "an export holds {fake}");
+            }
         }
     }
 
