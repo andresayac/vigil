@@ -592,6 +592,7 @@ impl Render for FirewallPage {
             .children(self.acting.bar("fw-result", &tk))
             .child(cards)
             .child(chips)
+            .child(grid::sort_row(&self.table, cx))
             .child(
                 grid::frame(&tk)
                     .min_h(px(160.))

@@ -406,6 +406,7 @@ impl Render for NetworkPage {
                     ),
             )
             .children(self.acting.bar("net-result", &tk))
+            .child(grid::sort_row(&self.table, cx))
             .child(grid::frame(&tk).child(grid::table(&self.table, t("page.network"))))
             .child(footer)
     }

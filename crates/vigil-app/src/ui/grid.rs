@@ -5,15 +5,20 @@
 
 use std::cmp::Ordering;
 use std::ops::Range;
+use std::rc::Rc;
 use std::sync::Arc;
 
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::table::{Column, ColumnSort, TableDelegate, TableState};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    App, ClickEvent, Context, Div, FontWeight, Hsla, Image, InteractiveElement, IntoElement, KeyBinding, ObjectFit,
-    ParentElement, SharedString, Stateful, StatefulInteractiveElement, Styled, StyledImage, Window, div, img, px,
+    AnyElement, App, ClickEvent, Context, Div, Entity, FontWeight, Hsla, Image, InteractiveElement, IntoElement,
+    KeyBinding, ObjectFit, ParentElement, SharedString, Stateful, StatefulInteractiveElement, Styled, StyledImage,
+    Window, div, img, px,
 };
 
+use crate::i18n::{t, tf};
+use crate::icons;
 use crate::theme::{FONT_DISPLAY, FONT_MONO, tokens};
 
 pub const KEY_CONTEXT: &str = "VigilList";
@@ -71,6 +76,8 @@ pub struct GridCol {
     pub title: String,
     pub width: f32,
     pub numeric: bool,
+    /// The column holds dates: it sorts newest first.
+    pub date: bool,
 }
 
 impl GridCol {
@@ -80,12 +87,46 @@ impl GridCol {
             title,
             width,
             numeric: false,
+            date: false,
         }
     }
 
     pub fn numeric(mut self) -> Self {
         self.numeric = true;
         self
+    }
+
+    /// Dates: the cells are `GridCell::date`, and the column sorts newest first.
+    pub fn date(mut self) -> Self {
+        self.date = true;
+        self
+    }
+
+    /// What the column's order is called in the sort menu.
+    pub fn kind(&self) -> SortKind {
+        if self.date {
+            SortKind::Date
+        } else if self.numeric {
+            SortKind::Number
+        } else {
+            SortKind::Text
+        }
+    }
+}
+
+/// What a column holds, for its sort: numbers and dates sort largest (newest) first at first, text
+/// from A to Z.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SortKind {
+    Text,
+    Number,
+    Date,
+}
+
+impl SortKind {
+    /// The first order of a click on the header: largest or newest first, or A to Z.
+    pub fn descending_first(self) -> bool {
+        self != SortKind::Text
     }
 }
 
@@ -129,6 +170,14 @@ impl GridCell {
         Self {
             sort: SortKey::Num(value),
             ..Self::text(text)
+        }
+    }
+
+    /// A date (ISO 8601 from the service) shown in the language's way and sorted by time.
+    pub fn date(iso: &str) -> Self {
+        Self {
+            sort: SortKey::Text(iso.trim().to_string()),
+            ..Self::text(crate::pages::common::when(iso))
         }
     }
 
@@ -342,26 +391,39 @@ impl TableDelegate for Grid {
         if col.numeric { column.text_right() } else { column }
     }
 
-    fn perform_sort(&mut self, col_ix: usize, sort: ColumnSort, _: &mut Window, _: &mut Context<TableState<Self>>) {
-        self.sort = match sort {
-            ColumnSort::Ascending => Some((col_ix, false)),
-            ColumnSort::Descending => Some((col_ix, true)),
-            ColumnSort::Default => None,
-        };
+    fn perform_sort(&mut self, col_ix: usize, _: ColumnSort, _: &mut Window, _: &mut Context<TableState<Self>>) {
+        let first = self.cols.get(col_ix).is_some_and(|c| c.kind().descending_first());
+        self.sort = next_sort(self.sort, col_ix, first);
         self.rebuild();
     }
 
     fn render_th(&mut self, col_ix: usize, _: &mut Window, cx: &mut Context<TableState<Self>>) -> impl IntoElement {
         let tk = *tokens(cx);
-        let sorted = self.sort.is_some_and(|(c, _)| c == col_ix);
+        let col = &self.cols[col_ix];
+        let dir = self
+            .sort
+            .filter(|(c, _)| *c == col_ix)
+            .map(|(_, descending)| descending);
+        let arrow = |d: Option<bool>| d.map(|descending| sort_arrow(descending, tk.accent));
         div()
             .w_full()
             .px_2()
+            .flex()
+            .items_center()
+            .gap_1()
+            .when(col.numeric, |this| this.justify_end())
             .text_size(px(12.))
-            .text_color(if sorted { tk.ink } else { tk.ink2 })
-            .overflow_hidden()
-            .text_ellipsis()
-            .child(self.cols[col_ix].title.clone())
+            .text_color(if dir.is_some() { tk.ink } else { tk.ink2 })
+            .when(dir.is_some(), |this| this.font_weight(FontWeight::SEMIBOLD))
+            .when(col.numeric, |this| this.children(arrow(dir)))
+            .child(
+                div()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .child(col.title.clone()),
+            )
+            .when(!col.numeric, |this| this.children(arrow(dir)))
     }
 
     fn render_tr(&mut self, row_ix: usize, _: &mut Window, cx: &mut Context<TableState<Self>>) -> Stateful<Div> {
@@ -469,6 +531,116 @@ pub fn table(state: &gpui_kit::Entity<TableState<Grid>>, name: impl Into<SharedS
         // scrollbar that only appears while scrolling hides them).
         .scrollbar_mode(gpui_kit::component::scroll::ScrollbarMode::Always)
         .accessibility_label(name)
+}
+
+/// The arrow a sorted column shows: down when it is largest (or Z) first.
+pub fn sort_arrow(descending: bool, color: Hsla) -> Div {
+    icons::icon(
+        if descending { icons::ARROW_DOWN } else { icons::ARROW_UP },
+        10.0,
+        color,
+    )
+}
+
+/// The order after a click on a column header, from the order the table shows (the sort menu can
+/// change it too): first the natural one (`first`: largest or newest first for numbers and dates,
+/// A to Z for text), then the other way, then the original order.
+pub fn next_sort(current: Option<(usize, bool)>, col: usize, first: bool) -> Option<(usize, bool)> {
+    match current {
+        Some((c, descending)) if c == col && descending == first => Some((col, !first)),
+        Some((c, _)) if c == col => None,
+        _ => Some((col, first)),
+    }
+}
+
+/// What an order is called: largest first or smallest first for numbers, A to Z or Z to A for text.
+fn order_name(kind: SortKind, descending: bool) -> String {
+    t(match (kind, descending) {
+        (SortKind::Number, true) => "grid.largestFirst",
+        (SortKind::Number, false) => "grid.smallestFirst",
+        (SortKind::Date, true) => "grid.newestFirst",
+        (SortKind::Date, false) => "grid.oldestFirst",
+        (SortKind::Text, false) => "grid.aToZ",
+        (SortKind::Text, true) => "grid.zToA",
+    })
+}
+
+/// A column of a sort menu: its index, title and what it holds.
+pub type SortCol = (usize, String, SortKind);
+
+/// The label of the sort menu: "Sort by", or the column and the way it is sorted.
+pub fn sort_label(cols: &[SortCol], current: Option<(usize, bool)>) -> String {
+    current
+        .and_then(|(col, desc)| cols.iter().find(|(c, _, _)| *c == col).map(|c| (c, desc)))
+        .map(|((_, title, kind), desc)| {
+            tf(
+                "grid.sortedBy",
+                &[("column", title), ("order", &order_name(*kind, desc))],
+            )
+        })
+        .unwrap_or_else(|| t("grid.sortBy"))
+}
+
+/// What a sort menu does with the order picked: a column and largest (or Z) first, or none.
+pub type PickSort = Rc<dyn Fn(Option<(usize, bool)>, &mut App)>;
+
+/// The items of a sort menu: each column both ways (its natural order first), then the original
+/// order.
+pub fn sort_items(mut menu: PopupMenu, cols: &[SortCol], current: Option<(usize, bool)>, pick: PickSort) -> PopupMenu {
+    for (col, title, kind) in cols.iter().cloned() {
+        let first = kind.descending_first();
+        for descending in [first, !first] {
+            let pick = pick.clone();
+            menu = menu.item(
+                PopupMenuItem::new(format!("{title} · {}", order_name(kind, descending)))
+                    .checked(current == Some((col, descending)))
+                    .on_click(move |_, _, cx| pick(Some((col, descending)), cx)),
+            );
+        }
+    }
+    menu.separator().item(
+        PopupMenuItem::new(t("grid.sortNone"))
+            .checked(current.is_none())
+            .on_click(move |_, _, cx| pick(None, cx)),
+    )
+}
+
+/// "Sort by", over a table: the column and the way it is sorted, as a menu, so the order can be
+/// chosen without knowing that a column header sorts too.
+pub fn sort_row(state: &Entity<TableState<Grid>>, cx: &App) -> AnyElement {
+    let grid = state.read(cx).delegate();
+    let current = grid.sort;
+    let cols: Vec<SortCol> = grid
+        .cols
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| !c.title.trim().is_empty())
+        .map(|(i, c)| (i, c.title.clone(), c.kind()))
+        .collect();
+    let label = sort_label(&cols, current);
+    let weak = state.downgrade();
+    let pick: PickSort = Rc::new(move |sort, cx| {
+        let _ = weak.update(cx, |table, cx| {
+            let grid = table.delegate_mut();
+            grid.sort = sort;
+            grid.rebuild();
+            cx.notify();
+        });
+    });
+    div()
+        .flex()
+        .justify_end()
+        .child(
+            crate::ui::FButton::new("grid-sort", crate::ui::Kind::Subtle)
+                .glyph(icons::SORT)
+                .label(label)
+                .accessible_name(t("grid.sortBy"))
+                .chevron()
+                .h(px(28.))
+                .text_size(px(13.))
+                .dropdown_menu(move |menu, _, _| sort_items(menu, &cols, current, pick.clone())),
+        )
+        .into_any_element()
 }
 
 /// The rounded card around a table.
@@ -615,5 +787,19 @@ mod tests {
         assert_eq!(grid.step(1), Some(1));
         grid.set_filter("other");
         assert_eq!(grid.row_count(), 1, "a heading without matching rows is hidden");
+    }
+
+    #[test]
+    fn a_header_click_sorts_numbers_largest_first_and_text_a_to_z() {
+        // Numbers: largest first, then smallest first, then the original order.
+        assert_eq!(next_sort(None, 2, true), Some((2, true)));
+        assert_eq!(next_sort(Some((2, true)), 2, true), Some((2, false)));
+        assert_eq!(next_sort(Some((2, false)), 2, true), None);
+        // Text: A to Z, then Z to A, then the original order.
+        assert_eq!(next_sort(None, 0, false), Some((0, false)));
+        assert_eq!(next_sort(Some((0, false)), 0, false), Some((0, true)));
+        assert_eq!(next_sort(Some((0, true)), 0, false), None);
+        // Another column starts over with its natural order.
+        assert_eq!(next_sort(Some((0, true)), 2, true), Some((2, true)));
     }
 }

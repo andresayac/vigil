@@ -879,6 +879,7 @@ impl Render for ExtensionsPage {
                     .min_h_0()
                     .flex()
                     .gap_3()
+                    .child(grid::sort_row(&table, cx))
                     .child(grid::frame(&tk).child(grid::table(&table, t("page.extensions"))))
                     .when_some(pane, |this, pane| {
                         this.child(

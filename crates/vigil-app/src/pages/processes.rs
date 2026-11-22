@@ -8,6 +8,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui_kit::component::input::{InputEvent, InputState};
@@ -184,6 +185,15 @@ const COLS: [Col; 11] = [
     },
 ];
 
+/// What a column holds, for the sort menu: the start time is a date (newest first).
+fn sort_kind(col: &Col) -> grid::SortKind {
+    match (col.key, col.numeric) {
+        ("started", _) => grid::SortKind::Date,
+        (_, true) => grid::SortKind::Number,
+        (_, false) => grid::SortKind::Text,
+    }
+}
+
 /// The table's data: the last sample, the view, the sort and the selection (by process key, so
 /// it follows the process when rows move).
 pub struct ProcTable {
@@ -345,6 +355,16 @@ impl ProcTable {
             twisty,
             values: self.values(&[index]),
         }
+    }
+
+    /// Sorts by a column (or back to the original order), even while the pointer holds the rows.
+    fn set_sort(&mut self, sort: Option<(usize, bool)>) {
+        self.sort = sort;
+        self.ranks = None;
+        let held = self.hold;
+        self.hold = false;
+        self.rebuild();
+        self.hold = held;
     }
 
     /// Rebuilds the visible lines from the last sample, the view, the filter and the sort.
@@ -659,20 +679,13 @@ impl TableDelegate for ProcTable {
     fn perform_sort(
         &mut self,
         col_ix: usize,
-        sort: ColumnSort,
+        _: ColumnSort,
         _window: &mut Window,
         _cx: &mut Context<TableState<Self>>,
     ) {
-        self.sort = match sort {
-            ColumnSort::Ascending => Some((col_ix, false)),
-            ColumnSort::Descending => Some((col_ix, true)),
-            ColumnSort::Default => None,
-        };
-        self.ranks = None;
-        let held = self.hold;
-        self.hold = false;
-        self.rebuild();
-        self.hold = held;
+        // Number columns show the largest first on the first click, as Task Manager does.
+        let first = COLS.get(col_ix).is_some_and(|c| sort_kind(c).descending_first());
+        self.set_sort(grid::next_sort(self.sort, col_ix, first));
     }
 
     /// Two lines over a resource column, as in Task Manager: the computer's total, then the name.
@@ -703,11 +716,18 @@ impl TableDelegate for ProcTable {
             })
             .child(
                 div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
                     .text_size(px(12.))
                     .text_color(if sorted { tk.ink } else { tk.ink2 })
-                    .overflow_hidden()
-                    .text_ellipsis()
-                    .child(t(col.title)),
+                    .when(sorted, |this| this.font_weight(gpui_kit::FontWeight::SEMIBOLD))
+                    .children(
+                        self.sort
+                            .filter(|(c, _)| *c == col_ix)
+                            .map(|(_, descending)| crate::ui::grid::sort_arrow(descending, tk.accent)),
+                    )
+                    .child(div().overflow_hidden().text_ellipsis().child(t(col.title))),
             )
     }
 
@@ -1353,6 +1373,25 @@ impl ProcessesPage {
                 menu
             })
         };
+        let sort = {
+            let current = self.table.read(cx).delegate().sort;
+            let cols: Vec<grid::SortCol> = COLS
+                .iter()
+                .enumerate()
+                .map(|(i, c)| (i, t(c.title), sort_kind(c)))
+                .collect();
+            let label = grid::sort_label(&cols, current);
+            let table = self.table.downgrade();
+            let pick: grid::PickSort = Rc::new(move |sort, cx| {
+                let _ = table.update(cx, |table, cx| {
+                    table.delegate_mut().set_sort(sort);
+                    cx.notify();
+                });
+            });
+            ui::cmd("proc-sort", icons::SORT, label)
+                .keep()
+                .menu(move |menu, _, _| grid::sort_items(menu, &cols, current, pick.clone()))
+        };
         let weak = cx.entity().downgrade();
         let views = [t("proc.viewGrouped"), t("proc.viewTree"), t("proc.viewList")];
         let views_width = ui::bar::segmented_width(window, &views.iter().map(String::as_str).collect::<Vec<_>>());
@@ -1389,6 +1428,7 @@ impl ProcessesPage {
                 picked.as_ref().is_some_and(|r| !r.exe.is_empty()),
             ))
             .cmd(menu("more", icons::MORE, t("proc.more"), "more", has_row))
+            .cmd(sort)
             .separator()
             .fixed(
                 ui::segmented(

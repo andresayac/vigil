@@ -18,6 +18,9 @@ Each release's full notes are on the repository's Releases page.
 - Findings: findings flagged by the same rule (for example, scheduled tasks hidden from Task Scheduler) are
   grouped above the table, to show them or ignore them together, with Undo.
 - Storage: the space chosen for cleanup and its button lead the Cleanup tab.
+- Tables: **Sort by** over every table (and in the Processes command bar) lists each column both ways; the sorted
+  column shows an arrow. A header click sorts numbers largest first, dates newest first and text from A to Z,
+  then the other way, then back to the original order. History and Quarantine now sort by the date itself.
 
 ## 2.6.0 — 2026-11-22
 

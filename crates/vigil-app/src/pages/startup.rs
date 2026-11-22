@@ -642,6 +642,7 @@ impl Render for StartupPage {
             .child(div().text_size(px(12.)).text_color(tk.ink3).child(t("startup.note")))
             .child(div().text_size(px(12.)).text_color(tk.ink3).child(self.impact_line()))
             .children(self.acting.bar("st-result", &tk))
+            .child(grid::sort_row(&self.table, cx))
             .child(grid::frame(&tk).child(grid::table(&self.table, t("page.startup"))))
             .when_some(current.as_ref(), |this, e| this.child(self.details(e, &tk)))
             .child(

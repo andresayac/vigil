@@ -16,6 +16,9 @@ pub const END_TASK: char = '\u{E733}';
 pub const EFFICIENCY: char = '\u{EC0A}';
 pub const CHEVRON_RIGHT: char = '\u{E76C}';
 pub const CHEVRON_DOWN: char = '\u{E70D}';
+pub const ARROW_UP: char = '\u{E74A}';
+pub const ARROW_DOWN: char = '\u{E74B}';
+pub const SORT: char = '\u{E8CB}';
 pub const INFO: char = '\u{E946}';
 pub const FOLDER: char = '\u{E838}';
 /// Save (exporting findings to a file).

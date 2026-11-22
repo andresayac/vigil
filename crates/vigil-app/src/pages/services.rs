@@ -465,6 +465,7 @@ impl Render for ServicesPage {
                     ),
             )
             .children(self.acting.bar("svc-result", &tk))
+            .child(grid::sort_row(&self.table, cx))
             .child(grid::frame(&tk).child(grid::table(&self.table, t("page.services"))))
             .child(match &current {
                 Some(row) => self.details(row, &tk),

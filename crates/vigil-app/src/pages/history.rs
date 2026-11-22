@@ -15,7 +15,7 @@ use vigil_core::state::AppState;
 
 use crate::i18n::{t, tf};
 use crate::icons;
-use crate::pages::common::{self, Acting, Acts, when};
+use crate::pages::common::{self, Acting, Acts};
 use crate::theme::tokens;
 use crate::ui;
 use crate::ui::grid::{self, Grid, GridCell, GridCol, GridRow};
@@ -67,7 +67,7 @@ fn rows(entries: &[Entry], tk: &crate::theme::Tokens) -> Vec<GridRow> {
             let mut heading = GridRow::new(
                 format!("batch:{batch}"),
                 vec![
-                    GridCell::text(when(&entry.time)),
+                    GridCell::date(&entry.time),
                     GridCell::text(tf("history.removal", &[("item", &entry.item)])),
                     GridCell::text(""),
                     GridCell::text(""),
@@ -103,7 +103,7 @@ fn row(e: &Entry, tk: &crate::theme::Tokens) -> GridRow {
         "—".into()
     };
     let cells = vec![
-        GridCell::text(when(&e.time)),
+        GridCell::date(&e.time),
         GridCell::text(&e.op_label),
         GridCell::text(&e.target),
         result,
@@ -138,7 +138,7 @@ impl Acts for HistoryPage {
 impl HistoryPage {
     pub fn new(core: Option<Arc<AppState>>, elevated: bool, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let cols = vec![
-            GridCol::new("when", t("history.when"), 150.),
+            GridCol::new("when", t("history.when"), 150.).date(),
             GridCol::new("action", t("history.action"), 220.),
             GridCol::new("target", t("history.target"), 300.),
             GridCol::new("result", t("history.result"), 340.),
@@ -263,6 +263,7 @@ impl Render for HistoryPage {
                     ),
             )
             .children(self.acting.bar("h-result", &tk))
+            .child(grid::sort_row(&self.table, cx))
             .child(grid::frame(&tk).child(grid::table(&self.table, t("page.history"))))
     }
 }

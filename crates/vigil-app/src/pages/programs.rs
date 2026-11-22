@@ -123,7 +123,7 @@ impl ProgramsPage {
             GridCol::new("name", t("programs.colName"), 300.),
             GridCol::new("publisher", t("programs.colPublisher"), 200.),
             GridCol::new("version", t("programs.colVersion"), 120.),
-            GridCol::new("installed", t("programs.colInstalled"), 120.),
+            GridCol::new("installed", t("programs.colInstalled"), 120.).date(),
             GridCol::new("size", t("programs.colSize"), 90.).numeric(),
             GridCol::new("scope", t("programs.colScope"), 150.),
         ];
@@ -610,6 +610,7 @@ impl Render for ProgramsPage {
                     .min_h_0()
                     .flex()
                     .gap_3()
+                    .child(grid::sort_row(&self.table, cx))
                     .child(grid::frame(&tk).child(grid::table(&self.table, t("page.programs"))))
                     .when_some(current, |this, p| {
                         this.child(

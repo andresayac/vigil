@@ -15,7 +15,7 @@ use vigil_core::state::{AppState, QuarantineEntry};
 use crate::format::size;
 use crate::i18n::{t, tn};
 use crate::icons;
-use crate::pages::common::{self, Acting, Acts, when};
+use crate::pages::common::{self, Acting, Acts};
 use crate::theme::tokens;
 use crate::ui;
 use crate::ui::grid::{self, Grid, GridCell, GridCol, GridRow};
@@ -47,7 +47,7 @@ impl QuarantinePage {
         let cols = vec![
             GridCol::new("file", t("quarantine.file"), 180.),
             GridCol::new("original", t("quarantine.original"), 340.),
-            GridCol::new("when", t("quarantine.when"), 150.),
+            GridCol::new("when", t("quarantine.when"), 150.).date(),
             GridCol::new("size", t("quarantine.size"), 90.).numeric(),
             GridCol::new("sha256", "SHA-256".into(), 220.),
             GridCol::new("reason", t("quarantine.reason"), 220.),
@@ -97,7 +97,7 @@ impl QuarantinePage {
                 let cells = vec![
                     GridCell::text(&e.name),
                     GridCell::text(&e.original_path),
-                    GridCell::text(when(&e.quarantined_at)).ranked(0.0),
+                    GridCell::date(&e.quarantined_at),
                     GridCell::num(size(e.size as f64, 1), e.size as f64),
                     GridCell::text(&e.sha256).mono(),
                     GridCell::text(&e.reason),
@@ -169,6 +169,7 @@ impl Render for QuarantinePage {
             .children(scheduled.then(|| {
                 ui::info_bar("q-scheduled", ui::Severity::Info, t("quarantine.scheduled"), None, &tk).into_any_element()
             }))
+            .child(grid::sort_row(&self.table, cx))
             .child(grid::frame(&tk).child(grid::table(&self.table, t("page.quarantine"))))
             .child(div().text_size(px(12.)).text_color(tk.ink3).child(tn(
                 "quarantine.count",

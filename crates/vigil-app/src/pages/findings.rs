@@ -1505,6 +1505,7 @@ impl Render for FindingsPage {
                     .flex()
                     .flex_col()
                     .gap_1()
+                    .child(grid::sort_row(&self.table, cx))
                     .child(grid::frame(&tk).child(grid::table(&self.table, t("page.findings"))))
                     .child(kit::faint(
                         tf(

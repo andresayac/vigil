@@ -293,8 +293,8 @@ impl TasksPage {
             GridCol::new("name", t("tasks.colName"), 280.),
             GridCol::new("status", t("tasks.colStatus"), 96.),
             GridCol::new("triggers", t("tasks.colTriggers"), 260.),
-            GridCol::new("next", t("tasks.colNext"), 150.),
-            GridCol::new("last", t("tasks.colLast"), 220.),
+            GridCol::new("next", t("tasks.colNext"), 150.).date(),
+            GridCol::new("last", t("tasks.colLast"), 220.).date(),
             GridCol::new("author", t("tasks.colAuthor"), 150.),
         ];
         let table = grid::new_state(t("tasks.empty"), cols, window, cx);
@@ -729,6 +729,7 @@ impl Render for TasksPage {
                     .min_h_0()
                     .flex()
                     .gap_3()
+                    .child(grid::sort_row(&self.table, cx))
                     .child(grid::frame(&tk).child(grid::table(&self.table, t("page.tasks"))))
                     .when_some(current, |this, task| {
                         this.child(
