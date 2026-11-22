@@ -472,7 +472,7 @@ pub fn usage_bar(fraction: f64, tk: &Tokens) -> Div {
     } else if fraction >= 0.85 {
         tk.warn
     } else {
-        tk.chart_disk
+        tk.chart_cpu
     };
     meter(fraction, color, None, 10., tk)
 }
@@ -677,6 +677,23 @@ pub fn bar_chart(
             this.child(div().flex().child(div().w(px(32.)).flex_none()).child(marks))
         })
         .child(div().flex().child(div().w(px(32.)).flex_none()).child(labels))
+}
+
+/// An image from a `data:` URL (PNG, JPEG, GIF, WebP, BMP or ICO), drawn as an image only.
+pub fn image(url: &str) -> Option<std::sync::Arc<gpui_kit::Image>> {
+    use gpui_kit::ImageFormat;
+    let mime = url.strip_prefix("data:")?.split(';').next()?;
+    let format = match mime {
+        "image/png" => ImageFormat::Png,
+        "image/jpeg" => ImageFormat::Jpeg,
+        "image/gif" => ImageFormat::Gif,
+        "image/webp" => ImageFormat::Webp,
+        "image/bmp" => ImageFormat::Bmp,
+        "image/x-icon" | "image/vnd.microsoft.icon" => ImageFormat::Ico,
+        _ => return None,
+    };
+    let bytes = crate::format::data_url_bytes(url)?;
+    Some(std::sync::Arc::new(gpui_kit::Image::from_bytes(format, bytes)))
 }
 
 /// The labels under a day chart: today at the end, a short date every few columns.

@@ -310,6 +310,26 @@ impl Shell {
                     .into(),
             ),
             "alerts" => Some(cx.new(|cx| crate::pages::alerts::AlertsPage::new(ctx, cx)).into()),
+            "extensions" => Some(
+                cx.new(|cx| crate::pages::extensions::ExtensionsPage::new(ctx, window, cx))
+                    .into(),
+            ),
+            "network" => Some(
+                cx.new(|cx| crate::pages::network::NetworkPage::new(ctx, window, cx))
+                    .into(),
+            ),
+            "tasks" => Some(cx.new(|cx| crate::pages::tasks::TasksPage::new(ctx, window, cx)).into()),
+            "programs" => Some(
+                cx.new(|cx| crate::pages::programs::ProgramsPage::new(ctx, window, cx))
+                    .into(),
+            ),
+            "optimize" => Some(cx.new(|cx| crate::pages::optimize::OptimizePage::new(ctx, cx)).into()),
+            "storage" => Some(cx.new(|cx| crate::pages::storage::StoragePage::new(ctx, cx)).into()),
+            "system" => Some(cx.new(|cx| crate::pages::system::SystemPage::new(ctx, cx)).into()),
+            "reliability" => Some(
+                cx.new(|cx| crate::pages::reliability::ReliabilityPage::new(ctx, cx))
+                    .into(),
+            ),
             _ => None,
         };
         let active = is_live(page);

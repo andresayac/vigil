@@ -524,7 +524,7 @@ impl FindingsPage {
                 let disabled = busy || (spec.b("admin") && !elevated);
                 pane = pane
                     .child(
-                        div().child(
+                        div().flex().child(
                             ui::accent_button(
                                 ElementId::NamedInteger("fd-plan".into(), index as u64),
                                 spec.s("label").to_string(),
@@ -830,7 +830,7 @@ impl FindingsPage {
         let Some(result) = &inv.result else {
             return pane
                 .child(
-                    div().child(
+                    div().flex().child(
                         ui::accent_button("inv-start", t("investigate.button"))
                             .glyph(icons::SEARCH)
                             .on_click(cx.listener(|this, _, window, cx| this.investigate(window, cx))),
@@ -951,7 +951,7 @@ impl FindingsPage {
             }
         }
         pane.child(
-            div().child(
+            div().flex().child(
                 ui::button("inv-again", t("investigate.button"))
                     .glyph(icons::REFRESH)
                     .on_click(cx.listener(|this, _, window, cx| this.investigate(window, cx))),

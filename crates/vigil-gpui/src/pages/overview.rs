@@ -334,7 +334,7 @@ impl Render for OverviewPage {
                     .child(kit::h1(t("overview.emptyTitle")))
                     .child(kit::muted(t("overview.emptyBody"), &tk))
                     .child(
-                        div().child(
+                        div().flex().child(
                             ui::accent_button("ov-first", t("overview.firstScan"))
                                 .on_click(move |_, window, cx| scan.scan_dialog(window, cx)),
                         ),
