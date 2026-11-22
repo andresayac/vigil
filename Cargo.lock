@@ -8955,6 +8955,7 @@ dependencies = [
  "futures",
  "gpui-kit",
  "raw-window-handle",
+ "serde",
  "serde_json",
  "vigil-core",
  "vigil-i18n",

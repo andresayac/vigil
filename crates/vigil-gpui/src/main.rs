@@ -13,14 +13,18 @@
 //! pane does, when the user picks it.
 
 // No console window in release builds.
+#![allow(dead_code)] // TEMPORARY: the pages still being written use the new shared pieces.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 // GPUI's derive macros name the crate `gpui`; the Kit stands in for it.
 extern crate gpui_kit as gpui;
 
 mod actions;
+mod app;
+mod data;
 mod demo;
 mod demo_pages;
+mod dialogs;
 mod format;
 mod groups;
 mod i18n;

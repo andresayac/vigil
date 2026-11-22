@@ -17,6 +17,7 @@ use vigil_core::requests::Request;
 use vigil_core::state::AppState;
 use vigil_core::watch::Watcher;
 
+use crate::app::{Ctx, Report};
 use crate::i18n::{t, tf};
 use crate::icons;
 use crate::live::Live;
@@ -84,7 +85,7 @@ const NAV_IDS: [&str; 21] = [
 
 /// Pages that read live data (the sampler runs only while one is open).
 fn is_live(page: &str) -> bool {
-    matches!(page, "performance" | "processes")
+    matches!(page, "performance" | "processes" | "overview" | "optimize" | "system")
 }
 
 /// The page key for a name a notification or the command line gives (unknown: Alerts).
@@ -117,6 +118,7 @@ pub struct Shell {
     choice: Choice,
     mica: bool,
     watcher: Option<Arc<Watcher>>,
+    pub report: Entity<Report>,
     content: Option<AnyView>,
     /// `--pid`: the process the Processes page selects first.
     focus_pid: Option<u32>,
@@ -149,9 +151,22 @@ impl Shell {
         let live = Live::start(demo, cx);
         // Windows changed its theme: GPUI has just painted the title bar in Windows' theme, so
         // apply Vigil's again (it may be a fixed light or dark), with Windows' accent colour.
-        let subscriptions = vec![cx.observe_window_appearance(window, |this, window, cx| {
-            this.apply_theme(window, cx);
-        })];
+        let report = cx.new(|cx| {
+            let mut report = Report::default();
+            if demo {
+                report.analysis = Some(crate::data::demo("analysis"));
+                report.loaded = true;
+            } else {
+                Report::reload(core.clone(), cx);
+            }
+            report
+        });
+        let subscriptions = vec![
+            cx.observe_window_appearance(window, |this, window, cx| {
+                this.apply_theme(window, cx);
+            }),
+            cx.observe(&report, |_, _, cx| cx.notify()),
+        ];
         let mut shell = Self {
             page,
             compact: false,
@@ -163,6 +178,7 @@ impl Shell {
             choice,
             mica,
             watcher,
+            report,
             content: None,
             focus_pid,
             acting: Acting::default(),
@@ -205,8 +221,30 @@ impl Shell {
         window.refresh();
     }
 
+    /// What a page needs from the app.
+    pub fn ctx(&self, cx: &mut Context<Self>) -> Ctx {
+        Ctx {
+            core: self.core.clone(),
+            elevated: self.elevated,
+            watcher: self.watcher.clone(),
+            report: self.report.clone(),
+            live: self.live.clone(),
+            shell: cx.entity().downgrade(),
+        }
+    }
+
+    /// The New scan dialog (not while a scan runs).
+    pub fn scan_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.report.read(cx).scanning {
+            return;
+        }
+        let ctx = self.ctx(cx);
+        crate::dialogs::scan(ctx, window, cx);
+    }
+
     pub fn open(&mut self, page: &'static str, window: &mut Window, cx: &mut Context<Self>) {
         self.page = page;
+        let ctx = self.ctx(cx);
         let live = self.live.clone();
         let core = self.core.clone();
         let elevated = self.elevated;
@@ -232,6 +270,7 @@ impl Shell {
             "startup" => Some(cx.new(|cx| StartupPage::new(core, elevated, window, cx)).into()),
             "quarantine" => Some(cx.new(|cx| QuarantinePage::new(core, elevated, window, cx)).into()),
             "history" => Some(cx.new(|cx| HistoryPage::new(core, elevated, window, cx)).into()),
+            "overview" => Some(cx.new(|cx| crate::pages::overview::OverviewPage::new(ctx, cx)).into()),
             _ => None,
         };
         let active = is_live(page);
@@ -250,6 +289,7 @@ impl Shell {
             Command::Scan => {
                 self.show(window, cx);
                 self.open("overview", window, cx);
+                self.scan_dialog(window, cx);
             }
             Command::ToggleWatching => {
                 if let Some(watcher) = &self.watcher
@@ -270,7 +310,10 @@ impl Shell {
                 crate::platform::remove_icon();
                 cx.quit();
             }
-            Command::Refresh => cx.notify(),
+            Command::Refresh => self.report.update(cx, |r, cx| {
+                r.watch_tick += 1;
+                cx.notify();
+            }),
         }
     }
 

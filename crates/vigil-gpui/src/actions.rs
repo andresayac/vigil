@@ -69,6 +69,31 @@ pub fn run(
     rx
 }
 
+/// Investigates a finding with the AI agent on a worker thread: the consent dialog (destination,
+/// anonymization, read-only tools) is native and owned by the main window. `Ok(None)`: declined.
+pub fn investigate(
+    state: Arc<AppState>,
+    id: String,
+    owner: isize,
+    progress: mpsc::UnboundedSender<String>,
+) -> oneshot::Receiver<Result<Option<serde_json::Value>, String>> {
+    let (tx, rx) = oneshot::channel();
+    let spawned = std::thread::Builder::new()
+        .name("vigil-investigate".into())
+        .spawn(move || {
+            let ui = NativeUi { owner, progress };
+            let result = vigil_core::investigate::investigate(&state, &id, &ui)
+                .and_then(|view| view.map(serde_json::to_value).transpose().map_err(|e| e.to_string()));
+            let _ = tx.send(result);
+        });
+    if let Err(error) = spawned {
+        let (tx, rx) = oneshot::channel();
+        let _ = tx.send(Err(error.to_string()));
+        return rx;
+    }
+    rx
+}
+
 fn summarize(result: Result<ActionOutcome, String>) -> Outcome {
     match result {
         Err(error) => Outcome::Failed(error),

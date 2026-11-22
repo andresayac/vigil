@@ -7,6 +7,7 @@
 //! `vigil_actions::execute()`, which journals it. Nothing here depends on a UI toolkit.
 
 pub mod accounts;
+pub mod api;
 pub mod autostart;
 pub mod cli;
 pub mod confirm;

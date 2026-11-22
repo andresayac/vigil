@@ -23,6 +23,7 @@ gpui-kit = "=0.10.0"
 # Already built for GPUI: channels between the worker threads and the UI thread.
 futures = "0.3"
 raw-window-handle = "0.6"
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 vigil-core = { path = "../vigil-core" }
 vigil-i18n = { path = "../vigil-i18n" }
@@ -41,6 +42,7 @@ features = [
     "Win32_System_LibraryLoader",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
+    "Win32_System_Time",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ]

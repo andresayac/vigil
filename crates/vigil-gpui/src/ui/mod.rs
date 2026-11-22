@@ -13,6 +13,7 @@
 //! Text handed to these controls is drawn as plain text: nothing interprets markup.
 
 pub mod grid;
+pub mod kit;
 
 use std::rc::Rc;
 
@@ -57,6 +58,7 @@ pub struct FButton {
     disabled: bool,
     selected: bool,
     role: Option<Role>,
+    tip: Option<SharedString>,
     on_click: Option<Handler>,
     style: StyleRefinement,
     /// Drawn after the label (a selection pill, a badge).
@@ -75,6 +77,7 @@ impl FButton {
             disabled: false,
             selected: false,
             role: None,
+            tip: None,
             on_click: None,
             style: StyleRefinement::default(),
             children: Vec::new(),
@@ -84,6 +87,13 @@ impl FButton {
     /// The name a screen reader says for a button that shows no text (a collapsed navigation item).
     pub fn accessible_name(mut self, name: impl Into<SharedString>) -> Self {
         self.base = self.base.accessibility_label(name.into());
+        self
+    }
+
+    /// A tooltip (plain text).
+    pub fn tip(mut self, tip: impl Into<SharedString>) -> Self {
+        let tip = tip.into();
+        self.tip = (!tip.is_empty()).then_some(tip);
         self
     }
 
@@ -226,6 +236,10 @@ impl RenderOnce for FButton {
         }
         if let Some(label) = &label {
             base = base.accessibility_label(label.clone());
+        }
+        if let Some(tip) = self.tip {
+            base = base
+                .tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(window, cx));
         }
         if let Some(handler) = self.on_click {
             base = base.on_click(move |event, window, cx| handler(event, window, cx));

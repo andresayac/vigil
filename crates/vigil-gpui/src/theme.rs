@@ -82,6 +82,13 @@ pub struct Tokens {
     pub verdict_remove: Hsla,
     pub verdict_disable: Hsla,
     pub verdict_review: Hsla,
+    pub verdict_no_signals: Hsla,
+    pub verdict_safe: Hsla,
+    pub verdict_trusted: Hsla,
+    /// Text on a chart or verdict colour.
+    pub on_chart: Hsla,
+    pub chart2: Hsla,
+    pub sunken: Hsla,
 }
 
 impl Global for Tokens {}
@@ -143,6 +150,12 @@ impl Tokens {
             verdict_remove: hex(0xc42b1c),
             verdict_disable: hex(0x9d5d00),
             verdict_review: hex(0x6b3fd1),
+            verdict_no_signals: hex(0x6b6b6b),
+            verdict_safe: hex(0x0f7b0f),
+            verdict_trusted: hex(0x9b9b9b),
+            on_chart: hex(0xffffff),
+            chart2: hex(0x0e7a8a),
+            sunken: hex(0xfbfbfb),
         }
     }
 
@@ -194,6 +207,12 @@ impl Tokens {
             verdict_remove: hex(0xff99a4),
             verdict_disable: hex(0xf6c343),
             verdict_review: hex(0xc4a7ff),
+            verdict_no_signals: hex(0xa0a0a0),
+            verdict_safe: hex(0x6ccb5f),
+            verdict_trusted: hex(0x6e6e6e),
+            on_chart: hex(0x000000),
+            chart2: hex(0x4cc9d6),
+            sunken: hex(0x1f1f1f),
         }
     }
 
@@ -216,7 +235,11 @@ impl Tokens {
         match verdict {
             "remove" => self.verdict_remove,
             "disable" => self.verdict_disable,
-            _ => self.verdict_review,
+            "review" => self.verdict_review,
+            "no_signals" => self.verdict_no_signals,
+            "safe" => self.verdict_safe,
+            "trusted" => self.verdict_trusted,
+            _ => self.ink3,
         }
     }
 }

@@ -90,6 +90,18 @@ pub fn send<T: Acts>(this: &mut T, request: Request, window: &mut Window, cx: &m
     .detach();
 }
 
+/// Sends a request written as the JSON the pages describe it with (`{"kind": "task", "op":
+/// "enable", "path": ...}`); Rust still rebuilds and checks everything from its own state.
+pub fn send_json<T: Acts>(this: &mut T, request: serde_json::Value, window: &mut Window, cx: &mut Context<T>) {
+    match serde_json::from_value::<Request>(request) {
+        Ok(request) => send(this, request, window, cx),
+        Err(error) => {
+            this.acting().outcome = Some(Outcome::Failed(error.to_string()));
+            cx.notify();
+        }
+    }
+}
+
 /// Reads `work` on a background thread and hands the result to `done` on the UI thread.
 pub fn read<T: 'static, R: Send + 'static>(
     cx: &mut Context<T>,

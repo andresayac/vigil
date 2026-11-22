@@ -34,9 +34,9 @@ pub type ShowProcess = Rc<dyn Fn(u32, &mut Window, &mut App)>;
 const RANGES: [usize; 3] = [60, 120, 300];
 
 /// A line of a chart: values oldest first, drawn dashed when `dashed`.
-struct Line {
-    values: Vec<f64>,
-    dashed: bool,
+pub(crate) struct Line {
+    pub values: Vec<f64>,
+    pub dashed: bool,
 }
 
 /// Bytes per second as bits per second ("464 Kbps").
@@ -115,7 +115,7 @@ fn window(values: &[f64], range: usize) -> Vec<f64> {
 
 /// A chart: filled area under the first line, the lines, a grid tinted with the resource hue.
 /// Values run 0..`max`; the full width stands for `range` seconds, newest on the right.
-fn chart(lines: Vec<Line>, max: f64, range: usize, hue: Hsla, tk: Tokens, grid: bool) -> impl IntoElement {
+pub(crate) fn chart(lines: Vec<Line>, max: f64, range: usize, hue: Hsla, tk: Tokens, grid: bool) -> impl IntoElement {
     canvas(
         |_, _, _| {},
         move |bounds: Bounds<Pixels>, _, window, _| {
@@ -206,6 +206,15 @@ struct Frozen {
     processes: Vec<ProcessRow>,
 }
 
+thread_local! {
+    static FIRST: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The resource the next Performance page selects first (from an Overview tile).
+pub fn select(key: &str, _cx: &mut App) {
+    FIRST.with(|f| *f.borrow_mut() = Some(key.to_string()));
+}
+
 pub struct PerformancePage {
     live: Entity<Live>,
     selected: String,
@@ -226,7 +235,7 @@ impl PerformancePage {
         });
         let mut page = Self {
             live,
-            selected: "cpu".into(),
+            selected: FIRST.with(|f| f.borrow_mut().take()).unwrap_or_else(|| "cpu".into()),
             range: RANGES[0],
             paused: None,
             hardware: None,

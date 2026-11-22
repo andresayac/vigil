@@ -110,6 +110,16 @@ fn fill(template: &str, params: &[(&str, &str)]) -> String {
     out
 }
 
+/// The catalog has `key`.
+pub fn has(key: &str) -> bool {
+    lookup("en", key, 0).is_some()
+}
+
+/// The text of `key`, or `fallback` when the catalog does not have it (a value from the core).
+pub fn t_or(key: &str, fallback: &str) -> String {
+    if has(key) { t(key) } else { fallback.to_string() }
+}
+
 /// A text without placeholders.
 pub fn t(key: &str) -> String {
     message(key, 0).to_string()
