@@ -1,23 +1,36 @@
 //! The window's content: a Windows 11 NavigationView (hamburger, sections, items with a selection
-//! pill, footer) over the Mica base, and the content layer with a rounded top-left corner, as
-//! `ui/src/App.svelte` and `Sidebar.svelte` draw it.
+//! pill, footer with the rights, More and Settings) over the Mica base, and the content layer with a
+//! rounded top-left corner, as `ui/src/App.svelte` and `Sidebar.svelte` draw it. It also carries
+//! out what the tray, a notification or a second copy asks ([`Command`]).
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use gpui_kit::component::WindowExt as _;
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AnyView, AppContext, ClickEvent, Context, Entity, FontWeight, InteractiveElement, IntoElement, ParentElement,
-    Render, Role, StatefulInteractiveElement, Styled, Subscription, Window, div, px,
+    AnyView, App, AppContext, ClickEvent, Context, Entity, FontWeight, InteractiveElement, IntoElement, ParentElement,
+    PathPromptOptions, Render, Role, StatefulInteractiveElement, Styled, Subscription, Window, div, px,
 };
+use vigil_core::requests::Request;
 use vigil_core::state::AppState;
+use vigil_core::watch::Watcher;
 
-use crate::i18n::t;
+use crate::i18n::{t, tf};
 use crate::icons;
 use crate::live::Live;
+use crate::pages::common::{self, Acting, Acts};
+use crate::pages::history::HistoryPage;
 use crate::pages::performance::PerformancePage;
 use crate::pages::processes::ProcessesPage;
-use crate::theme::{self, Choice, FONT_BODY, FONT_DISPLAY, RADIUS, Tokens, tokens};
+use crate::pages::quarantine::QuarantinePage;
+use crate::pages::services::ServicesPage;
+use crate::pages::startup::StartupPage;
+use crate::platform::Command;
+use crate::theme::{self, Choice, FONT_BODY, FONT_DISPLAY, Tokens, tokens};
+use crate::ui::{self, FButton, Kind, Severity};
+use gpui_kit::base::Selectable as _;
 
 /// (key, section) of every page, in the order of the web UI's navigation pane.
 pub const PAGES: [(&str, &str); 21] = [
@@ -44,9 +57,43 @@ pub const PAGES: [(&str, &str); 21] = [
     ("reliability", "nav.maintenance"),
 ];
 
+/// Element ids of the navigation items (GPUI ids are static strings or numbers).
+const NAV_IDS: [&str; 21] = [
+    "nav-overview",
+    "nav-findings",
+    "nav-alerts",
+    "nav-protection",
+    "nav-posture",
+    "nav-firewall",
+    "nav-accounts",
+    "nav-extensions",
+    "nav-quarantine",
+    "nav-history",
+    "nav-performance",
+    "nav-processes",
+    "nav-network",
+    "nav-services",
+    "nav-optimize",
+    "nav-startup",
+    "nav-tasks",
+    "nav-programs",
+    "nav-storage",
+    "nav-system",
+    "nav-reliability",
+];
+
 /// Pages that read live data (the sampler runs only while one is open).
 fn is_live(page: &str) -> bool {
     matches!(page, "performance" | "processes")
+}
+
+/// The page key for a name a notification or the command line gives (unknown: Alerts).
+pub fn page_key(name: &str) -> &'static str {
+    PAGES
+        .iter()
+        .map(|(key, _)| *key)
+        .find(|key| *key == name)
+        .unwrap_or("alerts")
 }
 
 /// How the window starts (from the command line).
@@ -57,21 +104,36 @@ pub struct Options {
     pub demo: bool,
     pub choice: Choice,
     pub mica: bool,
+    pub watcher: Option<Arc<Watcher>>,
 }
 
 pub struct Shell {
     page: &'static str,
     compact: bool,
-    live: Entity<Live>,
+    pub live: Entity<Live>,
     core: Option<Arc<AppState>>,
     demo: bool,
     elevated: bool,
     choice: Choice,
     mica: bool,
+    watcher: Option<Arc<Watcher>>,
     content: Option<AnyView>,
     /// `--pid`: the process the Processes page selects first.
     focus_pid: Option<u32>,
+    acting: Acting,
+    /// An InfoBar over the content (an exported report, a refused restart).
+    notice: Option<(Severity, String)>,
     _subscriptions: Vec<Subscription>,
+}
+
+impl Acts for Shell {
+    fn acting(&mut self) -> &mut Acting {
+        &mut self.acting
+    }
+    fn core(&self) -> Option<Arc<AppState>> {
+        self.core.clone()
+    }
+    fn after(&mut self, _: &mut Window, _: &mut Context<Self>) {}
 }
 
 impl Shell {
@@ -82,10 +144,11 @@ impl Shell {
             demo,
             choice,
             mica,
+            watcher,
         } = options;
         let live = Live::start(demo, cx);
         // Windows changed its theme: GPUI has just painted the title bar in Windows' theme, so
-        // apply Vigil's again (it may be a fixed light or dark).
+        // apply Vigil's again (it may be a fixed light or dark), with Windows' accent colour.
         let subscriptions = vec![cx.observe_window_appearance(window, |this, window, cx| {
             this.apply_theme(window, cx);
         })];
@@ -95,13 +158,23 @@ impl Shell {
             live,
             core,
             demo,
-            elevated: vigil_sys::elevation::is_elevated(),
+            // The demo shows the administrator view (its actions still never run).
+            elevated: demo || vigil_sys::elevation::is_elevated(),
             choice,
             mica,
+            watcher,
             content: None,
             focus_pid,
+            acting: Acting::default(),
+            notice: None,
             _subscriptions: subscriptions,
         };
+        // The data folder could not be fully restricted to administrators: say so, as the Tauri app does.
+        shell.notice = shell
+            .core
+            .as_ref()
+            .and_then(|c| c.warning.clone())
+            .map(|w| (Severity::Warning, w));
         shell.apply_theme(window, cx);
         shell.open(page, window, cx);
         shell
@@ -116,26 +189,49 @@ impl Shell {
                 gpui_kit::WindowAppearance::Dark | gpui_kit::WindowAppearance::VibrantDark
             ),
         };
-        let tokens = if dark {
+        let mut tokens = if dark {
             Tokens::dark(self.mica)
         } else {
             Tokens::light(self.mica)
         };
+        // The demo keeps Fluent's default accent, so its screenshots look the same everywhere.
+        if !self.demo
+            && let Some(accent) = crate::platform::accent(dark)
+        {
+            tokens.set_accent(accent);
+        }
         theme::apply(tokens, cx);
         crate::win::set_dark_title_bar(window, dark);
         window.refresh();
     }
 
-    fn open(&mut self, page: &'static str, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn open(&mut self, page: &'static str, window: &mut Window, cx: &mut Context<Self>) {
         self.page = page;
         let live = self.live.clone();
         let core = self.core.clone();
+        let elevated = self.elevated;
         self.content = match page {
             "processes" => {
                 let pid = self.focus_pid.take();
-                Some(cx.new(|cx| ProcessesPage::new(live, core, pid, window, cx)).into())
+                Some(
+                    cx.new(|cx| ProcessesPage::new(live, core, pid, elevated, window, cx))
+                        .into(),
+                )
             }
-            "performance" => Some(cx.new(|cx| PerformancePage::new(live, cx)).into()),
+            "performance" => {
+                let shell = cx.entity().downgrade();
+                let on_show: crate::pages::performance::ShowProcess = std::rc::Rc::new(move |pid, window, cx| {
+                    let _ = shell.update(cx, |shell, cx| {
+                        shell.focus_pid = Some(pid);
+                        shell.open("processes", window, cx);
+                    });
+                });
+                Some(cx.new(|cx| PerformancePage::new(live, core, on_show, cx)).into())
+            }
+            "services" => Some(cx.new(|cx| ServicesPage::new(core, elevated, window, cx)).into()),
+            "startup" => Some(cx.new(|cx| StartupPage::new(core, elevated, window, cx)).into()),
+            "quarantine" => Some(cx.new(|cx| QuarantinePage::new(core, elevated, window, cx)).into()),
+            "history" => Some(cx.new(|cx| HistoryPage::new(core, elevated, window, cx)).into()),
             _ => None,
         };
         let active = is_live(page);
@@ -143,80 +239,273 @@ impl Shell {
         cx.notify();
     }
 
+    /// Carries out what the tray, a notification or a second copy asked.
+    pub fn command(&mut self, command: Command, window: &mut Window, cx: &mut Context<Self>) {
+        match command {
+            Command::Open => self.show(window, cx),
+            Command::OpenPage(page) => {
+                self.show(window, cx);
+                self.open(page_key(&page), window, cx);
+            }
+            Command::Scan => {
+                self.show(window, cx);
+                self.open("overview", window, cx);
+            }
+            Command::ToggleWatching => {
+                if let Some(watcher) = &self.watcher
+                    && watcher.set_watching(None)
+                {
+                    watcher.check_soon();
+                }
+                crate::platform::Tray::refresh();
+            }
+            Command::ToggleNotifications => {
+                if let Some(watcher) = &self.watcher {
+                    let paused = watcher.store.load().notifications_paused(vigil_core::watch::now_ms());
+                    watcher.pause_notifications(!paused);
+                }
+                crate::platform::Tray::refresh();
+            }
+            Command::Quit => {
+                crate::platform::remove_icon();
+                cx.quit();
+            }
+            Command::Refresh => cx.notify(),
+        }
+    }
+
+    /// Shows and focuses the window (it may be hidden in the tray); live pages sample again.
+    fn show(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        crate::win::show(window);
+        window.activate_window();
+        self.live.update(cx, |live, cx| live.set_visible(true, cx));
+    }
+
+    /// The close button: hides the window and keeps watching in the tray when the settings say
+    /// so (this copy owns the watch). Returns whether the window may close.
+    pub fn should_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(watcher) = self.watcher.clone() else {
+            return true;
+        };
+        let settings = watcher.settings();
+        if !watcher.owner() || !settings.close_to_tray {
+            crate::platform::remove_icon();
+            return true;
+        }
+        crate::win::hide(window);
+        self.live.update(cx, |live, cx| live.set_visible(false, cx));
+        if !settings.tray_notice_shown {
+            let _ = watcher.store.update(|file| file.settings.tray_notice_shown = true);
+            let language = watcher.language();
+            vigil_core::watch::in_language(&language, || {
+                crate::platform::notify(
+                    &vigil_i18n::tr!("Vigil keeps watching in the tray"),
+                    &vigil_i18n::tr!(
+                        "Open it or quit from its icon in the notification area. You can change this in Settings."
+                    ),
+                    "overview",
+                );
+            });
+        }
+        false
+    }
+
+    /// "Open report…": a saved `*-report.json` becomes the current report.
+    fn open_report(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(core) = self.core.clone() else {
+            self.notice = Some((Severity::Info, t("gpui.demoNoActions")));
+            cx.notify();
+            return;
+        };
+        let picked = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some(t("menu.openReport").into()),
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(Ok(Some(paths))) = picked.await else { return };
+            let Some(path) = paths.into_iter().next() else { return };
+            let result = cx.background_spawn(async move { core.open_report(&path) }).await;
+            let _ = this.update(cx, |shell, cx| {
+                shell.notice = Some(match result {
+                    Ok(()) => (Severity::Success, t("gpui.reportOpened")),
+                    Err(error) => (Severity::Error, error),
+                });
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// "Export HTML report…": the current report as a standalone HTML file.
+    fn export_html(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let report = self.core.as_ref().map(|core| core.report_html());
+        let (html, name) = match report {
+            Some(Ok(found)) => found,
+            Some(Err(error)) => {
+                self.notice = Some((Severity::Error, error));
+                cx.notify();
+                return;
+            }
+            None => {
+                self.notice = Some((Severity::Info, t("gpui.demoNoActions")));
+                cx.notify();
+                return;
+            }
+        };
+        let documents = std::env::var_os("USERPROFILE")
+            .map(|p| PathBuf::from(p).join("Documents"))
+            .unwrap_or_default();
+        let picked = cx.prompt_for_new_path(&documents, Some(&name));
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(Ok(Some(path))) = picked.await else { return };
+            let shown = path.display().to_string();
+            let result = std::fs::write(&path, html).map_err(|e| format!("Could not write the report: {e}"));
+            let _ = this.update(cx, |shell, cx| {
+                shell.notice = Some(match result {
+                    Ok(()) => (Severity::Success, tf("menu.exported", &[("path", &shown)])),
+                    Err(error) => (Severity::Error, error),
+                });
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Asks Windows for administrator rights (UAC); on success the elevated copy starts and this
+    /// one quits. Declining keeps this copy as it is.
+    fn restart_elevated(&mut self, cx: &mut Context<Self>) {
+        match vigil_sys::elevation::relaunch_elevated(&["--elevated"]) {
+            Ok(true) => {
+                crate::platform::remove_icon();
+                cx.quit();
+            }
+            Ok(false) => {}
+            Err(error) => {
+                self.notice = Some((Severity::Error, error.to_string()));
+                cx.notify();
+            }
+        }
+    }
+
+    fn tool(&mut self, op: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let request = Request::Tuning {
+            op: op.into(),
+            params: serde_json::json!({}),
+        };
+        common::send(self, request, window, cx);
+    }
+
+    fn shell_request(
+        &mut self,
+        op: &str,
+        url: Option<&str>,
+        name: Option<&str>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let request = Request::Shell {
+            op: op.into(),
+            path: None,
+            url: url.map(str::to_string),
+            name: name.map(str::to_string),
+        };
+        common::send(self, request, window, cx);
+    }
+
     fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let shell = cx.entity().downgrade();
+        let watcher = self.watcher.clone();
         window.open_dialog(cx, move |dialog, _window, cx| {
             let tk = *tokens(cx);
-            let choice_button = |id: &'static str, label: String, choice: Choice| {
+            let current = shell.upgrade().map(|s| s.read(cx).choice).unwrap_or(Choice::System);
+            let on_theme = {
                 let shell = shell.clone();
-                div()
-                    .id(id)
-                    .px_3()
-                    .h(px(32.))
-                    .flex()
-                    .items_center()
-                    .rounded(RADIUS)
-                    .border_1()
-                    .border_color(tk.control_stroke)
-                    .bg(tk.control)
-                    .hover(|s| s.bg(tk.control_hover))
-                    .child(label)
-                    .on_click(move |_: &ClickEvent, window, cx| {
-                        let _ = shell.update(cx, |shell, cx| {
-                            shell.choice = choice;
-                            shell.apply_theme(window, cx);
-                        });
-                    })
+                move |choice: Choice, window: &mut Window, cx: &mut App| {
+                    let _ = shell.update(cx, |shell, cx| {
+                        shell.choice = choice;
+                        shell.apply_theme(window, cx);
+                    });
+                }
             };
-            let language_button = |id: &'static str, label: &'static str, code: &'static str| {
+            let languages = vec![
+                ("en", "English".to_string()),
+                ("es", "Español".to_string()),
+                ("fr", "Français".to_string()),
+                ("pt", "Português (Brasil)".to_string()),
+                ("zh", "简体中文".to_string()),
+            ];
+            let on_language = {
                 let shell = shell.clone();
-                div()
-                    .id(id)
-                    .px_3()
-                    .h(px(32.))
-                    .flex()
-                    .items_center()
-                    .rounded(RADIUS)
-                    .border_1()
-                    .border_color(tk.control_stroke)
-                    .bg(tk.control)
-                    .hover(|s| s.bg(tk.control_hover))
-                    .child(label)
-                    .on_click(move |_: &ClickEvent, window, cx| {
-                        vigil_i18n::set_language(code);
-                        let _ = shell.update(cx, |shell, cx| {
-                            let page = shell.page;
-                            shell.open(page, window, cx);
-                        });
-                        window.refresh();
-                    })
+                move |code: &'static str, window: &mut Window, cx: &mut App| {
+                    vigil_i18n::set_language(code);
+                    let _ = shell.update(cx, |shell, cx| {
+                        let page = shell.page;
+                        shell.open(page, window, cx);
+                    });
+                    crate::platform::Tray::refresh();
+                    window.refresh();
+                }
             };
-            dialog.title(t("nav.settings")).w(px(520.)).child(
+            let watch = watcher.as_ref().map(|w| w.settings());
+            dialog.title(t("nav.settings")).w(px(560.)).child(
                 div()
                     .flex()
                     .flex_col()
                     .gap_3()
                     .child(div().font_weight(FontWeight::SEMIBOLD).child(t("settings.theme")))
-                    .child(
-                        div()
-                            .flex()
-                            .gap_2()
-                            .child(choice_button("theme-system", t("settings.themeSystem"), Choice::System))
-                            .child(choice_button("theme-light", t("settings.themeLight"), Choice::Light))
-                            .child(choice_button("theme-dark", t("settings.themeDark"), Choice::Dark)),
-                    )
+                    .child(ui::segmented(
+                        "settings-theme",
+                        t("settings.theme"),
+                        vec![
+                            (Choice::System, t("settings.themeSystem")),
+                            (Choice::Light, t("settings.themeLight")),
+                            (Choice::Dark, t("settings.themeDark")),
+                        ],
+                        current,
+                        on_theme,
+                        &tk,
+                    ))
                     .child(div().font_weight(FontWeight::SEMIBOLD).child(t("settings.language")))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_wrap()
-                            .gap_2()
-                            .child(language_button("lang-en", "English", "en"))
-                            .child(language_button("lang-es", "Español", "es"))
-                            .child(language_button("lang-fr", "Français", "fr"))
-                            .child(language_button("lang-pt", "Português (Brasil)", "pt"))
-                            .child(language_button("lang-zh", "简体中文", "zh")),
-                    )
+                    .child(ui::segmented(
+                        "settings-language",
+                        t("settings.language"),
+                        languages,
+                        vigil_i18n::language(),
+                        on_language,
+                        &tk,
+                    ))
+                    .when_some(watch.zip(watcher.clone()), |this, (settings, watcher)| {
+                        let watching = Arc::clone(&watcher);
+                        let tray = Arc::clone(&watcher);
+                        this.child(div().font_weight(FontWeight::SEMIBOLD).child(t("settings.watch.title")))
+                            .child(ui::toggle_switch(
+                                "settings-watching",
+                                settings.watching,
+                                !watcher.owner(),
+                                t("settings.watch.watching"),
+                                move |on, window, _| {
+                                    if watching.set_watching(Some(on)) {
+                                        watching.check_soon();
+                                    }
+                                    crate::platform::Tray::refresh();
+                                    window.refresh();
+                                },
+                                &tk,
+                            ))
+                            .child(ui::toggle_switch(
+                                "settings-tray",
+                                settings.close_to_tray,
+                                !watcher.owner(),
+                                t("settings.watch.closeTray"),
+                                move |on, window, _| {
+                                    let _ = tray.store.update(|file| file.settings.close_to_tray = on);
+                                    window.refresh();
+                                },
+                                &tk,
+                            ))
+                    })
                     .child(
                         div()
                             .text_size(px(12.))
@@ -227,56 +516,95 @@ impl Shell {
         });
     }
 
+    fn more_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let compact = self.compact;
+        let tk = *tokens(cx);
+        let shell = cx.entity().downgrade();
+        let mut button = FButton::new("nav-more", Kind::Subtle)
+            .glyph(icons::MORE)
+            .w_full()
+            .justify_start()
+            .gap(px(14.))
+            .pl(px(14.))
+            .text_color(tk.ink);
+        if !compact {
+            button = button.label(t("nav.more"));
+        }
+        button.dropdown_menu(move |menu, _, _| {
+            let item = |label: String, run: fn(&mut Shell, &mut Window, &mut Context<Shell>)| {
+                let shell = shell.clone();
+                PopupMenuItem::new(label).on_click(move |_, window, cx| {
+                    let _ = shell.update(cx, |shell, cx| run(shell, window, cx));
+                })
+            };
+            menu.item(item(t("menu.openReport"), |s, w, cx| s.open_report(w, cx)))
+                .item(item(t("menu.exportHtml"), |s, w, cx| s.export_html(w, cx)))
+                .separator()
+                .item(item(t("menu.restorePoint"), |s, w, cx| {
+                    s.tool("system.restore_point", w, cx)
+                }))
+                .item(item(t("menu.defenderFullScan"), |s, w, cx| {
+                    s.tool("defender.full_scan", w, cx)
+                }))
+                .item(item(t("menu.defenderUpdate"), |s, w, cx| {
+                    s.tool("defender.update", w, cx)
+                }))
+                .separator()
+                .item(item(t("menu.windowsSecurity"), |s, w, cx| {
+                    s.shell_request("url", Some("windowsdefender://"), None, w, cx)
+                }))
+                .item(item(t("menu.taskScheduler"), |s, w, cx| {
+                    s.shell_request("console", None, Some("taskschd.msc"), w, cx)
+                }))
+                .item(item(t("menu.services"), |s, w, cx| {
+                    s.shell_request("console", None, Some("services.msc"), w, cx)
+                }))
+                .item(item(t("menu.eventViewer"), |s, w, cx| {
+                    s.shell_request("console", None, Some("eventvwr.msc"), w, cx)
+                }))
+        })
+    }
+
     fn render_nav(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let tk = *tokens(cx);
         let compact = self.compact;
         let item = |id: &'static str, glyph: char, label: String, active: bool| {
-            div()
-                .id(id)
+            let mut button = FButton::new(id, Kind::Subtle)
+                .glyph(glyph)
                 .role(Role::Button)
-                .aria_label(label.clone())
-                .aria_selected(active)
+                .selected(active)
                 .relative()
-                .flex()
                 .flex_none()
-                .items_center()
-                .gap(px(14.))
-                .h(px(36.))
                 .w_full()
+                .h(px(36.))
+                .justify_start()
+                .gap(px(14.))
                 .pl(px(14.))
                 .pr(px(12.))
-                .rounded(RADIUS)
-                .text_color(tk.ink)
-                .when(active, |this| this.bg(tk.hover))
-                .hover(|s| s.bg(tk.hover))
-                .active(|s| s.bg(tk.pressed))
-                .when(active, |this| {
-                    this.child(
-                        div()
-                            .absolute()
-                            .left(px(0.))
-                            .top(px(10.))
-                            .w(px(3.))
-                            .h(px(16.))
-                            .rounded(px(2.))
-                            .bg(tk.accent),
-                    )
-                })
-                .child(icons::icon(glyph, 16.0, tk.ink))
-                .when(!compact, |this| {
-                    this.child(
-                        div()
-                            .flex_1()
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .whitespace_nowrap()
-                            .child(label),
-                    )
-                })
+                .text_color(tk.ink);
+            if compact {
+                button = button.accessible_name(label);
+            } else {
+                button = button.label(label);
+            }
+            button.when(active, |this| {
+                this.child(
+                    div()
+                        .absolute()
+                        .left(px(0.))
+                        .top(px(10.))
+                        .w(px(3.))
+                        .h(px(16.))
+                        .rounded(px(2.))
+                        .bg(tk.accent),
+                )
+            })
         };
 
         let mut list = div()
             .id("nav-list")
+            .role(Role::List)
+            .aria_label(t("nav.navigation"))
             .flex()
             .flex_col()
             .gap(px(2.))
@@ -314,11 +642,29 @@ impl Shell {
         }
 
         let status = (!compact).then(|| {
-            let (glyph_color, title, note) = if self.elevated {
+            let (color, title, note) = if self.elevated {
                 (tk.ok, t("nav.administrator"), t("nav.administratorNote"))
             } else {
                 (tk.warn, t("nav.readOnly"), t("nav.readOnlyNote"))
             };
+            let watch_line = self.watcher.as_ref().map(|w| {
+                let status = w.status();
+                let (text, dot) = if !status.owner {
+                    (t("watch.otherWindow"), tk.ink3)
+                } else if status.watching {
+                    (t("gpui.watchOn"), tk.ok)
+                } else {
+                    (t("watch.paused"), tk.warn)
+                };
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .text_size(px(12.))
+                    .text_color(tk.ink2)
+                    .child(div().w(px(8.)).h(px(8.)).rounded(px(4.)).bg(dot))
+                    .child(text)
+            });
             div()
                 .flex()
                 .flex_col()
@@ -336,11 +682,18 @@ impl Shell {
                         .gap_2()
                         .text_size(px(13.))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(glyph_color)
-                        .child(icons::icon(icons::SHIELD, 14.0, glyph_color))
+                        .text_color(color)
+                        .child(icons::icon(icons::SHIELD, 14.0, color))
                         .child(title),
                 )
                 .child(div().text_size(px(12.)).text_color(tk.ink3).child(note))
+                .when(!self.elevated && !self.demo, |this| {
+                    this.child(
+                        ui::button("restart-elevated", t("nav.restartElevated"))
+                            .on_click(cx.listener(|this, _, _, cx| this.restart_elevated(cx))),
+                    )
+                })
+                .children(watch_line)
                 .when(self.demo, |this| {
                     this.child(div().text_size(px(12.)).text_color(tk.ink3).child(t("gpui.demo")))
                 })
@@ -360,49 +713,34 @@ impl Shell {
                     .gap(px(6.))
                     .h(px(44.))
                     .child(
-                        div()
-                            .id("hamburger")
-                            .role(Role::Button)
-                            .aria_label(t(if compact { "nav.expand" } else { "nav.collapse" }))
-                            .w(px(40.))
-                            .h(px(36.))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(RADIUS)
-                            .hover(|s| s.bg(tk.hover))
-                            .child(icons::icon(icons::HAMBURGER, 16.0, tk.ink))
-                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                this.compact = !this.compact;
-                                cx.notify();
-                            })),
+                        ui::icon_button(
+                            "hamburger",
+                            icons::HAMBURGER,
+                            t(if compact { "nav.expand" } else { "nav.collapse" }),
+                        )
+                        .w(px(40.))
+                        .h(px(36.))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.compact = !this.compact;
+                            cx.notify();
+                        })),
                     )
                     .when(!compact, |this| {
                         this.child(div().text_size(px(12.)).text_color(tk.ink2).child("Vigil"))
                     }),
             )
-            .child(
-                div().px_1().pb_2().flex().child(
-                    div()
-                        .id("new-scan")
-                        .role(Role::Button)
-                        .aria_label(t("nav.newScan"))
-                        .flex_1()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .gap_2()
-                        .h(px(34.))
-                        .rounded(RADIUS)
-                        .bg(tk.accent)
-                        .hover(|s| s.bg(tk.accent_hover))
-                        .active(|s| s.bg(tk.accent_pressed))
-                        .text_color(tk.on_accent)
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(icons::icon(icons::SCAN, 14.0, tk.on_accent))
-                        .when(!compact, |this| this.child(t("nav.newScan"))),
-                ),
-            )
+            .child(div().px_1().pb_2().flex().child({
+                let mut scan = FButton::new("new-scan", Kind::Accent)
+                    .glyph(icons::SCAN)
+                    .flex_1()
+                    .h(px(34.));
+                if compact {
+                    scan = scan.accessible_name(t("nav.newScan"));
+                } else {
+                    scan = scan.label(t("nav.newScan"));
+                }
+                scan.on_click(cx.listener(|this, _, window, cx| this.open("overview", window, cx)))
+            }))
             .child(list)
             .child(
                 div()
@@ -411,39 +749,14 @@ impl Shell {
                     .gap(px(2.))
                     .pt(px(6.))
                     .children(status)
-                    .child(item("nav-more", icons::MORE, t("nav.more"), false))
+                    .child(self.more_menu(cx))
                     .child(
                         item("nav-settings", icons::SETTINGS, t("nav.settings"), false)
-                            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.open_settings(window, cx))),
+                            .on_click(cx.listener(|this, _, window, cx| this.open_settings(window, cx))),
                     ),
             )
     }
 }
-
-/// Element ids of the navigation items (GPUI ids are static strings or numbers).
-const NAV_IDS: [&str; 21] = [
-    "nav-overview",
-    "nav-findings",
-    "nav-alerts",
-    "nav-protection",
-    "nav-posture",
-    "nav-firewall",
-    "nav-accounts",
-    "nav-extensions",
-    "nav-quarantine",
-    "nav-history",
-    "nav-performance",
-    "nav-processes",
-    "nav-network",
-    "nav-services",
-    "nav-optimize",
-    "nav-startup",
-    "nav-tasks",
-    "nav-programs",
-    "nav-storage",
-    "nav-system",
-    "nav-reliability",
-];
 
 impl Render for Shell {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -468,6 +781,32 @@ impl Render for Shell {
                 .child(div().text_color(tk.ink2).child(t("gpui.notPorted")))
                 .into_any_element(),
         };
+        let notice = self.notice.clone().map(|(severity, text)| {
+            div()
+                .absolute()
+                .top(px(12.))
+                .right(px(20.))
+                .w(px(560.))
+                .child(ui::info_bar(
+                    "shell-notice",
+                    severity,
+                    text,
+                    Some(Box::new({
+                        let shell = cx.entity().downgrade();
+                        move |_, cx: &mut App| {
+                            let _ = shell.update(cx, |shell, cx| {
+                                shell.notice = None;
+                                cx.notify();
+                            });
+                        }
+                    })),
+                    &tk,
+                ))
+        });
+        let acting = self
+            .acting
+            .bar("shell-result", &tk)
+            .map(|bar| div().absolute().bottom(px(16.)).right(px(20.)).w(px(560.)).child(bar));
         div()
             .size_full()
             .flex()
@@ -479,6 +818,7 @@ impl Render for Shell {
             .child(self.render_nav(cx))
             .child(
                 div()
+                    .relative()
                     .flex_1()
                     .min_w_0()
                     .h_full()
@@ -488,7 +828,29 @@ impl Render for Shell {
                     .border_color(tk.layer_stroke)
                     .rounded_tl(px(8.))
                     .overflow_hidden()
-                    .child(body),
+                    .child(body)
+                    .children(notice)
+                    .children(acting),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn notifications_open_known_pages_only() {
+        assert_eq!(page_key("startup"), "startup");
+        assert_eq!(page_key("posture"), "posture");
+        assert_eq!(page_key("<script>"), "alerts");
+    }
+
+    #[test]
+    fn every_page_has_an_id_and_a_title() {
+        for ((key, _), id) in PAGES.iter().zip(NAV_IDS) {
+            assert_eq!(id, format!("nav-{key}"));
+            assert!(!vigil_i18n::with_language("en", || t(&format!("page.{key}"))).is_empty());
+        }
     }
 }

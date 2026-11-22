@@ -177,7 +177,8 @@ mod tests {
                 let Some((area, name)) = literal.split_once('.') else {
                     continue;
                 };
-                let shaped = !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric());
+                let file_name = ["msc", "exe", "dll", "json"].contains(&name);
+                let shaped = !file_name && !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric());
                 if AREAS.contains(&area) && shaped && !english.contains(literal) {
                     missing.push(format!("{literal} ({})", file.display()));
                 }

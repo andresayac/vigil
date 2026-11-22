@@ -199,3 +199,40 @@ pub fn sample_forever(tx: &UnboundedSender<Sample>, switch: &Switch, interval: D
         std::thread::sleep(interval);
     }
 }
+
+/// The inspector's modules and hosted services of a fictitious process.
+pub fn process_details(pid: u32) -> vigil_core::inspect::ProcessDetails {
+    use vigil_core::inspect::{ModuleView, ProcessDetails};
+    let module = |name: &str, path: &str, size: u64, user_writable: bool| ModuleView {
+        name: name.into(),
+        path: path.into(),
+        size,
+        user_writable,
+    };
+    let mut modules = vec![
+        module("ntdll.dll", r"C:\Windows\System32\ntdll.dll", 2_510_848, false),
+        module("kernel32.dll", r"C:\Windows\System32\kernel32.dll", 774_144, false),
+        module("user32.dll", r"C:\Windows\System32\user32.dll", 1_798_144, false),
+    ];
+    if pid == 4388 {
+        modules.push(module(
+            "version.dll",
+            r"C:\Users\jdoe\AppData\Roaming\Microsft\version.dll",
+            98_304,
+            true,
+        ));
+    }
+    let services = if (1180..=1408).contains(&pid) {
+        vec![vigil_sys::inspect::HostedService {
+            name: "Dhcp".into(),
+            display_name: "DHCP Client".into(),
+        }]
+    } else {
+        Vec::new()
+    };
+    ProcessDetails {
+        modules,
+        modules_error: None,
+        services,
+    }
+}

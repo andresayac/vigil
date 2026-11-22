@@ -89,8 +89,51 @@ pub fn now_ms() -> i64 {
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
+/// The bytes of a base64 `data:` URL (the program icons `vigil-sys` reads as PNG data URLs).
+pub fn data_url_bytes(url: &str) -> Option<Vec<u8>> {
+    let (_, encoded) = url.split_once(";base64,")?;
+    let value = |c: u8| -> Option<u32> {
+        Some(match c {
+            b'A'..=b'Z' => u32::from(c - b'A'),
+            b'a'..=b'z' => u32::from(c - b'a') + 26,
+            b'0'..=b'9' => u32::from(c - b'0') + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => return None,
+        })
+    };
+    let clean: Vec<u8> = encoded.bytes().filter(|&c| c != b'=').collect();
+    let mut out = Vec::with_capacity(clean.len() * 3 / 4);
+    for chunk in clean.chunks(4) {
+        let mut n = 0u32;
+        for (i, &c) in chunk.iter().enumerate() {
+            n |= value(c)? << (18 - 6 * i);
+        }
+        let bytes = [(n >> 16) as u8, (n >> 8) as u8, n as u8];
+        out.extend_from_slice(&bytes[..chunk.len().saturating_sub(1)]);
+    }
+    Some(out)
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn data_urls_decode() {
+        assert_eq!(
+            super::data_url_bytes("data:image/png;base64,TWFu").as_deref(),
+            Some(&b"Man"[..])
+        );
+        assert_eq!(
+            super::data_url_bytes("data:image/png;base64,TWE=").as_deref(),
+            Some(&b"Ma"[..])
+        );
+        assert_eq!(
+            super::data_url_bytes("data:image/png;base64,TQ==").as_deref(),
+            Some(&b"M"[..])
+        );
+        assert_eq!(super::data_url_bytes("data:image/png;base64,T!=="), None);
+    }
+
     use super::*;
 
     #[test]

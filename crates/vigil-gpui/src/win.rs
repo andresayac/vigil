@@ -8,6 +8,7 @@ use windows::Wdk::System::SystemServices::RtlGetVersion;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Dwm::{DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute};
 use windows::Win32::System::SystemInformation::OSVERSIONINFOW;
+use windows::Win32::UI::WindowsAndMessaging::{SHOW_WINDOW_CMD, SW_HIDE, SW_SHOW, ShowWindow};
 use windows::core::BOOL;
 
 /// The window's HWND as an integer (0 when it has none), for `vigil_core::service::Ui::owner`.
@@ -36,6 +37,25 @@ pub fn set_dark_title_bar(window: &Window, dark: bool) {
             size_of::<BOOL>() as u32,
         )
     };
+}
+
+/// Hides the window (it keeps running in the tray).
+pub fn hide(window: &Window) {
+    show_window(window, SW_HIDE);
+}
+
+/// Shows the window again (restored if it was minimized).
+pub fn show(window: &Window) {
+    show_window(window, SW_SHOW);
+}
+
+fn show_window(window: &Window, command: SHOW_WINDOW_CMD) {
+    let raw = hwnd(window);
+    if raw == 0 {
+        return;
+    }
+    // SAFETY: the HWND belongs to this live window; ShowWindow takes no pointers.
+    let _ = unsafe { ShowWindow(HWND(raw as *mut core::ffi::c_void), command) };
 }
 
 /// Windows 11 22H2 or later: the build that has the Mica system backdrop (DWMWA_SYSTEMBACKDROP_TYPE).

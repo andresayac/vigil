@@ -10,29 +10,30 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::sync::Arc;
 
-use futures::StreamExt as _;
-use futures::channel::mpsc;
-use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::input::{InputEvent, InputState};
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::table::{Column, ColumnSort, DataTable, TableDelegate, TableState};
 use gpui_kit::component::{Sizable, Size};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    App, AppContext, ClickEvent, Context, Div, Entity, FocusHandle, FontWeight, InteractiveElement, IntoElement,
-    KeyBinding, ParentElement, Render, Role, SharedString, Stateful, StatefulInteractiveElement, Styled, Subscription,
-    Toggled, Window, div, px,
+    AnyElement, App, AppContext, ClickEvent, Context, Div, Entity, FocusHandle, FontWeight, Image, ImageFormat,
+    InteractiveElement, IntoElement, KeyBinding, ObjectFit, ParentElement, Render, SharedString, Stateful,
+    StatefulInteractiveElement, Styled, StyledImage, Subscription, WeakEntity, Window, div, img, px,
 };
+use vigil_core::inspect::ProcessDetails;
 use vigil_core::requests::{ProcessRef, Request};
 use vigil_core::state::AppState;
 use vigil_sys::metrics::GpuUse;
 use vigil_sys::process::{ProcessRow, ProcessStatus};
 
-use crate::actions::{self, Outcome};
 use crate::format::{age, now_ms, num, pct, size};
 use crate::groups::{self, SECTIONS, Section};
 use crate::i18n::{t, tf, tn};
 use crate::icons;
 use crate::live::Live;
+use crate::pages::common::{self, Acting, Acts};
 use crate::theme::{FONT_DISPLAY, FONT_MONO, RADIUS, RADIUS_CARD, Tokens, tokens};
+use crate::ui::{self, grid};
 
 const MB: f64 = 1_048_576.0;
 /// 100 MB/s reads as a busy disk.
@@ -204,6 +205,10 @@ pub struct ProcTable {
     /// Findings of the last scan whose file runs now: lower-case exe -> verdict.
     marks: HashMap<String, String>,
     now: i64,
+    /// Program icons by lower-case path (`None`: the file has none).
+    icons: HashMap<String, Option<Arc<Image>>>,
+    /// The page, for the rows' context menu.
+    page: Option<WeakEntity<ProcessesPage>>,
 }
 
 impl ProcTable {
@@ -225,7 +230,35 @@ impl ProcTable {
             vram_total: 0.0,
             marks,
             now: now_ms(),
+            icons: HashMap::new(),
+            page: None,
         }
+    }
+
+    /// Moves the selection by `delta` lines (`isize::MIN` / `MAX`: first / last), skipping the
+    /// section headings; the selection stays on the same process when rows move. Returns the
+    /// line to scroll to.
+    fn step(&mut self, delta: isize) -> Option<usize> {
+        let lines: Vec<usize> = (0..self.items.len())
+            .filter(|&ix| matches!(self.items[ix], Item::Row { .. }))
+            .collect();
+        if lines.is_empty() {
+            return None;
+        }
+        let current = self
+            .selected
+            .as_deref()
+            .and_then(|key| lines.iter().position(|&ix| self.items[ix].key() == key));
+        let next = match (current, delta) {
+            (_, isize::MIN) => 0,
+            (_, isize::MAX) => lines.len() - 1,
+            (None, d) if d < 0 => lines.len() - 1,
+            (None, _) => 0,
+            (Some(at), d) => (at as isize + d).clamp(0, lines.len() as isize - 1) as usize,
+        };
+        let ix = lines[next];
+        self.selected = Some(self.items[ix].key().to_string());
+        Some(ix)
     }
 
     fn values(&self, members: &[usize]) -> Values {
@@ -783,6 +816,17 @@ impl TableDelegate for ProcTable {
                                         ))
                                 }),
                         )
+                        .child(
+                            match self.icons.get(&self.rows[*row].exe.to_lowercase()).cloned().flatten() {
+                                Some(image) => img(image)
+                                    .w(px(16.))
+                                    .h(px(16.))
+                                    .flex_none()
+                                    .object_fit(ObjectFit::Contain)
+                                    .into_any_element(),
+                                None => icons::icon(icons::APP, 14.0, tk.ink3).into_any_element(),
+                            },
+                        )
                         .when_some(mark, |this, color| {
                             this.child(div().w(px(8.)).h(px(8.)).rounded(px(4.)).bg(color))
                         })
@@ -799,6 +843,36 @@ impl TableDelegate for ProcTable {
                 .into_any_element()
             }
         }
+    }
+
+    /// Right-click: the row becomes the selection and gets Task Manager's menu.
+    fn context_menu(
+        &mut self,
+        row_ix: usize,
+        menu: PopupMenu,
+        _window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> PopupMenu {
+        let Some(Item::Row { key, row, .. }) = self.items.get(row_ix) else {
+            return menu;
+        };
+        self.selected = Some(key.clone());
+        let row = self.rows[*row].clone();
+        let Some(page) = self.page.clone() else {
+            return menu;
+        };
+        let (elevated, busy) = page
+            .upgrade()
+            .map(|p| {
+                let p = p.read(cx);
+                (p.elevated, p.acting.busy)
+            })
+            .unwrap_or((false, true));
+        let mut menu = menu;
+        for item in ProcessesPage::menu_items(page, "context", Some(&row), elevated, busy) {
+            menu = menu.item(item);
+        }
+        menu
     }
 
     fn cell_label(&self, row_ix: usize, col_ix: usize, _cx: &App) -> Option<SharedString> {
@@ -820,20 +894,54 @@ impl TableDelegate for ProcTable {
     }
 }
 
+/// The inspector's tabs under the list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Tab {
+    Details,
+    Modules,
+    Services,
+}
+
+/// CPU priority classes, lowest first, with their names.
+const PRIORITIES: [(&str, &str); 5] = [
+    ("idle", "priority.idle"),
+    ("below_normal", "priority.below_normal"),
+    ("normal", "priority.normal"),
+    ("above_normal", "priority.above_normal"),
+    ("high", "priority.high"),
+];
+
 /// The Processes page.
 pub struct ProcessesPage {
     live: Entity<Live>,
     table: Entity<TableState<ProcTable>>,
     search: Entity<InputState>,
     core: Option<Arc<AppState>>,
-    busy: bool,
-    outcome: Option<Outcome>,
-    progress: Option<String>,
+    elevated: bool,
+    acting: Acting,
     seen: u64,
     /// A process chosen elsewhere (`--pid`, "Show in Processes"): selected once the list has it.
     pending_pid: Option<u32>,
+    tab: Tab,
+    /// Modules and hosted services of the selected process, read when its tab opens: (key, details).
+    details: Option<(String, Arc<ProcessDetails>)>,
+    details_loading: bool,
+    /// Program icons asked for (lower-case path); the table holds the decoded ones.
+    icons_asked: HashSet<String>,
     focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
+}
+
+impl Acts for ProcessesPage {
+    fn acting(&mut self) -> &mut Acting {
+        &mut self.acting
+    }
+    fn core(&self) -> Option<Arc<AppState>> {
+        self.core.clone()
+    }
+    fn after(&mut self, _: &mut Window, _: &mut Context<Self>) {
+        // The next sample (within a second) shows the change.
+    }
 }
 
 impl ProcessesPage {
@@ -841,12 +949,16 @@ impl ProcessesPage {
         live: Entity<Live>,
         core: Option<Arc<AppState>>,
         focus_pid: Option<u32>,
+        elevated: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let marks = core.as_ref().map(|c| finding_marks(c)).unwrap_or_default();
+        let page = cx.entity().downgrade();
         let table = cx.new(|cx| {
-            TableState::new(ProcTable::new(marks), window, cx)
+            let mut delegate = ProcTable::new(marks);
+            delegate.page = Some(page);
+            TableState::new(delegate, window, cx)
                 .row_selectable(false)
                 .col_movable(false)
                 .sortable(true)
@@ -854,7 +966,10 @@ impl ProcessesPage {
         let search = cx.new(|cx| InputState::new(window, cx).placeholder(t("proc.search")));
         let subscriptions = vec![
             cx.observe(&live, |this, _, cx| this.on_sample(cx)),
-            cx.observe(&table, |_, _, cx| cx.notify()),
+            cx.observe(&table, |this, _, cx| {
+                this.selection_changed(cx);
+                cx.notify();
+            }),
             cx.subscribe(&search, |this, input, event: &InputEvent, cx| {
                 if matches!(event, InputEvent::Change) {
                     let filter = input.read(cx).value().to_string();
@@ -874,15 +989,18 @@ impl ProcessesPage {
             table,
             search,
             core,
-            busy: false,
-            outcome: None,
-            progress: None,
+            elevated,
+            acting: Acting::default(),
             seen: 0,
             pending_pid: focus_pid,
+            tab: Tab::Details,
+            details: None,
+            details_loading: false,
+            icons_asked: HashSet::new(),
             focus: cx.focus_handle(),
             _subscriptions: subscriptions,
         };
-        // Keyboard first: Delete ends the selected task, as in Task Manager.
+        // Keyboard first: Delete ends the selected task, the arrows move the selection.
         window.focus(&page.focus, cx);
         page.on_sample(cx);
         page
@@ -919,6 +1037,12 @@ impl ProcessesPage {
             }
             None => (None, 0.0, 0.0, HashMap::new()),
         };
+        let new_paths: Vec<String> = rows
+            .iter()
+            .filter(|r| !r.exe.is_empty())
+            .map(|r| r.exe.clone())
+            .filter(|p| !self.icons_asked.contains(&p.to_lowercase()))
+            .collect();
         let pending = self.pending_pid;
         let mut found = false;
         self.table.update(cx, |table, cx| {
@@ -951,7 +1075,88 @@ impl ProcessesPage {
         if found {
             self.pending_pid = None;
         }
+        self.read_icons(new_paths, cx);
         cx.notify();
+    }
+
+    /// Reads the icons of programs not seen yet, in the background (each is read once).
+    fn read_icons(&mut self, mut paths: Vec<String>, cx: &mut Context<Self>) {
+        paths.sort_by_key(|p| p.to_lowercase());
+        paths.dedup_by_key(|p| p.to_lowercase());
+        if paths.is_empty() {
+            return;
+        }
+        for path in &paths {
+            self.icons_asked.insert(path.to_lowercase());
+        }
+        let demo = self.core.is_none();
+        common::read(
+            cx,
+            move || {
+                paths
+                    .into_iter()
+                    .take(512)
+                    .map(|path| {
+                        let image = if demo {
+                            None
+                        } else {
+                            vigil_sys::apps::icon_data_url(&path)
+                                .and_then(|url| crate::format::data_url_bytes(&url))
+                                .map(|bytes| Arc::new(Image::from_bytes(ImageFormat::Png, bytes)))
+                        };
+                        (path.to_lowercase(), image)
+                    })
+                    .collect::<Vec<_>>()
+            },
+            |page, found, cx| {
+                page.table.update(cx, |table, cx| {
+                    table.delegate_mut().icons.extend(found);
+                    cx.notify();
+                });
+            },
+        );
+    }
+
+    /// The selection moved: the inspector's modules and services belong to another process now.
+    fn selection_changed(&mut self, cx: &mut Context<Self>) {
+        let key = self.table.read(cx).delegate().selected.clone();
+        if self.tab != Tab::Details && key.is_some() && self.details.as_ref().map(|(k, _)| k) != key.as_ref() {
+            self.read_details(cx);
+        }
+    }
+
+    fn set_tab(&mut self, tab: Tab, cx: &mut Context<Self>) {
+        self.tab = tab;
+        if tab != Tab::Details {
+            self.read_details(cx);
+        }
+        cx.notify();
+    }
+
+    fn read_details(&mut self, cx: &mut Context<Self>) {
+        let Some((row, _, _)) = self.picked(cx) else { return };
+        let key = groups::key(&row);
+        if self.details.as_ref().is_some_and(|(k, _)| *k == key) || self.details_loading {
+            return;
+        }
+        self.details_loading = true;
+        let demo = self.core.is_none();
+        let pid = row.pid;
+        common::read(
+            cx,
+            move || {
+                if demo {
+                    crate::demo::process_details(pid)
+                } else {
+                    vigil_core::inspect::process_details(pid)
+                }
+            },
+            move |page, details, cx| {
+                page.details_loading = false;
+                page.details = Some((key, Arc::new(details)));
+                page.selection_changed(cx);
+            },
+        );
     }
 
     fn set_view(&mut self, view: View, cx: &mut Context<Self>) {
@@ -961,6 +1166,15 @@ impl ProcessesPage {
             delegate.ranks = None;
             delegate.rebuild();
             table.refresh(cx);
+            cx.notify();
+        });
+    }
+
+    fn step(&mut self, delta: isize, cx: &mut Context<Self>) {
+        self.table.update(cx, |table, cx| {
+            if let Some(ix) = table.delegate_mut().step(delta) {
+                table.scroll_to_row(ix, cx);
+            }
             cx.notify();
         });
     }
@@ -984,177 +1198,185 @@ impl ProcessesPage {
         Some((table.rows[*row].clone(), refs, label.clone()))
     }
 
+    /// The finding of the last scan for the selected program, if any: (id, verdict).
+    fn finding(&self, row: &ProcessRow, cx: &App) -> Option<String> {
+        self.table
+            .read(cx)
+            .delegate()
+            .marks
+            .get(&row.exe.to_lowercase())
+            .cloned()
+    }
+
     /// Sends a process request through the action service (checked, confirmed natively, journaled).
-    fn act(&mut self, op: &str, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn act(&mut self, op: &str, priority: Option<&str>, window: &mut Window, cx: &mut Context<Self>) {
         let Some((row, members, _)) = self.picked(cx) else {
             return;
         };
-        let Some(core) = self.core.clone() else {
-            self.outcome = Some(Outcome::Failed(t("gpui.demoNoActions")));
-            cx.notify();
-            return;
-        };
         let group = members.len() > 1 && matches!(op, "terminate" | "terminate_tree");
-        let request = Request::Process {
-            op: op.to_string(),
-            pid: row.pid,
-            created_ms: row.created_ms,
-            priority: None,
-            pids: if group { members } else { Vec::new() },
-            cores: Vec::new(),
+        let request = match op {
+            "location" | "properties" | "verify" => Request::Shell {
+                op: op.into(),
+                path: Some(row.exe.clone()),
+                url: None,
+                name: None,
+            },
+            _ => Request::Process {
+                op: op.to_string(),
+                pid: row.pid,
+                created_ms: row.created_ms,
+                priority: priority.map(str::to_string),
+                pids: if group { members } else { Vec::new() },
+                cores: Vec::new(),
+            },
         };
-        let (progress_tx, mut progress_rx) = mpsc::unbounded::<String>();
-        let done = actions::run(core, request, crate::win::hwnd(window), progress_tx);
-        self.busy = true;
-        self.outcome = None;
-        cx.notify();
-        cx.spawn(async move |this, cx| {
-            let follow = this.clone();
-            let mut cx2 = cx.clone();
-            let progress = async move {
-                while let Some(line) = progress_rx.next().await {
-                    let _ = follow.update(&mut cx2, |page, cx| {
-                        page.progress = Some(line);
-                        cx.notify();
-                    });
-                }
-            };
-            let (outcome, ()) = futures::join!(done, progress);
-            let _ = this.update(cx, |page, cx| {
-                page.busy = false;
-                page.progress = None;
-                page.outcome = Some(outcome.unwrap_or(Outcome::Cancelled));
-                cx.notify();
-            });
-        })
-        .detach();
+        common::send(self, request, window, cx);
     }
 
-    fn render_commandbar(&self, has_row: bool, can_end: bool, suspended: bool, cx: &mut Context<Self>) -> Div {
+    /// The menus of the command bar and of a row's context menu, built from the same items.
+    fn menu_items(
+        page: WeakEntity<ProcessesPage>,
+        menu: &'static str,
+        row: Option<&ProcessRow>,
+        elevated: bool,
+        busy: bool,
+    ) -> Vec<PopupMenuItem> {
+        let can = row.is_some() && !busy;
+        let can_end = row.is_some_and(|r| r.pid > 4) && !busy;
+        let has_file = row.is_some_and(|r| !r.exe.is_empty());
+        let suspended = row.is_some_and(|r| r.status == ProcessStatus::Suspended);
+        let item = |label: String, op: &'static str, priority: Option<&'static str>, enabled: bool| {
+            let page = page.clone();
+            PopupMenuItem::new(label)
+                .disabled(!enabled)
+                .on_click(move |_, window, cx| {
+                    let _ = page.update(cx, |page, cx| page.act(op, priority, window, cx));
+                })
+        };
+        match menu {
+            "priority" => {
+                let mut items: Vec<PopupMenuItem> = PRIORITIES
+                    .iter()
+                    .map(|(value, key)| {
+                        item(
+                            tf("proc.cpuPriority", &[("level", &t(key))]),
+                            "priority",
+                            Some(value),
+                            can,
+                        )
+                    })
+                    .collect();
+                items.push(PopupMenuItem::separator());
+                items.push(item(t("proc.background"), "background", None, can));
+                items
+            }
+            "file" => vec![
+                item(t("proc.location"), "location", None, has_file),
+                item(t("proc.properties"), "properties", None, has_file),
+                item(t("proc.verify"), "verify", None, has_file),
+                PopupMenuItem::separator(),
+                item(t("proc.block"), "block", None, has_file && elevated && !busy),
+                item(t("proc.quarantine"), "quarantine", None, has_file && elevated && !busy),
+            ],
+            "more" => vec![
+                item(t("proc.endTree"), "terminate_tree", None, can_end),
+                if suspended {
+                    item(t("proc.resume"), "resume", None, can)
+                } else {
+                    item(t("proc.suspend"), "suspend", None, can_end)
+                },
+                item(t("proc.trim"), "trim", None, can),
+            ],
+            // The row's context menu: Task Manager's order.
+            _ => {
+                let mut items = vec![
+                    item(t("proc.endTask"), "terminate", None, can_end),
+                    item(t("proc.endTree"), "terminate_tree", None, can_end),
+                    item(t("proc.efficiency"), "efficiency", None, can),
+                    if suspended {
+                        item(t("proc.resume"), "resume", None, can)
+                    } else {
+                        item(t("proc.suspend"), "suspend", None, can_end)
+                    },
+                    PopupMenuItem::separator(),
+                ];
+                items.extend(Self::menu_items(page.clone(), "file", row, elevated, busy));
+                items
+            }
+        }
+    }
+
+    fn render_commandbar(&self, cx: &mut Context<Self>) -> Div {
         let tk = *tokens(cx);
+        let picked = self.picked(cx).map(|(row, _, _)| row);
+        let busy = self.acting.busy;
+        let has_row = picked.is_some();
+        let can_end = picked.as_ref().is_some_and(|r| r.pid > 4) && !busy;
         let view = self.table.read(cx).delegate().view;
-        let busy = self.busy;
-        let command = |id: &'static str, glyph: char, label: String, enabled: bool| {
-            div()
-                .id(id)
-                .role(Role::Button)
-                .aria_label(label.clone())
-                .flex()
-                .items_center()
-                .gap_2()
-                .h(px(32.))
-                .px_3()
-                .rounded(RADIUS)
-                .text_color(if enabled { tk.ink } else { tk.ink_disabled })
-                .when(enabled, |this| {
-                    this.hover(|s| s.bg(tk.hover)).active(|s| s.bg(tk.pressed))
+        let elevated = self.elevated;
+        let menu = |id: &'static str, glyph: char, label: String, which: &'static str, enabled: bool| {
+            let page = cx.entity().downgrade();
+            let row = picked.clone();
+            ui::command(id, glyph, label)
+                .chevron()
+                .disabled(!enabled)
+                .dropdown_menu(move |menu, _, _| {
+                    let mut menu = menu;
+                    for item in Self::menu_items(page.clone(), which, row.as_ref(), elevated, busy) {
+                        menu = menu.item(item);
+                    }
+                    menu
                 })
-                .child(icons::icon(glyph, 16.0, if enabled { tk.ink } else { tk.ink_disabled }))
-                .child(label)
         };
-        let segment = |id: &'static str, label: String, on: bool| {
-            div()
-                .id(id)
-                .role(Role::RadioButton)
-                .aria_label(label.clone())
-                .aria_toggled(if on { Toggled::True } else { Toggled::False })
-                .px(px(10.))
-                .h(px(26.))
-                .flex()
-                .items_center()
-                .rounded(px(3.))
-                .text_size(px(13.))
-                .border_1()
-                .border_color(if on { tk.control_stroke } else { tk.surface.opacity(0.) })
-                .when(on, |this| {
-                    this.bg(tk.surface).text_color(tk.ink).font_weight(FontWeight::SEMIBOLD)
-                })
-                .when(!on, |this| this.text_color(tk.ink2).hover(|s| s.bg(tk.hover)))
-                .child(label)
-        };
+        let weak = cx.entity().downgrade();
         div()
             .flex()
             .items_center()
             .gap_1()
             .child(
-                command("end-task", icons::END_TASK, t("proc.endTask"), can_end && !busy).when(
-                    can_end && !busy,
-                    |this| {
-                        this.on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.act("terminate", window, cx)))
-                    },
-                ),
+                ui::command("end-task", icons::END_TASK, t("proc.endTask"))
+                    .disabled(!can_end)
+                    .on_click(cx.listener(|this, _, window, cx| this.act("terminate", None, window, cx))),
             )
             .child(
-                command("efficiency", icons::EFFICIENCY, t("proc.efficiency"), has_row && !busy).when(
-                    has_row && !busy,
-                    |this| {
-                        this.on_click(
-                            cx.listener(|this, _: &ClickEvent, window, cx| this.act("efficiency", window, cx)),
-                        )
-                    },
-                ),
+                ui::command("efficiency", icons::EFFICIENCY, t("proc.efficiency"))
+                    .disabled(!has_row || busy)
+                    .on_click(cx.listener(|this, _, window, cx| this.act("efficiency", None, window, cx))),
             )
-            .child(if suspended {
-                command("resume", icons::RESUME, t("proc.resume"), has_row && !busy).when(has_row && !busy, |this| {
-                    this.on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.act("resume", window, cx)))
-                })
-            } else {
-                command("suspend", icons::SUSPEND, t("proc.suspend"), can_end && !busy).when(can_end && !busy, |this| {
-                    this.on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.act("suspend", window, cx)))
-                })
-            })
-            .child(
-                command("location", icons::FOLDER, t("proc.location"), has_row).when(has_row, |this| {
-                    this.on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.act("location", window, cx)))
-                }),
-            )
-            .child(
-                command("verify", icons::VERIFY, t("proc.verify"), has_row && !busy).when(has_row && !busy, |this| {
-                    this.on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.act("verify", window, cx)))
-                }),
-            )
-            .child(div().w(px(1.)).h(px(20.)).mx(px(6.)).bg(tk.rule_strong))
-            .child(
-                div()
-                    .flex()
-                    .gap(px(2.))
-                    .p(px(2.))
-                    .rounded(RADIUS)
-                    .bg(tk.control)
-                    .border_1()
-                    .border_color(tk.control_stroke)
-                    .child(
-                        segment("view-grouped", t("proc.viewGrouped"), view == View::Grouped)
-                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.set_view(View::Grouped, cx))),
-                    )
-                    .child(
-                        segment("view-tree", t("proc.viewTree"), view == View::Tree)
-                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.set_view(View::Tree, cx))),
-                    )
-                    .child(
-                        segment("view-list", t("proc.viewList"), view == View::List)
-                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.set_view(View::List, cx))),
-                    ),
-            )
+            .child(menu(
+                "priority",
+                icons::PRIORITY,
+                t("proc.priority"),
+                "priority",
+                has_row && !busy,
+            ))
+            .child(menu(
+                "file",
+                icons::FILE,
+                t("proc.file"),
+                "file",
+                picked.as_ref().is_some_and(|r| !r.exe.is_empty()),
+            ))
+            .child(menu("more", icons::MORE, t("proc.more"), "more", has_row))
+            .child(ui::separator(&tk))
+            .child(ui::segmented(
+                "proc-view",
+                t("proc.view"),
+                vec![
+                    (View::Grouped, t("proc.viewGrouped")),
+                    (View::Tree, t("proc.viewTree")),
+                    (View::List, t("proc.viewList")),
+                ],
+                view,
+                move |value, _, cx| {
+                    let _ = weak.update(cx, |page, cx| page.set_view(value, cx));
+                },
+                &tk,
+            ))
     }
 
-    fn render_details(&self, row: &ProcessRow, count: usize, label: &str, tk: &Tokens) -> Div {
-        let line = |name: String, value: String, mono: bool| {
-            div()
-                .flex()
-                .gap_3()
-                .text_size(px(13.))
-                .child(div().w(px(130.)).flex_none().text_color(tk.ink3).child(name))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .text_ellipsis()
-                        .when(mono, |this| this.font_family(FONT_MONO).text_size(px(12.)))
-                        .child(value),
-                )
-        };
+    fn render_inspector(&self, row: &ProcessRow, count: usize, label: &str, cx: &mut Context<Self>) -> Div {
+        let tk = *tokens(cx);
         let dash = |text: &str| {
             if text.is_empty() {
                 "—".to_string()
@@ -1178,54 +1400,213 @@ impl ProcessesPage {
         ));
         head.push_str(" · ");
         head.push_str(&state);
-        div()
-            .flex_none()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .p_4()
-            .bg(tk.surface)
-            .border_1()
-            .border_color(tk.rule)
-            .rounded(RADIUS_CARD)
+        let key = groups::key(row);
+        let shown = self
+            .details
+            .as_ref()
+            .filter(|(k, _)| *k == key)
+            .map(|(_, d)| Arc::clone(d));
+        let writable = shown
+            .as_ref()
+            .map_or(0, |d| d.modules.iter().filter(|m| m.user_writable).count());
+        let finding = self.finding(row, cx);
+        let weak = cx.entity().downgrade();
+        let mut modules_label = t("proc.tabModules");
+        if writable > 0 {
+            modules_label = format!("{modules_label} ({writable})");
+        }
+        let tabs = ui::segmented(
+            "proc-tab",
+            t("proc.tabDetails"),
+            vec![
+                (Tab::Details, t("proc.tabDetails")),
+                (Tab::Modules, modules_label),
+                (Tab::Services, t("proc.tabServices")),
+            ],
+            self.tab,
+            move |tab, _, cx| {
+                let _ = weak.update(cx, |page, cx| page.set_tab(tab, cx));
+            },
+            &tk,
+        );
+        let body: AnyElement = match (self.tab, shown) {
+            (Tab::Details, _) => div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(ui::fact(t("proc.path"), dash(&row.exe), true, &tk))
+                .child(ui::fact(t("proc.commandLine"), dash(&row.cmdline), true, &tk))
+                .child(ui::fact(t("proc.user"), dash(&row.user), false, &tk))
+                .child(ui::fact(
+                    t("proc.started"),
+                    tf("proc.startedAgo", &[("age", &age(row.created_ms, now_ms()))]),
+                    false,
+                    &tk,
+                ))
+                .child(ui::fact(
+                    t("proc.memory"),
+                    tf(
+                        "proc.memoryValue",
+                        &[
+                            ("private", &size(row.private_bytes as f64, 1)),
+                            ("working", &size(row.working_set as f64, 1)),
+                        ],
+                    ),
+                    false,
+                    &tk,
+                ))
+                .child(ui::fact(
+                    t("proc.threadsHandles"),
+                    format!(
+                        "{} · {}",
+                        num(f64::from(row.threads), 0),
+                        num(f64::from(row.handles), 0)
+                    ),
+                    false,
+                    &tk,
+                ))
+                .into_any_element(),
+            (Tab::Modules, None) => faint(
+                if self.details_loading {
+                    t("proc.readingModules")
+                } else {
+                    String::new()
+                },
+                &tk,
+            ),
+            (Tab::Modules, Some(details)) => match &details.modules_error {
+                Some(error) => faint(format!("{error} {}", t("proc.modulesDenied")), &tk),
+                None => {
+                    let mut modules: Vec<_> = details.modules.iter().collect();
+                    modules.sort_by_key(|m| !m.user_writable);
+                    let mut line = tn("proc.modulesLoaded", modules.len() as u64, &[]);
+                    if writable > 0 {
+                        line.push_str(" · ");
+                        line.push_str(&tn("proc.modulesWritable", writable as u64, &[]));
+                    }
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(faint(line, &tk))
+                        .child(
+                            div()
+                                .id("modules")
+                                .max_h(px(168.))
+                                .overflow_y_scroll()
+                                .border_1()
+                                .border_color(tk.rule)
+                                .rounded(RADIUS)
+                                .children(modules.into_iter().take(400).map(|m| {
+                                    div()
+                                        .flex()
+                                        .gap_3()
+                                        .px_2()
+                                        .h(px(24.))
+                                        .items_center()
+                                        .text_size(px(13.))
+                                        .when(m.user_writable, |this| {
+                                            this.text_color(tk.warn).font_weight(FontWeight::SEMIBOLD)
+                                        })
+                                        .child(
+                                            div()
+                                                .w(px(200.))
+                                                .flex_none()
+                                                .overflow_hidden()
+                                                .text_ellipsis()
+                                                .child(m.name.clone()),
+                                        )
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .min_w_0()
+                                                .overflow_hidden()
+                                                .text_ellipsis()
+                                                .font_family(FONT_MONO)
+                                                .text_size(px(12.))
+                                                .child(m.path.clone()),
+                                        )
+                                        .child(div().w(px(80.)).flex_none().text_right().child(size(m.size as f64, 0)))
+                                })),
+                        )
+                        .into_any_element()
+                }
+            },
+            (Tab::Services, None) => faint(
+                if self.details_loading {
+                    t("proc.readingServices")
+                } else {
+                    String::new()
+                },
+                &tk,
+            ),
+            (Tab::Services, Some(details)) if details.services.is_empty() => faint(t("proc.noServices"), &tk),
+            (Tab::Services, Some(details)) => div()
+                .id("hosted")
+                .max_h(px(168.))
+                .overflow_y_scroll()
+                .border_1()
+                .border_color(tk.rule)
+                .rounded(RADIUS)
+                .children(details.services.iter().map(|s| {
+                    div()
+                        .flex()
+                        .gap_3()
+                        .px_2()
+                        .h(px(24.))
+                        .items_center()
+                        .text_size(px(13.))
+                        .child(
+                            div()
+                                .w(px(220.))
+                                .flex_none()
+                                .font_family(FONT_MONO)
+                                .text_size(px(12.))
+                                .child(s.name.clone()),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .child(s.display_name.clone()),
+                        )
+                }))
+                .into_any_element(),
+        };
+        ui::card(&tk)
             .child(
                 div()
                     .flex()
-                    .items_baseline()
+                    .items_center()
                     .gap_3()
                     .pb_1()
                     .child(div().font_weight(FontWeight::SEMIBOLD).child(label.to_string()))
-                    .child(div().text_size(px(12.)).text_color(tk.ink3).child(head)),
+                    .child(div().text_size(px(12.)).text_color(tk.ink3).child(head))
+                    .when_some(finding, |this, verdict| {
+                        this.child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .text_size(px(12.))
+                                .child(div().w(px(8.)).h(px(8.)).rounded(px(4.)).bg(tk.verdict(&verdict)))
+                                .child(t("proc.showFinding")),
+                        )
+                    })
+                    .child(div().flex_1())
+                    .child(tabs),
             )
-            .child(line(t("proc.path"), dash(&row.exe), true))
-            .child(line(t("proc.commandLine"), dash(&row.cmdline), true))
-            .child(line(t("proc.user"), dash(&row.user), false))
-            .child(line(
-                t("proc.started"),
-                tf("proc.startedAgo", &[("age", &age(row.created_ms, now_ms()))]),
-                false,
-            ))
-            .child(line(
-                t("proc.memory"),
-                tf(
-                    "proc.memoryValue",
-                    &[
-                        ("private", &size(row.private_bytes as f64, 1)),
-                        ("working", &size(row.working_set as f64, 1)),
-                    ],
-                ),
-                false,
-            ))
-            .child(line(
-                t("proc.threadsHandles"),
-                format!(
-                    "{} · {}",
-                    num(f64::from(row.threads), 0),
-                    num(f64::from(row.handles), 0)
-                ),
-                false,
-            ))
+            .child(body)
     }
+}
+
+fn faint(text: String, tk: &Tokens) -> AnyElement {
+    div()
+        .text_size(px(12.))
+        .text_color(tk.ink3)
+        .child(text)
+        .into_any_element()
 }
 
 /// Findings of the last scan to mark in the list: lower-case exe path -> verdict.
@@ -1253,11 +1634,6 @@ impl Render for ProcessesPage {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let tk = *tokens(cx);
         let picked = self.picked(cx);
-        let has_row = picked.is_some();
-        let can_end = picked.as_ref().is_some_and(|(row, _, _)| row.pid > 4);
-        let suspended = picked
-            .as_ref()
-            .is_some_and(|(row, _, _)| row.status == ProcessStatus::Suspended);
         let live = self.live.read(cx);
         let count = live.processes.len();
         let suspended_count = live
@@ -1288,22 +1664,22 @@ impl Render for ProcessesPage {
             footer.push(t("proc.held"));
         }
         footer.extend(usage);
-        let outcome = match (&self.progress, &self.outcome) {
-            (Some(line), _) => Some((line.clone(), tk.ink2)),
-            (None, Some(Outcome::Done(lines))) if !lines.is_empty() => Some((lines.join("\n"), tk.ink)),
-            (None, Some(Outcome::Failed(error))) => Some((error.clone(), tk.bad)),
-            _ => None,
-        };
         let table = self.table.clone();
 
         div()
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus)
             .on_action(cx.listener(|this, _: &EndTask, window, cx| {
-                if !this.busy {
-                    this.act("terminate", window, cx);
+                if !this.acting.busy {
+                    this.act("terminate", None, window, cx);
                 }
             }))
+            .on_action(cx.listener(|this, _: &grid::SelectPrevious, _, cx| this.step(-1, cx)))
+            .on_action(cx.listener(|this, _: &grid::SelectNext, _, cx| this.step(1, cx)))
+            .on_action(cx.listener(|this, _: &grid::SelectFirst, _, cx| this.step(isize::MIN, cx)))
+            .on_action(cx.listener(|this, _: &grid::SelectLast, _, cx| this.step(isize::MAX, cx)))
+            .on_action(cx.listener(|this, _: &grid::PagePrevious, _, cx| this.step(-grid::PAGE, cx)))
+            .on_action(cx.listener(|this, _: &grid::PageNext, _, cx| this.step(grid::PAGE, cx)))
             .size_full()
             .flex()
             .flex_col()
@@ -1312,13 +1688,10 @@ impl Render for ProcessesPage {
             .pt(px(10.))
             .pb(px(12.))
             .child(
-                div().flex().justify_center().child(
-                    div().w(px(640.)).max_w_full().child(
-                        Input::new(&self.search)
-                            .prefix(icons::icon(icons::SEARCH, 14.0, tk.ink2))
-                            .cleanable(true),
-                    ),
-                ),
+                div()
+                    .flex()
+                    .justify_center()
+                    .child(div().w(px(640.)).max_w_full().child(ui::search_box(&self.search, &tk))),
             )
             .child(
                 div()
@@ -1326,33 +1699,11 @@ impl Render for ProcessesPage {
                     .items_center()
                     .gap_2()
                     .min_h(px(40.))
-                    .child(
-                        div()
-                            .pl_1()
-                            .font_family(FONT_DISPLAY)
-                            .text_size(px(20.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(t("page.processes")),
-                    )
+                    .child(ui::page_title(t("page.processes")))
                     .child(div().flex_1())
-                    .child(self.render_commandbar(has_row, can_end, suspended, cx)),
+                    .child(self.render_commandbar(cx)),
             )
-            .when_some(outcome, |this, (text, color)| {
-                this.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .px_3()
-                        .py_2()
-                        .rounded(RADIUS)
-                        .bg(tk.flyout)
-                        .border_1()
-                        .border_color(tk.rule)
-                        .child(icons::icon(icons::INFO, 16.0, tk.accent))
-                        .child(div().text_color(color).text_size(px(13.)).child(text)),
-                )
-            })
+            .children(self.acting.bar("proc-result", &tk))
             .when_some(error, |this, error| {
                 this.child(div().text_size(px(12.)).text_color(tk.warn).child(error))
             })
@@ -1387,7 +1738,7 @@ impl Render for ProcessesPage {
                     ),
             )
             .when_some(picked, |this, (row, members, label)| {
-                this.child(self.render_details(&row, members.len(), &label, &tk))
+                this.child(self.render_inspector(&row, members.len(), &label, cx))
             })
             .child(
                 div()

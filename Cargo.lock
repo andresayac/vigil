@@ -8956,6 +8956,7 @@ dependencies = [
  "serde_json",
  "vigil-core",
  "vigil-i18n",
+ "vigil-maint",
  "vigil-sys",
  "windows 0.62.2",
 ]

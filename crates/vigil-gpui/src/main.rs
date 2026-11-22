@@ -1,34 +1,48 @@
-//! Vigil with a native interface drawn by GPUI (gpui-kit): the migration prototype.
+//! Vigil with a native interface drawn by GPUI (gpui-kit).
 //!
 //! It shares the Tauri app's core (`vigil-core`): the same state, the same request checks, the
-//! same native confirmation and the same action engine. This window only displays data and asks.
+//! same native confirmation, the same action engine and the same background watch. This window
+//! only displays data and asks.
 //!
-//! `vigil-gpui [--demo] [--page KEY] [--pid PID] [--theme system|light|dark] [--lang CODE]`
-//! (`--pid`: the process the Processes page selects, as "Show in Processes" does)
+//! `vigil-gpui [--demo] [--page KEY] [--pid PID] [--theme system|light|dark] [--lang CODE] [--tray]`
+//! - `--pid`: the process the Processes page selects, as "Show in Processes" does;
+//! - `--tray`: start hidden, watching from the tray (the start at sign-in);
+//! - `--demo`: fictitious data; reads nothing, changes nothing, no tray, no watch.
 //!
-//! It never asks for administrator rights: it runs with the rights it was started with (a
-//! standard user sees and changes less). `--demo` shows fictitious data and reads nothing.
+//! It never asks for administrator rights by itself: "Restart as administrator" in the navigation
+//! pane does, when the user picks it.
 
 // No console window in release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+// GPUI's derive macros name the crate `gpui`; the Kit stands in for it.
+extern crate gpui_kit as gpui;
+
 mod actions;
 mod demo;
+mod demo_pages;
 mod format;
 mod groups;
 mod i18n;
 mod icons;
 mod live;
 mod pages;
+mod platform;
 mod shell;
 mod theme;
+mod ui;
 mod win;
 
 use std::sync::Arc;
 
+use futures::StreamExt as _;
+use futures::channel::mpsc::unbounded;
 use gpui_kit::{
     AppContext, Bounds, TitlebarOptions, WindowBackgroundAppearance, WindowBounds, WindowOptions, px, size,
 };
+use vigil_core::watch::{self, Store, Watcher};
+
+use crate::platform::{Command, Tray};
 
 fn arg(args: &[String], name: &str) -> Option<String> {
     args.iter()
@@ -39,11 +53,18 @@ fn arg(args: &[String], name: &str) -> Option<String> {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let demo = args.iter().any(|a| a == "--demo");
+    let has = |flag: &str| args.iter().any(|a| a == flag);
+    let demo = has("--demo");
+    let tray_start = has("--tray") && !demo;
     let page = arg(&args, "--page")
         .and_then(|p| shell::PAGES.iter().map(|(key, _)| *key).find(|key| *key == p))
         .unwrap_or("processes");
     let focus_pid = arg(&args, "--pid").and_then(|pid| pid.parse::<u32>().ok());
+
+    // One native window per session: a second copy asks the first to show itself and quits.
+    if !demo && !platform::claim_window() {
+        return;
+    }
 
     // The shared state (data folder, settings, the last report). The demo reads none of it.
     let core = if demo {
@@ -75,9 +96,30 @@ fn main() {
     }
     let mica = win::has_mica();
 
+    // The background watch, shared with the Tauri app: its named mutex decides which copy of
+    // Vigil watches and shows the tray icon. Started at sign-in while another copy watches:
+    // nothing to do.
+    let (commands, mut command_rx) = unbounded::<Command>();
+    let watcher = core.as_ref().map(|core| {
+        let owner = watch::claim_watch();
+        let store = Store::in_profile().unwrap_or_else(|| Store::new(core.root.join("watch")));
+        let watcher = Arc::new(Watcher::new(store, core.admin, owner));
+        // A state saved before a language was ever chosen takes this copy's language.
+        watcher.adopt_language(vigil_i18n::language());
+        watcher
+    });
+    if tray_start && !watcher.as_ref().is_some_and(|w| w.owner()) {
+        return;
+    }
+    if let Some(watcher) = &watcher {
+        Tray::start(commands.clone(), Some(Arc::clone(watcher)), watcher.owner());
+        watcher.start(Arc::new(platform::Host));
+    }
+
     gpui_kit::application().run(move |cx| {
         gpui_kit::init(cx);
         pages::processes::bind_keys(cx);
+        ui::grid::bind_keys(cx);
         let bounds = Bounds::centered(None, size(px(1280.), px(820.)), cx);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -88,6 +130,8 @@ fn main() {
                 appears_transparent: false,
                 traffic_light_position: None,
             }),
+            // Started at sign-in: hidden until opened from the tray.
+            show: !tray_start,
             window_background: if mica {
                 WindowBackgroundAppearance::MicaBackdrop
             } else {
@@ -103,17 +147,44 @@ fn main() {
             demo,
             choice,
             mica,
+            watcher: watcher.clone(),
         };
         let opened = gpui_kit::open_window(options, cx, |window, cx| {
             cx.new(|cx| shell::Shell::new(start, core.clone(), window, cx))
         });
-        if let Err(error) = opened {
-            eprintln!("Vigil could not open its window: {error}");
-            cx.quit();
-            return;
+        let (handle, shell) = match opened {
+            Ok(opened) => opened,
+            Err(error) => {
+                eprintln!("Vigil could not open its window: {error}");
+                cx.quit();
+                return;
+            }
+        };
+        if tray_start {
+            shell.update(cx, |shell, cx| {
+                shell.live.update(cx, |live, cx| live.set_visible(false, cx))
+            });
         }
+        // The close button: to the tray when this copy watches and the settings say so.
+        let closing = shell.clone();
+        let _ = handle.update(cx, |_, window, cx| {
+            window.on_window_should_close(cx, move |window, cx| {
+                closing.update(cx, |shell, cx| shell.should_close(window, cx))
+            });
+        });
+        // What the tray, a notification or a second copy asks, carried out on the UI thread.
+        cx.spawn(async move |cx| {
+            while let Some(command) = command_rx.next().await {
+                let shell = shell.clone();
+                let _ = handle.update(cx, |_, window, cx| {
+                    shell.update(cx, |shell, cx| shell.command(command, window, cx));
+                });
+            }
+        })
+        .detach();
         cx.on_window_closed(|cx, _| {
             if cx.windows().is_empty() {
+                platform::remove_icon();
                 cx.quit();
             }
         })

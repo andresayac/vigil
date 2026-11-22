@@ -16,9 +16,22 @@ pub const CHEVRON_RIGHT: char = '\u{E76C}';
 pub const CHEVRON_DOWN: char = '\u{E70D}';
 pub const INFO: char = '\u{E946}';
 pub const FOLDER: char = '\u{E838}';
-pub const VERIFY: char = '\u{E8D7}';
-pub const SUSPEND: char = '\u{E769}';
-pub const RESUME: char = '\u{E768}';
+pub const CHECK: char = '\u{E73E}';
+pub const SUCCESS: char = '\u{E930}';
+pub const WARNING: char = '\u{E7BA}';
+pub const ERROR: char = '\u{EA39}';
+pub const CANCEL: char = '\u{E711}';
+pub const START: char = '\u{E768}';
+pub const STOP: char = '\u{E71A}';
+pub const REFRESH: char = '\u{E72C}';
+pub const LOCK: char = '\u{E72E}';
+pub const DELETE: char = '\u{E74D}';
+pub const PROPERTIES: char = '\u{E946}';
+pub const PRIORITY: char = '\u{E8CB}';
+pub const FILE: char = '\u{E8A5}';
+pub const UNDO: char = '\u{E7A7}';
+pub const PAUSE: char = '\u{E769}';
+pub const APP: char = '\u{ECAA}';
 
 /// The glyph of each page in the navigation pane, by page key.
 pub fn page(key: &str) -> char {

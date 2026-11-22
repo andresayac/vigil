@@ -7,6 +7,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use serde_json::Value;
 use vigil_actions::Store;
+/// Journal records and quarantine entries as front ends read them.
+pub use vigil_actions::{QuarantineEntry, Record};
 use vigil_maint::hardware::Hardware;
 use vigil_maint::storage::CleanupTarget;
 use vigil_scan::model::Analysis;
@@ -128,6 +130,29 @@ impl AppState {
         };
         let base = path.with_file_name(stem);
         let _ = vigil_scan::pipeline::save_report(analysis, &base, false);
+    }
+
+    /// Opens a saved report (`*-report.json`) as the current one. Blocking.
+    pub fn open_report(&self, path: &std::path::Path) -> Result<(), String> {
+        let analysis =
+            vigil_scan::pipeline::load_report(path).map_err(|e| format!("Could not open the report: {e}"))?;
+        self.set_analysis(analysis, Some(path.to_path_buf()));
+        Ok(())
+    }
+
+    /// The current report as HTML and the file name to suggest for it
+    /// (`scan-20260101-1005-report.html`).
+    pub fn report_html(&self) -> Result<(String, String), String> {
+        let inner = self.lock();
+        let analysis = inner.analysis.as_ref().ok_or("Run or open a scan first.")?;
+        let started = crate::requests::scan_started(inner.analysis_json.as_ref()).unwrap_or("");
+        let stamp: String = started
+            .chars()
+            .filter(|c| c.is_ascii_digit() || *c == 'T')
+            .take(13)
+            .collect();
+        let name = format!("scan-{}-report.html", stamp.replace('T', "-"));
+        Ok((vigil_scan::report::render_html(analysis), name))
     }
 
     /// The hardware facts, read once and kept (`force` reads them again). Slow the first time:

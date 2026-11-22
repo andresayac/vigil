@@ -6,8 +6,8 @@
 //! which journals it. The state they share is `vigil_core::state::AppState`.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -66,30 +66,14 @@ pub async fn report_open(app: AppHandle) -> CmdResult<Option<Value>> {
     let Some(path) = picked.and_then(|p| p.into_path().ok()) else {
         return Ok(None);
     };
-    let loaded = blocking(move || vigil_scan::pipeline::load_report(&path).map(|a| (a, path))).await?;
-    let (analysis, path) = loaded.map_err(|e| format!("Could not open the report: {e}"))?;
-    let st = state(&app);
-    st.set_analysis(analysis, Some(path));
-    Ok(st.lock().analysis_json.clone())
+    let worker = app.clone();
+    blocking(move || state(&worker).open_report(&path)).await??;
+    Ok(state(&app).lock().analysis_json.clone())
 }
 
 #[tauri::command]
 pub async fn report_export_html(app: AppHandle) -> CmdResult<Option<String>> {
-    let (html, started) = {
-        let st = state(&app);
-        let inner = st.lock();
-        let analysis = inner.analysis.as_ref().ok_or("Run or open a scan first.")?;
-        let started = requests::scan_started(inner.analysis_json.as_ref())
-            .unwrap_or("")
-            .to_string();
-        (vigil_scan::report::render_html(analysis), started)
-    };
-    let stamp: String = started
-        .chars()
-        .filter(|c| c.is_ascii_digit() || *c == 'T')
-        .take(13)
-        .collect();
-    let name = format!("scan-{}-report.html", stamp.replace('T', "-"));
+    let (html, name) = state(&app).report_html()?;
     let mut dialog = app
         .dialog()
         .file()
@@ -712,98 +696,13 @@ pub async fn startup_list() -> CmdResult<Vec<vigil_sys::startup::StartupEntry>> 
     blocking(vigil_sys::startup::list).await
 }
 
-/// The signature of a startup program, as the Startup apps page shows it.
-#[derive(Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct StartupSignature {
-    /// "valid", "unsigned", "broken", "untrusted", "missing" or "unknown".
-    status: String,
-    signer: String,
-}
-
-/// Checked signatures by lower-case path, for this session (each check starts PowerShell).
-static STARTUP_SIGNATURES: std::sync::LazyLock<Mutex<std::collections::HashMap<String, StartupSignature>>> =
-    std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
-
-fn startup_signature(path: &str) -> StartupSignature {
-    let Ok(info) = vigil_actions::verify_signature(Path::new(path)) else {
-        return StartupSignature {
-            status: "unknown".into(),
-            signer: String::new(),
-        };
-    };
-    let status = match (info.exists, info.sig_status.as_deref()) {
-        (Some(false), _) => "missing",
-        (_, Some("Valid")) => "valid",
-        (_, Some("NotSigned")) => "unsigned",
-        (_, Some("HashMismatch")) => "broken",
-        (_, Some("NotTrusted")) => "untrusted",
-        _ => "unknown",
-    };
-    StartupSignature {
-        status: status.into(),
-        signer: info.signer.unwrap_or_default(),
-    }
-}
+pub use vigil_core::inspect::StartupSignature;
 
 /// The Authenticode signatures of startup programs (read-only). Only programs of the live startup
 /// list are checked, a few at a time; results are kept for the session.
 #[tauri::command]
 pub async fn startup_signatures(paths: Vec<String>) -> CmdResult<std::collections::HashMap<String, StartupSignature>> {
-    blocking(move || {
-        let known: std::collections::HashSet<String> = vigil_sys::startup::list()
-            .into_iter()
-            .filter(|e| e.exists && !e.host)
-            .map(|e| e.executable.to_lowercase())
-            .collect();
-        let mut out = std::collections::HashMap::new();
-        let mut todo: Vec<String> = Vec::new();
-        {
-            let cache = STARTUP_SIGNATURES
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            for path in paths.into_iter().take(256) {
-                let key = path.to_lowercase();
-                if !known.contains(&key) {
-                    continue;
-                }
-                if let Some(found) = cache.get(&key) {
-                    out.insert(path, found.clone());
-                } else if !todo.iter().any(|p| p.eq_ignore_ascii_case(&path)) {
-                    todo.push(path);
-                }
-            }
-        }
-        let size = todo.len().div_ceil(4).max(1);
-        let checked: Vec<(String, StartupSignature)> = std::thread::scope(|scope| {
-            let workers: Vec<_> = todo
-                .chunks(size)
-                .map(|chunk| {
-                    scope.spawn(move || {
-                        chunk
-                            .iter()
-                            .map(|p| (p.clone(), startup_signature(p)))
-                            .collect::<Vec<_>>()
-                    })
-                })
-                .collect();
-            workers
-                .into_iter()
-                .flat_map(|worker| worker.join().unwrap_or_default())
-                .collect()
-        });
-        let mut cache = STARTUP_SIGNATURES
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        for (path, signature) in checked {
-            if signature.status != "unknown" {
-                cache.insert(path.to_lowercase(), signature.clone());
-            }
-            out.insert(path, signature);
-        }
-        out
-    })
-    .await
+    blocking(move || vigil_core::inspect::startup_signatures(paths)).await
 }
 
 // ------------------------------------------------------------------------------------ scheduled tasks

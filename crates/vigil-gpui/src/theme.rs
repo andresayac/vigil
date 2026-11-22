@@ -197,6 +197,20 @@ impl Tokens {
         }
     }
 
+    /// Uses the Windows accent colour (in the theme's shade) for interactive elements.
+    pub fn set_accent(&mut self, accent: Hsla) {
+        self.accent = accent;
+        self.accent_hover = accent.opacity(0.9);
+        self.accent_pressed = accent.opacity(0.8);
+        self.table_select = accent.opacity(if self.dark { 0.16 } else { 0.12 });
+        // Text on the accent: black on a light accent, white on a dark one.
+        self.on_accent = if accent.l > 0.6 {
+            rgb(0x000000).into()
+        } else {
+            rgb(0xffffff).into()
+        };
+    }
+
     /// The verdict colour of a finding ("remove", "disable", "review").
     pub fn verdict(&self, verdict: &str) -> Hsla {
         match verdict {

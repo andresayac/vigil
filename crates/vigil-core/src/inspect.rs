@@ -104,6 +104,101 @@ pub fn user_writable(path: &str) -> bool {
         && !under("ProgramFiles(x86)")
 }
 
+// ------------------------------------------------------------------------------------ startup signatures
+
+/// The signature of a startup program, as the Startup apps page shows it.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct StartupSignature {
+    /// "valid", "unsigned", "broken", "untrusted", "missing" or "unknown".
+    pub status: String,
+    pub signer: String,
+}
+
+/// Checked signatures by lower-case path, for this session (each check starts PowerShell).
+static STARTUP_SIGNATURES: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, StartupSignature>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+fn startup_signature(path: &str) -> StartupSignature {
+    let Ok(info) = vigil_actions::verify_signature(std::path::Path::new(path)) else {
+        return StartupSignature {
+            status: "unknown".into(),
+            signer: String::new(),
+        };
+    };
+    let status = match (info.exists, info.sig_status.as_deref()) {
+        (Some(false), _) => "missing",
+        (_, Some("Valid")) => "valid",
+        (_, Some("NotSigned")) => "unsigned",
+        (_, Some("HashMismatch")) => "broken",
+        (_, Some("NotTrusted")) => "untrusted",
+        _ => "unknown",
+    };
+    StartupSignature {
+        status: status.into(),
+        signer: info.signer.unwrap_or_default(),
+    }
+}
+
+/// The Authenticode signatures of startup programs (read-only). Only programs of the live startup
+/// list are checked, a few at a time; results are kept for the session. Slow: call it off the UI
+/// thread.
+pub fn startup_signatures(paths: Vec<String>) -> std::collections::HashMap<String, StartupSignature> {
+    {
+        let known: std::collections::HashSet<String> = vigil_sys::startup::list()
+            .into_iter()
+            .filter(|e| e.exists && !e.host)
+            .map(|e| e.executable.to_lowercase())
+            .collect();
+        let mut out = std::collections::HashMap::new();
+        let mut todo: Vec<String> = Vec::new();
+        {
+            let cache = STARTUP_SIGNATURES
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            for path in paths.into_iter().take(256) {
+                let key = path.to_lowercase();
+                if !known.contains(&key) {
+                    continue;
+                }
+                if let Some(found) = cache.get(&key) {
+                    out.insert(path, found.clone());
+                } else if !todo.iter().any(|p| p.eq_ignore_ascii_case(&path)) {
+                    todo.push(path);
+                }
+            }
+        }
+        let size = todo.len().div_ceil(4).max(1);
+        let checked: Vec<(String, StartupSignature)> = std::thread::scope(|scope| {
+            let workers: Vec<_> = todo
+                .chunks(size)
+                .map(|chunk| {
+                    scope.spawn(move || {
+                        chunk
+                            .iter()
+                            .map(|p| (p.clone(), startup_signature(p)))
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+            workers
+                .into_iter()
+                .flat_map(|worker| worker.join().unwrap_or_default())
+                .collect()
+        });
+        let mut cache = STARTUP_SIGNATURES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for (path, signature) in checked {
+            if signature.status != "unknown" {
+                cache.insert(path.to_lowercase(), signature.clone());
+            }
+            out.insert(path, signature);
+        }
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{argument_paths, task_writable, user_writable};

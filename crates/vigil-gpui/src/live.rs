@@ -4,7 +4,7 @@
 //! sleeps on a condition variable and costs nothing. Samples reach the UI thread through a
 //! channel and are kept in a [`Live`] entity that the pages observe.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -16,8 +16,8 @@ use vigil_sys::metrics::{Snapshot, SystemMonitor};
 use vigil_sys::process::{ProcessRow, ProcessSampler};
 
 const INTERVAL: Duration = Duration::from_millis(1000);
-/// Seconds of history the charts keep (Task Manager's 60 seconds).
-pub const HISTORY: usize = 60;
+/// Seconds of history the charts keep: the longest range they show (5 minutes).
+pub const HISTORY: usize = 300;
 
 pub struct Sample {
     pub snapshot: Option<Snapshot>,
@@ -34,9 +34,17 @@ pub struct Live {
     /// Whole-computer CPU and memory use (0-100), oldest first.
     pub cpu: VecDeque<f32>,
     pub memory: VecDeque<f32>,
+    /// Every resource's history, oldest first, by key: "disk:{key}" (active %), "disk:{key}:read"
+    /// and ":write" (bytes/s), "net:{name}:recv" and ":sent" (bytes/s), "gpu:{luid}" (%),
+    /// "vram:{luid}" (% of the dedicated memory).
+    pub series: HashMap<String, VecDeque<f64>>,
     /// Samples received, so pages can tell a new sample from a re-render.
     pub generation: u64,
     switch: Option<Switch>,
+    /// A live page is open.
+    page: bool,
+    /// The window is hidden in the tray.
+    hidden: bool,
 }
 
 /// Turns the sampler thread on and off.
@@ -103,9 +111,28 @@ impl Live {
 
     /// A live page opened (true) or the last one closed (false).
     pub fn set_active(&mut self, active: bool, _cx: &mut Context<Self>) {
+        self.page = active;
+        self.apply();
+    }
+
+    /// The window was shown (true) or hidden in the tray (false): a hidden window samples nothing.
+    pub fn set_visible(&mut self, visible: bool, _cx: &mut Context<Self>) {
+        self.hidden = !visible;
+        self.apply();
+    }
+
+    fn apply(&self) {
         if let Some(switch) = &self.switch {
-            switch.set(active);
+            switch.set(self.page && !self.hidden);
         }
+    }
+
+    fn record(&mut self, key: String, value: f64) {
+        let series = self.series.entry(key).or_default();
+        if series.len() == HISTORY {
+            series.pop_front();
+        }
+        series.push_back(value);
     }
 
     fn push(&mut self, sample: Sample) {
@@ -125,6 +152,24 @@ impl Live {
                     series.pop_front();
                 }
                 series.push_back(value);
+            }
+            for disk in &snapshot.disks {
+                self.record(format!("disk:{}", disk.key), f64::from(disk.active));
+                self.record(format!("disk:{}:read", disk.key), disk.read_bps);
+                self.record(format!("disk:{}:write", disk.key), disk.write_bps);
+            }
+            for net in &snapshot.nets {
+                self.record(format!("net:{}:recv", net.name), net.recv_bps);
+                self.record(format!("net:{}:sent", net.name), net.sent_bps);
+            }
+            for gpu in &snapshot.gpus {
+                self.record(format!("gpu:{}", gpu.luid), f64::from(gpu.utilization));
+                let vram = if gpu.dedicated_total > 0 {
+                    gpu.dedicated_used as f64 / gpu.dedicated_total as f64 * 100.0
+                } else {
+                    0.0
+                };
+                self.record(format!("vram:{}", gpu.luid), vram);
             }
             self.snapshot = Some(snapshot);
         }
