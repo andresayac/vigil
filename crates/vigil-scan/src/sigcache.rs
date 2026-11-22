@@ -640,4 +640,28 @@ mod cost {
             );
         }
     }
+
+    /// The cache file is read back at every scan: garbage, broken JSON or deep nesting is
+    /// treated as an empty cache.
+    #[test]
+    fn a_damaged_cache_file_is_an_empty_cache() {
+        use crate::fuzz::{Rng, check};
+        let mut rng = Rng::new(29);
+        let dir = std::env::temp_dir().join(format!("vigil-fuzz-sigcache-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("signature-cache.json");
+        let sample = br#"{"version":2,"build":"26100.1","entries":{"c:\\x.exe":{"size":1,"modified":1,"fileId":"1","sha256":"ab","checked":1,"info":{"status":"Valid"}}}}"#;
+        for case in 0..150 {
+            let bytes = if case % 2 == 0 {
+                rng.bytes(400)
+            } else {
+                rng.mutate(sample)
+            };
+            let _ = std::fs::write(&path, &bytes);
+            check("signature cache", &bytes, || {
+                let _ = super::read_stored(&path);
+            });
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

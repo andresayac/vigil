@@ -1795,4 +1795,73 @@ mod tests {
         assert_eq!(list[0].flags, ["policy", "all_sites"]);
         assert!(list[1].flags.is_empty());
     }
+
+    /// Preferences, manifests, locale messages, Firefox's extensions.json and policies.json are
+    /// written by the browser, its extensions or anything running as the user: any content, even
+    /// broken JSON, deep nesting or huge numbers, must be read or skipped without a panic.
+    #[test]
+    fn hostile_profile_files_never_break_the_reader() {
+        use crate::fuzz::{Rng, check_text};
+        let mut rng = Rng::new(28);
+        let temp = Temp::new("fuzz");
+        let tokens = &[
+            "{",
+            "}",
+            "[",
+            "]",
+            "\"",
+            ":",
+            ",",
+            "null",
+            "1e999",
+            "-1",
+            "18446744073709551616",
+            "\"extensions\"",
+            "\"settings\"",
+            "\"manifest\"",
+            "\"__MSG_name__\"",
+            "\"default_locale\"",
+            "\"permissions\"",
+            "\"<all_urls>\"",
+            "\"location\"",
+            "\"addons\"",
+            "\"id\"",
+            "[[[[[[[[",
+            "\\u0000",
+            "\"..\\\\..\\\\x\"",
+        ];
+        let prefs = r#"{"extensions":{"settings":{"aaaabbbbccccddddeeeeffffgggghhhh":{"location":1,"state":1,"disable_reasons":[1,2],"install_time":"13300000000000000","manifest":{"name":"__MSG_name__","version":"1.0","permissions":["<all_urls>","tabs"]}}}}}"#;
+        let manifest = r#"{"name":"__MSG_name__","default_locale":"en","version":"1.0","manifest_version":2,"permissions":["<all_urls>"],"host_permissions":["*://*/*"],"icons":{"48":"i.png"}}"#;
+        let messages = r#"{"name":{"message":"Contoso Notes"}}"#;
+        let firefox = r#"{"addons":[{"id":"x@contoso","type":"extension","active":true,"location":"app-profile","defaultLocale":{"name":"Contoso"},"userPermissions":{"permissions":["tabs"],"origins":["<all_urls>"]},"signedState":2,"path":"C:\\x.xpi"}]}"#;
+        let policies = r#"{"policies":{"ExtensionSettings":{"*":{"installation_mode":"force_installed","install_url":"https://example.com/x.xpi"}},"Proxy":{"Mode":"manual"}}}"#;
+        for case in 0..120 {
+            let dir = temp.0.join(format!("p{}", case % 4));
+            let ext = dir.join("Extensions").join(NOTES).join("1.0_0");
+            let mut pick = |sample: &str| {
+                if rng.chance(30) {
+                    rng.text(30, tokens)
+                } else {
+                    rng.mutate_text(sample, tokens)
+                }
+            };
+            let files = [
+                (dir.join("Preferences"), pick(prefs)),
+                (dir.join("Secure Preferences"), pick(prefs)),
+                (ext.join("manifest.json"), pick(manifest)),
+                (ext.join("_locales").join("en").join("messages.json"), pick(messages)),
+                (dir.join("extensions.json"), pick(firefox)),
+                (dir.join("policies.json"), pick(policies)),
+            ];
+            for (path, text) in &files {
+                write(path, text);
+            }
+            let shown: Vec<&str> = files.iter().map(|(_, text)| text.as_str()).collect();
+            check_text("browser profile", &shown.join("\n"), || {
+                let _ = chromium_profile("Chrome", &dir, "p", "Default", "jdoe");
+                let _ = firefox_profile(&dir, "p", "default-release", "jdoe");
+                let _ = firefox_file_policies(&dir.join("policies.json"));
+            });
+        }
+    }
 }

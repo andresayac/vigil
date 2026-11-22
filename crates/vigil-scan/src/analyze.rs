@@ -11,8 +11,8 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::cmdline::{
-    ParsedCommand, SCRIPT_EXTS, expand_env, is_file, is_host, is_system_only_host, normalize_path, parse_command,
-    resolve_program, split_command,
+    ParsedCommand, SCRIPT_EXTS, expand_env, is_file, is_host, is_remote_path, is_system_only_host, normalize_path,
+    parse_command, resolve_program, split_command,
 };
 use crate::ip;
 use crate::lenient::{Get, int_of, is_false, is_true, list, lower, or_empty, rx, str_of, strip, take, text, truthy};
@@ -1291,7 +1291,9 @@ pub(crate) fn needed_paths(refs: &[Ref]) -> Vec<String> {
     let mut paths = BTreeSet::new();
     for r in refs {
         for candidate in [&r.parsed.program, &r.parsed.payload].into_iter().flatten() {
-            if !candidate.is_empty() && (isabs(candidate) || candidate.starts_with("\\\\")) {
+            // A file on another computer is never checked: opening it would connect to that
+            // server and offer the user's credentials.
+            if !candidate.is_empty() && isabs(candidate) && !is_remote_path(candidate) {
                 paths.insert(candidate.clone());
             }
         }
@@ -2092,6 +2094,9 @@ pub(crate) fn evaluate_entities(raw: &Value, refs: Vec<Ref>, files: &Files) -> V
 // --------------------------------------------------------------------------- hashes
 
 fn sha256_file(path: &str, limit: u64) -> Option<String> {
+    if is_remote_path(path) {
+        return None;
+    }
     let metadata = std::fs::metadata(path).ok()?;
     if metadata.len() > limit {
         return None;

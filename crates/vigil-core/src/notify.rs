@@ -170,13 +170,30 @@ mod tests {
         assert_eq!(escaped, "RunMe \r\nok \u{1F600} \u{E000}");
         // The whole document is accepted by the XML parser Windows uses for notifications.
         let xml = toast_xml(title, "C:\\Users\\jdoe\\x\u{FFFF}.exe", "startup");
-        let doc = XmlDocument::new().expect("XML document");
+        let Some(doc) = xml_document() else { return };
         doc.LoadXml(&HSTRING::from(xml)).expect("valid XML");
         // The plain notification is valid too.
         let (title, body) = vigil_i18n::with_language("en", generic_text);
         assert_eq!(title, "Vigil noticed changes");
-        let doc = XmlDocument::new().expect("XML document");
+        let Some(doc) = xml_document() else { return };
         doc.LoadXml(&HSTRING::from(toast_xml(&title, &body, "alerts")))
             .expect("valid XML");
+    }
+
+    /// Windows' XML parser for notifications. Activating it can fail for a moment on a busy or
+    /// headless machine ("object server is stopping"), so it is tried a few times; when WinRT is not
+    /// available at all the parser check is skipped (the escaping itself is checked above).
+    fn xml_document() -> Option<XmlDocument> {
+        for attempt in 0..5u64 {
+            match XmlDocument::new() {
+                Ok(doc) => return Some(doc),
+                Err(error) if attempt < 4 => {
+                    eprintln!("XmlDocument not ready ({error}), retrying");
+                    std::thread::sleep(std::time::Duration::from_millis(200 * (attempt + 1)));
+                }
+                Err(error) => eprintln!("XmlDocument unavailable, skipping the parser check: {error}"),
+            }
+        }
+        None
     }
 }

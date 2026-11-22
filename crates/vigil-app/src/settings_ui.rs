@@ -429,7 +429,11 @@ impl SettingsView {
             Secret::Replace => {
                 let input = self.keys.get(id).cloned();
                 kit::row()
-                    .children(input.map(|i| div().w(px(240.)).child(Input::new(&i))))
+                    .children(input.map(|i| {
+                        div()
+                            .w(px(240.))
+                            .child(Input::new(&i).aria_label(t("settings.ai.apiKey")))
+                    }))
                     .when(stored, |this| {
                         this.child(
                             ui::button(ElementId::Name(format!("se-cancel-{id}").into()), t("common.cancel"))
@@ -700,7 +704,7 @@ impl Render for SettingsView {
                         div()
                             .w(px(300.))
                             .font_family(FONT_MONO)
-                            .child(Input::new(&self.endpoint))
+                            .child(Input::new(&self.endpoint).aria_label(t("settings.ai.endpoint")))
                             .into_any_element(),
                         &tk,
                     ),
@@ -726,8 +730,12 @@ impl Render for SettingsView {
                     }
                 }
                 let model_input = self.model.clone();
-                let mut control =
-                    kit::row().child(div().w(px(220.)).font_family(FONT_MONO).child(Input::new(&self.model)));
+                let mut control = kit::row().child(
+                    div()
+                        .w(px(220.))
+                        .font_family(FONT_MONO)
+                        .child(Input::new(&self.model).aria_label(t("settings.ai.model"))),
+                );
                 if !suggestions.is_empty() {
                     control = control.child(
                         FButton::new("se-models", Kind::Standard)
@@ -1224,9 +1232,11 @@ impl SettingsView {
         }
         if schedule != "off" {
             control = control.child(
-                kit::row()
-                    .child(kit::faint(t("settings.watch.scanTime"), tk))
-                    .child(div().w(px(90.)).child(Input::new(&self.scan_time))),
+                kit::row().child(kit::faint(t("settings.watch.scanTime"), tk)).child(
+                    div()
+                        .w(px(90.))
+                        .child(Input::new(&self.scan_time).aria_label(t("settings.watch.scanTime"))),
+                ),
             );
         }
         self.row(

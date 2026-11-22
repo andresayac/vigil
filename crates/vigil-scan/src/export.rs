@@ -605,4 +605,104 @@ mod tests {
         assert_eq!(Format::parse("html").map(Format::extension), Some("html"));
         assert_eq!(Format::parse("xml"), None);
     }
+
+    /// A CSV read back cell by cell (RFC 4180, byte order mark skipped).
+    fn read_csv(text: &str) -> Vec<Vec<String>> {
+        let mut rows = Vec::new();
+        let mut row = Vec::new();
+        let mut cell = String::new();
+        let mut quoted = false;
+        let mut chars = text.trim_start_matches('\u{FEFF}').chars().peekable();
+        while let Some(c) = chars.next() {
+            if quoted {
+                if c == '"' {
+                    if chars.peek() == Some(&'"') {
+                        cell.push('"');
+                        chars.next();
+                    } else {
+                        quoted = false;
+                    }
+                } else {
+                    cell.push(c);
+                }
+            } else {
+                match c {
+                    '"' => quoted = true,
+                    ',' => row.push(std::mem::take(&mut cell)),
+                    '\r' => {}
+                    '\n' => {
+                        row.push(std::mem::take(&mut cell));
+                        rows.push(std::mem::take(&mut row));
+                    }
+                    _ => cell.push(c),
+                }
+            }
+        }
+        if !cell.is_empty() || !row.is_empty() {
+            row.push(cell);
+            rows.push(row);
+        }
+        rows
+    }
+
+    /// Names, reasons and paths come from the scanned computer: whatever they hold, the CSV keeps
+    /// one cell per column, no cell starts a formula, and the SARIF is valid JSON.
+    #[test]
+    fn any_text_exports_safely() {
+        use crate::fuzz::{Rng, check_text};
+        let mut rng = Rng::new(27);
+        let tokens = &[
+            "=",
+            "+",
+            "-",
+            "@",
+            "\t",
+            "\r",
+            "\n",
+            ",",
+            ";",
+            "\"",
+            "'",
+            "=HYPERLINK(",
+            "\u{202E}",
+            "C:\\",
+            "\\\\server\\",
+            "%",
+            "#",
+            "\u{0}",
+            "file:///",
+        ];
+        for _ in 0..300 {
+            let mut analysis = sample();
+            for item in &mut analysis.items {
+                item.title = rng.text(8, tokens);
+                item.reason = rng.text(8, tokens);
+                item.path = Some(rng.text(6, tokens));
+                item.commands = vec![rng.text(6, tokens)];
+            }
+            let shown: Vec<&str> = analysis.items.iter().map(|i| i.title.as_str()).collect();
+            check_text("export", &shown.join("|"), || {
+                let rows = read_csv(&csv(
+                    &analysis,
+                    Options {
+                        include_trusted: true,
+                        ..Options::default()
+                    },
+                ));
+                let width = rows[0].len();
+                assert!(rows.iter().all(|row| row.len() == width), "one cell per column");
+                for cell in rows.iter().flatten() {
+                    assert!(!cell.starts_with(['=', '+', '-', '@', '\t', '\r']), "formula: {cell:?}");
+                }
+                let sarif = sarif(
+                    &analysis,
+                    Options {
+                        include_trusted: true,
+                        ..Options::default()
+                    },
+                );
+                assert!(serde_json::from_str::<Value>(&sarif).is_ok(), "valid JSON");
+            });
+        }
+    }
 }

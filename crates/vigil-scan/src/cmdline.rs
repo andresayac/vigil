@@ -210,7 +210,54 @@ pub fn normalize_path(path: &str) -> String {
 }
 
 pub(crate) fn is_file(path: &str) -> bool {
-    !path.is_empty() && !path.contains('\0') && Path::new(path).is_file()
+    !path.is_empty() && !path.contains('\0') && !is_remote_path(path) && Path::new(path).is_file()
+}
+
+/// True for a path whose file lives on another computer or behind a device name: UNC
+/// (`\\server\share\x`, `\\?\UNC\…`), the device namespace (`\\.\…`, `\\?\Volume{…}`), or a drive
+/// letter mapped to a network share. The scan never opens one: Windows would connect to that
+/// server (slowly, and offering the user's credentials), and the path comes from a command line
+/// any program can write. `\\?\C:\…` on a local drive is fine.
+pub(crate) fn is_remote_path(path: &str) -> bool {
+    let path = path.trim().trim_matches('"');
+    let slashes = |c: char| c == '\\' || c == '/';
+    let mut chars = path.chars();
+    let (first, second) = (chars.next(), chars.next());
+    if first.is_some_and(slashes) && second.is_some_and(slashes) {
+        // `\\?\X:\…` (or `\\.\X:\…`) is a local path written in long form; anything else after
+        // two slashes names a server or a device.
+        let rest: Vec<char> = path.chars().skip(4).take(2).collect();
+        let long_drive = path.chars().nth(2).is_some_and(|c| c == '?' || c == '.')
+            && path.chars().nth(3).is_some_and(slashes)
+            && rest.len() == 2
+            && rest[0].is_ascii_alphabetic()
+            && rest[1] == ':';
+        return !long_drive || drive_is_remote(rest[0]);
+    }
+    match (first, second) {
+        (Some(letter), Some(':')) if letter.is_ascii_alphabetic() => drive_is_remote(letter),
+        _ => false,
+    }
+}
+
+/// True when the drive letter is mapped to a network share (asked of Windows, which answers
+/// from its own table without connecting).
+#[cfg(windows)]
+fn drive_is_remote(letter: char) -> bool {
+    use windows::Win32::Storage::FileSystem::GetDriveTypeW;
+    let root: Vec<u16> = format!("{letter}:\\")
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    // DRIVE_REMOTE
+    const REMOTE: u32 = 4;
+    // SAFETY: `root` is a NUL-terminated wide string that lives for the call.
+    unsafe { GetDriveTypeW(windows::core::PCWSTR(root.as_ptr())) == REMOTE }
+}
+
+#[cfg(not(windows))]
+fn drive_is_remote(_letter: char) -> bool {
+    false
 }
 
 fn search_dirs() -> Vec<String> {

@@ -22,6 +22,9 @@ cargo build --release -p vigil-app             :: target\release\vigil.exe (need
 powershell -File installer\build-setup.ps1 -Out dist   :: the setup from target\release\vigil.exe (NSIS)
 powershell -File installer\test-installer.ps1 -ChecksOnly -Exe target\release\vigil.exe
                                                :: the installer test's checks that need no rights (CI runs all)
+powershell -File installer\smoke-window.ps1 -Exe target\debug\vigil.exe [-Only processes,dialog-run] [-Out dir]
+                                               :: every page and dialog in --demo: starts, no panic, no
+                                               :: focusable control without a name (CI runs it on every push)
 ```
 
 Run clippy and the tests before you finish any change. Never trigger a UAC prompt from automation: debug builds
@@ -56,7 +59,8 @@ crates/
                   src/pages, Fluent controls in src/ui, the Ctrl+K palette (`search.rs`, `palette.rs`), the
                   welcome (`welcome.rs`), catalogs in locales/, demo data in data/demo.json.
                   It never depends on vigil-actions: it only sends requests to service::run_action
-installer/        vigil.nsi (the per-machine NSIS installer), build-setup.ps1, test-installer.ps1
+installer/        vigil.nsi (the per-machine NSIS installer), build-setup.ps1, test-installer.ps1,
+                  smoke-window.ps1 (every page and dialog of the window, in CI)
 docs/             ARCHITECTURE.md (how it fits together), NATIVE-UI.md (the window and its Windows 11 look),
                   screenshots/ (demo screenshots used by the README)
 CHANGELOG.md      what each release changed

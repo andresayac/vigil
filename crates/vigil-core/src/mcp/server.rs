@@ -637,4 +637,73 @@ mod tests {
         );
         assert!(text.contains(r"command = 'C:\Program Files\Vigil\vigil.exe'"), "{text}");
     }
+
+    /// Whatever a client sends on stdin (random bytes, invalid UTF-8, a line far past the cap,
+    /// deeply nested JSON, valid requests with odd parameters), the server answers with JSON
+    /// lines or stops cleanly: never a panic.
+    #[test]
+    fn any_input_is_answered_or_refused() {
+        use crate::fuzz::{Rng, check};
+        let mut rng = Rng::new(45);
+        let server = server(None);
+        let tokens = &[
+            "{",
+            "}",
+            "[",
+            "]",
+            "\"",
+            ":",
+            ",",
+            "\n",
+            "\"jsonrpc\":\"2.0\"",
+            "\"id\":",
+            "1",
+            "null",
+            "\"method\":",
+            "\"tools/call\"",
+            "\"tools/list\"",
+            "\"initialize\"",
+            "\"params\":",
+            "\"name\":\"get_finding\"",
+            "\"arguments\":",
+            "{\"id\":\"x1\"}",
+            "{\"path\":\"\\\\\\\\server\\\\x\"}",
+            "1e999",
+            "-1",
+        ];
+        let request = br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_finding","arguments":{"id":"x1"}}}"#;
+        for case in 0..400 {
+            let mut input = match case % 4 {
+                0 => rng.bytes(300),
+                1 => rng.mutate(request),
+                2 => rng.text(30, tokens).into_bytes(),
+                _ => {
+                    let mut lines = request.to_vec();
+                    lines.push(b'\n');
+                    lines.extend(rng.mutate(request));
+                    lines
+                }
+            };
+            input.push(b'\n');
+            check("mcp input", &input, || {
+                let mut output = Vec::new();
+                let _ = server.serve(std::io::Cursor::new(&input), &mut output);
+                for line in output.split(|b| *b == b'\n').filter(|line| !line.is_empty()) {
+                    assert!(
+                        serde_json::from_slice::<Value>(line).is_ok(),
+                        "every answer is a JSON line"
+                    );
+                }
+            });
+        }
+        // Past the line cap, and nested far past serde's recursion limit.
+        let huge = vec![b'a'; 3 * 1024 * 1024];
+        let deep = format!("{}{}\n", "[".repeat(200_000), "]".repeat(200_000)).into_bytes();
+        for input in [huge, deep] {
+            check("mcp extremes", &input[..64], || {
+                let mut output = Vec::new();
+                let _ = server.serve(std::io::Cursor::new(&input), &mut output);
+            });
+        }
+    }
 }

@@ -24,6 +24,31 @@ jobs:
       - name: Tests
         run: cargo test --workspace
 
+  # The real window, in demo mode (fictitious data, nothing read or changed): every page and dialog
+  # starts, stays up, panics nowhere and has no focusable control without a name for screen
+  # readers, in light and dark and in the five languages. The captures are kept as an artifact.
+  window:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build Vigil (debug)
+        run: cargo build -p vigil-app
+      - name: Every page and dialog
+        shell: powershell
+        run: |
+          installer\smoke-window.ps1 -Exe target\debug\vigil.exe -Out window-smoke
+          if ($LASTEXITCODE -ne 0) { throw "the window smoke test failed" }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: window-smoke
+          path: window-smoke/
+          if-no-files-found: ignore
+          retention-days: 7
+
   # The runner is an administrator without a UAC prompt: the setup is really installed, checked,
   # upgraded over itself and over the last 1.x release, and uninstalled.
   installer:

@@ -164,7 +164,12 @@ impl RestorePage {
             .child(kit::muted(t("restore.createNote"), tk))
             .child(
                 kit::row()
-                    .child(div().flex_1().min_w_0().child(Input::new(&self.description)))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(Input::new(&self.description).aria_label(t("restore.createTitle"))),
+                    )
                     .child(
                         ui::accent_button("rp-create", t("restore.create"))
                             .disabled(disabled)

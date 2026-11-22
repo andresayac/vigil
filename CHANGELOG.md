@@ -2,6 +2,15 @@
 
 Each release's full notes are on the repository's Releases page.
 
+## 2.5.0 — 2026-11-22
+
+- The scan and the safety checks never open network paths: a startup entry, task or service pointing to
+  `\\server\share\…`, a device path or a mapped network drive is judged without contacting that server.
+- Every parser of data from the computer is tested against random and damaged input (policies, PE files, XML,
+  registry values, reports, MCP messages, exports): no crash, hang or unbounded memory.
+- Every page and dialog of the window is started in all five languages, light and dark, on each change, with
+  its controls checked for screen-reader names. Text boxes that had only a placeholder now have a name.
+
 ## 2.4.0 — 2026-11-22
 
 - Vulnerable drivers: every driver is checked offline against Microsoft's vulnerable driver blocklist that Windows

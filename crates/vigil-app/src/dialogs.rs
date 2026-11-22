@@ -426,7 +426,12 @@ impl Render for RunTask {
                 div()
                     .flex()
                     .gap_2()
-                    .child(div().flex_1().font_family(FONT_MONO).child(Input::new(&self.path)))
+                    .child(
+                        div()
+                            .flex_1()
+                            .font_family(FONT_MONO)
+                            .child(Input::new(&self.path).aria_label(t("run.program"))),
+                    )
                     .child(
                         ui::button("run-browse", t("run.browse"))
                             .disabled(self.ctx.demo())
@@ -434,7 +439,11 @@ impl Render for RunTask {
                     ),
             )
             .child(kit::body(t("run.arguments")).font_weight(FontWeight::SEMIBOLD))
-            .child(div().font_family(FONT_MONO).child(Input::new(&self.args)))
+            .child(
+                div()
+                    .font_family(FONT_MONO)
+                    .child(Input::new(&self.args).aria_label(t("run.arguments"))),
+            )
             .child(kit::faint(t("run.argumentsHint"), &tk))
             .child(ui::check_box(
                 "run-admin",

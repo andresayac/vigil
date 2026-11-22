@@ -176,6 +176,33 @@ mod imp {
         }
     }
 
+    /// Registry data of any type and length (odd byte counts, no terminator, empty) converts
+    /// without a panic.
+    #[cfg(test)]
+    #[test]
+    fn any_registry_data_converts() {
+        use crate::fuzz::{Rng, check};
+        use windows::Win32::System::Registry::{REG_BINARY, REG_LINK};
+        let mut rng = Rng::new(30);
+        let kinds = [
+            REG_SZ,
+            REG_EXPAND_SZ,
+            REG_MULTI_SZ,
+            REG_DWORD,
+            REG_QWORD,
+            REG_BINARY,
+            REG_LINK,
+            REG_VALUE_TYPE(99),
+        ];
+        for _ in 0..4_000 {
+            let kind = kinds[rng.below(kinds.len())];
+            let data = rng.bytes(300);
+            check("registry data", &data, || {
+                let _ = convert(kind, &data);
+            });
+        }
+    }
+
     fn sizes(key: &Key) -> (u32, u32, u32) {
         let (mut max_subkey, mut max_name, mut max_data) = (0u32, 0u32, 0u32);
         // SAFETY: the out-pointers are valid for the duration of the call.

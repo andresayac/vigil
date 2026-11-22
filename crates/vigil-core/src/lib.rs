@@ -17,6 +17,10 @@ pub mod duplicates;
 pub mod export;
 pub mod extensions;
 pub mod firewall;
+#[cfg(test)]
+mod fuzz;
+#[cfg(test)]
+mod fuzz_tests;
 pub mod inspect;
 pub mod investigate;
 pub mod mcp;

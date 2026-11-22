@@ -21,6 +21,10 @@ mod datadir;
 mod engine;
 mod error;
 mod firewall;
+#[cfg(test)]
+mod fuzz;
+#[cfg(test)]
+mod fuzz_tests;
 mod guards;
 mod json_text;
 mod labels;

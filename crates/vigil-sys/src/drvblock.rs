@@ -1580,4 +1580,53 @@ mod tests {
         assert_eq!(hits, Some(vec![Some(Hit::Hash), None, None]));
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// The blocklist file and every driver file are hashed or parsed while elevated: random and
+    /// mutated input (bit flips, cuts, length fields set to extremes) must never panic or stall.
+    #[test]
+    fn the_parsers_survive_any_bytes() {
+        use crate::fuzz::{Rng, check};
+        let mut rng = Rng::new(10);
+        let policy = synthetic([1; 20], [2; 32]);
+        let econtent = [der(0x06, &[0x2b, 0x06, 0x01]), der(0xa0, &der(0x04, &policy))].concat();
+        let signed = [
+            der(0x02, &[1]),
+            der(0x31, &der(0x30, &[])),
+            der(0x30, &econtent),
+            der(0x31, &[]),
+        ]
+        .concat();
+        let message = der(
+            0x30,
+            &[der(0x06, &SIGNED_DATA), der(0xa0, &der(0x30, &signed))].concat(),
+        );
+        let image = pe(true);
+        // The samples themselves parse, so their mutations reach deep into each parser.
+        assert!(parse_policy(&policy).is_some() && pkcs7_content(&message).is_some());
+        assert!(authenticode(&image).is_some());
+        for case in 0..3_000 {
+            let input = match case % 4 {
+                0 => rng.bytes(2_048),
+                1 => rng.mutate(&policy),
+                2 => rng.mutate(&message),
+                _ => rng.mutate(&image),
+            };
+            check("blocklist parsers", &input, || {
+                let _ = parse_policy(&input);
+                let _ = pkcs7_content(&input);
+                let _ = authenticode(&input);
+            });
+        }
+        // The signature check goes through CryptoAPI: fewer cases, still garbage and near-misses.
+        for case in 0..150 {
+            let input = if case % 2 == 0 {
+                rng.bytes(512)
+            } else {
+                rng.mutate(&message)
+            };
+            check("blocklist signature", &input, || {
+                let _ = verify(&input);
+            });
+        }
+    }
 }

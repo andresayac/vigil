@@ -7,6 +7,10 @@
 #![cfg(windows)]
 
 mod error;
+#[cfg(test)]
+mod fuzz;
+#[cfg(test)]
+mod fuzz_tests;
 mod nt;
 pub mod paths;
 mod util;

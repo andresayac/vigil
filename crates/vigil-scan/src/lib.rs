@@ -36,6 +36,10 @@ mod com;
 mod engine;
 mod error;
 mod firewall;
+#[cfg(test)]
+mod fuzz;
+#[cfg(test)]
+mod fuzz_tests;
 mod hooks;
 mod ip;
 mod lenient;
