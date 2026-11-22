@@ -279,8 +279,11 @@ pub fn auto_scan_row(ctx: &Ctx, status: &Value, id: &'static str, tk: &Tokens) -
     }
     let c = ctx.clone();
     Some(
-        kit::row()
+        div()
+            .flex()
+            .flex_col()
             .gap_1()
+            .min_w_0()
             .child(kit::faint(line, tk))
             .when(status.at("autoScan").b("report"), |this| {
                 this.child(kit::link(
