@@ -603,13 +603,69 @@ fn task_disable_delete_and_undo() {
     );
 }
 
+const DISABLED_TASK: &str =
+    r#"<?xml version="1.0" encoding="UTF-16"?><Task><Settings><Enabled>false</Enabled></Settings></Task>"#;
+
+#[test]
+fn task_enable_and_undo() {
+    let fx = Fixture::new();
+    let runner = FakeRunner::install(&[(r"/Query", ToolResult::new(0, DISABLED_TASK, ""))]);
+    let params = json!({"path": "\\Vendor\\", "name": "Updater Task"});
+    let record = execute(&spec("task.enable", params), &fx.store, None, "");
+    assert!(record.ok(), "{}", record.message());
+    assert!(
+        runner
+            .lines()
+            .contains(&r"schtasks.exe /Change /TN \Vendor\Updater Task /ENABLE".to_string())
+    );
+    assert!(can_undo(&record));
+    vigil_actions::undo(record.id(), &fx.store).expect("undo");
+    assert!(
+        runner
+            .lines()
+            .contains(&r"schtasks.exe /Change /TN \Vendor\Updater Task /DISABLE".to_string())
+    );
+}
+
+#[test]
+fn task_enable_of_an_enabled_task_changes_nothing() {
+    let fx = Fixture::new();
+    let runner = FakeRunner::install(&[(r"/Query", ToolResult::new(0, ENABLED_TASK, ""))]);
+    let params = json!({"path": "\\Vendor\\", "name": "Updater Task"});
+    let record = execute(&spec("task.enable", params), &fx.store, None, "");
+    assert!(record.ok(), "{}", record.message());
+    assert!(!runner.lines().iter().any(|l| l.contains("/Change")));
+}
+
+#[test]
+fn task_run_starts_an_enabled_task_and_refuses_a_disabled_one() {
+    let fx = Fixture::new();
+    let runner = FakeRunner::install(&[(r"/Query", ToolResult::new(0, ENABLED_TASK, ""))]);
+    let params = json!({"path": "\\Vendor\\", "name": "Updater Task"});
+    let record = execute(&spec("task.run", params.clone()), &fx.store, None, "");
+    assert!(record.ok(), "{}", record.message());
+    assert!(
+        runner
+            .lines()
+            .contains(&r"schtasks.exe /Run /TN \Vendor\Updater Task".to_string())
+    );
+    assert!(!can_undo(&record));
+    drop(runner);
+    let runner = FakeRunner::install(&[(r"/Query", ToolResult::new(0, DISABLED_TASK, ""))]);
+    let refused = execute(&spec("task.run", params), &fx.store, None, "");
+    assert!(!refused.ok());
+    assert!(!runner.lines().iter().any(|l| l.contains("/Run")));
+}
+
 #[test]
 fn microsoft_tasks_are_refused() {
     let fx = Fixture::new();
     let runner = FakeRunner::install(&[]);
-    let params = json!({"path": "\\Microsoft\\Windows\\Defrag\\", "name": "ScheduledDefrag"});
-    let record = execute(&spec("task.disable", params), &fx.store, None, "");
-    assert!(!record.ok());
+    for op in ["task.disable", "task.enable", "task.run", "task.delete"] {
+        let params = json!({"path": "\\Microsoft\\Windows\\Defrag\\", "name": "ScheduledDefrag"});
+        let record = execute(&spec(op, params), &fx.store, None, "");
+        assert!(!record.ok(), "{op}");
+    }
     assert!(runner.calls.borrow().is_empty());
 }
 

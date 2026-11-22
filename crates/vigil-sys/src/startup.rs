@@ -70,6 +70,25 @@ pub struct StartupEntry {
     /// The program is a Windows host (rundll32, wscript, powershell...) that runs a DLL or script
     /// named in the command: its publisher and signature say nothing about what really runs.
     pub host: bool,
+    /// Vigil's own sign-in entry (Settings > Start Vigil in the tray when I sign in).
+    pub own: bool,
+}
+
+/// The value name of Vigil's own entry in the user's Run key.
+pub const OWN_VALUE: &str = "Vigil";
+
+/// The command Vigil writes for itself: start hidden in the tray, without asking for elevation.
+pub fn own_command(exe: &Path) -> String {
+    format!("\"{}\" --tray --no-elevate", exe.display())
+}
+
+/// Vigil's own sign-in entry: the user's Run value `Vigil` holding exactly the command this very
+/// program writes. Anything else under that name (another path, other arguments) is not trusted.
+pub fn is_own(entry: &StartupEntry) -> bool {
+    entry.kind == "run"
+        && entry.scope == "user"
+        && entry.value.eq_ignore_ascii_case(OWN_VALUE)
+        && std::env::current_exe().is_ok_and(|exe| entry.command.trim().eq_ignore_ascii_case(&own_command(&exe)))
 }
 
 /// Windows programs that run whatever DLL or script their command line names.
@@ -294,12 +313,14 @@ impl Default for StartupEntry {
             description: String::new(),
             exists: false,
             host: false,
+            own: false,
         }
     }
 }
 
 /// Fills what is known about the program file.
 fn finish(mut entry: StartupEntry) -> StartupEntry {
+    entry.own = is_own(&entry);
     if !entry.executable.is_empty() {
         entry.exists = Path::new(&entry.executable).is_file();
         entry.host = is_host(&entry.executable);
@@ -337,7 +358,7 @@ pub fn switch_state(data: Option<&[u8]>) -> (bool, Option<i64>) {
 // --------------------------------------------------------------------------- command lines
 
 /// Environment variables in a command (`%ProgramFiles%`) expanded.
-fn expand(text: &str) -> String {
+pub(crate) fn expand(text: &str) -> String {
     if !text.contains('%') {
         return text.to_string();
     }
@@ -810,6 +831,33 @@ mod tests {
         assert!(!updater.host);
         let setup = entries.iter().find(|e| e.name == "Setup").expect("run once");
         assert!(setup.enabled && !setup.can_toggle && setup.approved_key.is_empty());
+        assert!(entries.iter().all(|e| !e.own));
+    }
+
+    #[test]
+    fn vigil_recognises_its_own_entry() {
+        let scratch = Scratch::new("own");
+        let exe = std::env::current_exe().expect("test program");
+        scratch.set("Run", OWN_VALUE, REG_SZ, &sz(&own_command(&exe)));
+        // The same name with other arguments, or under another name, is not Vigil's.
+        scratch.set("Run", "Vigil Helper", REG_SZ, &sz(&own_command(&exe)));
+        scratch.set("Once", OWN_VALUE, REG_SZ, &sz(&own_command(&exe)));
+        let source = |sub: &str, kind| RegistrySource {
+            hive: Hive::CurrentUser,
+            key: format!(r"{}\{sub}", scratch.0),
+            approved: None,
+            kind,
+        };
+        let entries = list_from(&[source("Run", "run"), source("Once", "run_once")], &[]);
+        let own: Vec<&str> = entries.iter().filter(|e| e.own).map(|e| e.id.as_str()).collect();
+        assert_eq!(own, [format!(r"reg:HKCU\{}\Run\{OWN_VALUE}", scratch.0)]);
+        scratch.set(
+            "Run",
+            OWN_VALUE,
+            REG_SZ,
+            &sz(&format!("{} & calc.exe", own_command(&exe))),
+        );
+        assert!(list_from(&[source("Run", "run")], &[]).iter().all(|e| !e.own));
     }
 
     #[test]

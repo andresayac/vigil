@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import ConsentDialog from "./components/ConsentDialog.svelte";
   import Modal from "./components/Modal.svelte";
   import ResultsDialog from "./components/ResultsDialog.svelte";
@@ -10,8 +10,11 @@
   import { when } from "./lib/format";
   import { setLanguage, t } from "./lib/i18n/index.svelte";
   import { act, finishScan, isIgnored, loadReport, report, startScan } from "./lib/report.svelte";
+  import { followWatch, stateLine, watch } from "./lib/watch.svelte";
+  import Alerts from "./pages/Alerts.svelte";
   import type { AppInfo, Settings } from "./lib/types";
   import Findings from "./pages/Findings.svelte";
+  import Firewall from "./pages/Firewall.svelte";
   import History from "./pages/History.svelte";
   import Network from "./pages/Network.svelte";
   import Optimize from "./pages/Optimize.svelte";
@@ -22,6 +25,7 @@
   import Services from "./pages/Services.svelte";
   import Startup from "./pages/Startup.svelte";
   import Storage from "./pages/Storage.svelte";
+  import Tasks from "./pages/Tasks.svelte";
   import System from "./pages/System.svelte";
 
   let page = $state("overview");
@@ -43,8 +47,18 @@
     [info, settings] = await Promise.all([api.appInfo(), api.getSettings()]);
     if (info.dataWarning) notice = info.dataWarning;
     await loadReport();
-    requestAnimationFrame(() => void api.showWindow());
+    // Started at sign-in (--tray): the window stays hidden until it is opened from the tray.
+    if (!info.startHidden) requestAnimationFrame(() => void api.showWindow());
+    stopWatch = await followWatch();
+    stopOpen = await api.onOpenPage((request) => {
+      go(pages.some((p) => p.key === request.page) ? request.page : "alerts");
+      if (request.scan && !report.scanning) scanOpen = true;
+    });
   });
+  let stopWatch: (() => void) | null = null;
+  let stopOpen: (() => void) | null = null;
+  onDestroy(() => { stopWatch?.(); stopOpen?.(); });
+  const unreadAlerts = $derived(watch.status?.unread ?? 0);
 
   // "auto" uses the language Rust resolved from Windows, so the page and the findings agree.
   $effect(() => {
@@ -66,6 +80,8 @@
   const pages: PageDef[] = $derived([
     { key: "overview", title: t("page.overview"), icon: "", section: t("nav.security") },
     { key: "findings", title: t("page.findings"), icon: "", section: t("nav.security"), count: String(urgent || review || ""), alert: urgent > 0 },
+    { key: "alerts", title: t("page.alerts"), icon: "\uEA8F", section: t("nav.security"), count: unreadAlerts ? String(unreadAlerts) : "" },
+    { key: "firewall", title: t("page.firewall"), icon: "", section: t("nav.security") },
     { key: "quarantine", title: t("page.quarantine"), icon: "", section: t("nav.security") },
     { key: "history", title: t("page.history"), icon: "", section: t("nav.security") },
     { key: "performance", title: t("page.performance"), icon: "", section: t("nav.live") },
@@ -74,6 +90,7 @@
     { key: "services", title: t("page.services"), icon: "", section: t("nav.live") },
     { key: "optimize", title: t("page.optimize"), icon: "", section: t("nav.maintenance") },
     { key: "startup", title: t("page.startup"), icon: "", section: t("nav.maintenance") },
+    { key: "tasks", title: t("page.tasks"), icon: "", section: t("nav.maintenance") },
     { key: "storage", title: t("page.storage"), icon: "", section: t("nav.maintenance") },
     { key: "system", title: t("page.system"), icon: "", section: t("nav.maintenance") },
   ]);
@@ -115,6 +132,7 @@
 
 <div class="shell">
   <Sidebar {pages} current={page} {info} scanning={report.scanning} {lastScan} {menu}
+           watchLine={stateLine(watch.status)} watchState={!watch.status ? "" : !watch.status.owner ? "other" : watch.status.watching ? "on" : "paused"}
            onnavigate={(key) => go(key)} onelevate={() => void api.restartElevated()} onscan={() => (scanOpen = true)}
            onsettings={() => (settingsOpen = true)} />
   <main>
@@ -132,10 +150,14 @@
                   onscan={() => (scanOpen = true)} onpage={go} />
       {:else if page === "findings"}
         <Findings focus={findingsFocus} {elevated} />
+      {:else if page === "firewall"}
+        <Firewall {elevated} />
       {:else if page === "quarantine"}
         <Quarantine {elevated} />
       {:else if page === "history"}
         <History {elevated} />
+      {:else if page === "alerts"}
+        <Alerts onpage={go} />
       {:else if page === "performance"}
         <Performance cpuName={info?.cpuName ?? ""} initial={resource} {elevated} onshowprocess={(pid) => { focusPid = pid; page = "processes"; }} />
       {:else if page === "processes"}
@@ -149,6 +171,8 @@
         <Optimize {elevated} onscan={() => (scanOpen = true)} onpage={go} />
       {:else if page === "startup"}
         <Startup {elevated} />
+      {:else if page === "tasks"}
+        <Tasks {elevated} />
       {:else if page === "storage"}
         <Storage {elevated} />
       {:else if page === "system"}

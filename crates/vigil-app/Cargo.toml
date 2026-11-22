@@ -21,7 +21,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 vigil-i18n = { path = "../vigil-i18n" }
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -33,11 +33,17 @@ vigil-scan = { path = "../vigil-scan" }
 [dependencies.windows]
 version = "0.62"
 features = [
+    "Data_Xml_Dom",
+    "Foundation",
+    "UI_Notifications",
     "Win32_Foundation",
+    "Win32_Security",
     "Win32_Security_Credentials",
     "Win32_System_Console",
     "Win32_System_LibraryLoader",
     "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_System_WinRT",
     "Win32_UI_Controls",
     "Win32_UI_WindowsAndMessaging",
 ]

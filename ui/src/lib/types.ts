@@ -120,6 +120,8 @@ export interface AppInfo {
   dataWarning: string | null;
   /** The language Rust writes its own texts in (findings, actions, confirmations). */
   language: string;
+  /** Started at sign-in with --tray: the window stays hidden until it is opened from the tray. */
+  startHidden: boolean;
 }
 
 /** Emitted by the Rust sampler once a second while a live page is open. */
@@ -258,12 +260,161 @@ export interface StartupEntry {
   /** A Windows host (rundll32, wscript, powershell…) runs what the command names: its publisher and
    *  signature would be the host's, so they are not shown. */
   host: boolean;
+  /** Vigil's own sign-in entry (Settings > Start Vigil in the tray when I sign in). */
+  own: boolean;
 }
 
 export interface StartupSignature {
   status: "valid" | "unsigned" | "broken" | "untrusted" | "missing" | "unknown";
   signer: string;
 }
+
+/** When a scheduled task starts (vigil_sys::tasks::TaskTrigger). */
+export interface TaskTrigger {
+  /** "logon", "boot", "idle", "time", "daily", "weekly", "monthly", "monthly_dow", "event", "registration", "session", "custom". */
+  kind: string;
+  enabled: boolean;
+  /** Start boundary as written in the task: local, or with Z / an offset. */
+  start: string;
+  end: string;
+  /** Daily: every N days; weekly: every N weeks. */
+  every: number;
+  /** Weekday names ("monday"…), or day numbers and "last" for monthly triggers. */
+  days: string[];
+  /** "1".."4" and "last" (monthly_dow). */
+  weeks: string[];
+  /** Month names; empty means every month. */
+  months: string[];
+  repeatSecs: number;
+  /** 0 = repeats indefinitely. */
+  repeatForSecs: number;
+  delaySecs: number;
+  randomDelaySecs: number;
+  /** Logon: the user. Event: the logs watched. Session: the change ("session_lock"…). */
+  detail: string;
+}
+
+/** What a scheduled task does. */
+export interface TaskAction {
+  /** "exec", "com", "email" or "message". */
+  kind: string;
+  command: string;
+  arguments: string;
+  workingDir: string;
+  classId: string;
+  data: string;
+  /** The file that really runs (resolved program or COM DLL); "" when unknown. */
+  program: string;
+}
+
+/** A scheduled task (Scheduled tasks page), read live from Task Scheduler. */
+export interface ScheduledTask {
+  /** `\Vendor\Updater`: what task requests name. */
+  path: string;
+  name: string;
+  folder: string;
+  /** "ready", "running", "disabled", "queued" or "unknown". */
+  state: string;
+  enabled: boolean;
+  hidden: boolean;
+  author: string;
+  description: string;
+  created: string;
+  triggers: TaskTrigger[];
+  actions: TaskAction[];
+  account: string;
+  /** "system", "service", "group", "user" or "". */
+  accountKind: string;
+  /** "highest" or "least". */
+  runLevel: string;
+  /** "interactive", "password", "s4u", "service", "group" or "". */
+  logonType: string;
+  /** Highest run level, or runs as SYSTEM. */
+  elevated: boolean;
+  /** Local ISO times; "" when never / none. */
+  lastRun: string;
+  /** Exit code or HRESULT of the last run. */
+  lastResult: number | null;
+  nextRun: string;
+  /** The definition file under %SystemRoot%\System32\Tasks. */
+  file: string;
+  program: string;
+  programExists: boolean;
+  /** Under \Microsoft\: shown, never changed. */
+  microsoft: boolean;
+  /** A program (or host script) it runs is in a folder standard users can change. */
+  userWritable: boolean;
+}
+
+/** A Windows Defender Firewall profile (Firewall rules page). */
+export interface FirewallProfile {
+  /** "domain", "private" or "public". */
+  name: string;
+  enabled: boolean;
+  /** The computer is on a network of this type now. */
+  active: boolean;
+  /** "allow" or "block": what happens to traffic no rule matches. */
+  defaultInbound: string;
+  defaultOutbound: string;
+  blockAllInbound: boolean;
+}
+
+/** Why a rule deserves a look. `warn` is false for housekeeping (a leftover rule). */
+export interface FirewallFlag {
+  code: "open_public" | "remote_access" | "writable_program" | "missing_program";
+  /** The remote-access port (0 for the other flags). */
+  port: number;
+  warn: boolean;
+}
+
+/** A firewall rule, read live through the firewall API. */
+export interface FirewallRule {
+  /** What firewall-rule requests name. */
+  key: string;
+  name: string;
+  description: string;
+  group: string;
+  /** A rule of a group Windows defines: can be turned off, never deleted. */
+  builtin: boolean;
+  /** Declared by a Microsoft Store app. */
+  appPackage: boolean;
+  /** "in" or "out". */
+  direction: string;
+  /** "allow" or "block". */
+  action: string;
+  enabled: boolean;
+  /** "domain", "private", "public". */
+  profiles: string[];
+  /** "" for every program. */
+  program: string;
+  programExists: boolean;
+  service: string;
+  protocol: number;
+  protocolName: string;
+  /** "" or "*" means any. */
+  localPorts: string;
+  remotePorts: string;
+  localAddresses: string;
+  remoteAddresses: string;
+  interfaceTypes: string;
+  edgeTraversal: boolean;
+  /** Created by Vigil's "Block network access". */
+  vigil: boolean;
+  /** Another rule has the same key: Vigil does not act on either. */
+  duplicate: boolean;
+  flags: FirewallFlag[];
+}
+
+export interface FirewallSummary {
+  total: number; enabled: number; inbound: number; outbound: number; inboundAllow: number;
+  /** Rules with a warning flag. */
+  flagged: number;
+  /** Allow rules for programs that no longer exist. */
+  missing: number;
+  vigil: number;
+}
+
+export interface FirewallView { profiles: FirewallProfile[]; rules: FirewallRule[]; summary: FirewallSummary }
 
 /** One logical processor (a Windows CPU Set). `index` is what affinity requests use. */
 export interface LogicalProcessor {
@@ -295,7 +446,9 @@ export type ActionRequest =
   | { kind: "recycle"; paths: string[] }
   | { kind: "shell"; op: string; path?: string; url?: string; name?: string }
   | { kind: "service"; op: ServiceOp; name: string; startType?: string }
-  | { kind: "startup"; op: "enable" | "disable"; id: string };
+  | { kind: "startup"; op: "enable" | "disable"; id: string }
+  | { kind: "task"; op: "enable" | "disable" | "run" | "delete"; path: string }
+  | { kind: "firewall-rule"; op: "enable" | "disable" | "delete"; key: string };
 
 export interface ActionOutcome { cancelled: boolean; records: JournalRecord[]; message: string; error?: boolean }
 
@@ -372,4 +525,52 @@ export interface ReviewOffer {
   pending: number; destination: string | null; problem: string | null; redact: boolean; preview: unknown[];
   /** The model runs on this computer: nothing leaves it. */
   local: boolean;
+}
+
+// ---------------------------------------------------------------- background watch
+
+/** Settings > Background watch (saved by Rust in its own watch file). */
+export interface WatchSettings {
+  watching: boolean;
+  /** Closing the window keeps Vigil in the tray; off: closing quits. */
+  closeToTray: boolean;
+  notifyStartup: boolean;
+  notifyServices: boolean;
+  notifyTasks: boolean;
+  notifySecurity: boolean;
+  notifyPorts: boolean;
+  trayNoticeShown: boolean;
+}
+
+export type AlertKind = "startup" | "service" | "task" | "security" | "port";
+
+/** One change the background watch noticed. Title and detail are plain text from Rust. */
+export interface WatchAlert {
+  id: number;
+  /** ms since 1970 */
+  time: number;
+  kind: AlertKind;
+  title: string;
+  detail: string;
+  severity: "info" | "warning" | "critical";
+  /** The page that shows it: "startup", "services", "tasks", "network" or "alerts". */
+  target: string;
+  read: boolean;
+}
+
+export interface WatchStatus {
+  /** This window's copy of Vigil runs the checks (false: another Vigil window does). */
+  owner: boolean;
+  watching: boolean;
+  lastCheck: number | null;
+  unread: number;
+  notifyPausedUntil: number | null;
+  /** Scheduled tasks are watched only when Vigil runs as administrator. */
+  tasksWatched: boolean;
+  settings: WatchSettings;
+  /** Vigil starts in the tray at sign-in. */
+  autostart: boolean;
+  /** The newest alerts (at most five). */
+  recent: WatchAlert[];
+  error: string | null;
 }

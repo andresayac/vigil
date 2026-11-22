@@ -2,7 +2,7 @@
 // Nothing here describes a real computer.
 import type {
   ActionSpec, Affinity, AiProvider, AiStatus, Analysis, CleanupTarget, Hardware, Insight, Item, JournalRecord, LogicalProcessor, ProcessDetails, ReviewOffer,
-  Service, Settings, SpaceNode, SpaceScan, StartupEntry, StartupSignature, TuningState, Volume,
+  ScheduledTask, Service, Settings, SpaceNode, SpaceScan, StartupEntry, StartupSignature, TaskTrigger, TuningState, Volume,
 } from "./types";
 
 function item(id: string, kind: string, title: string, verdict: string, score: number, extra: Partial<Item> = {}): Item {
@@ -89,7 +89,7 @@ export function startupList(): StartupEntry[] {
       id: `reg:${location}\\${value}`, name: value, command, executable, location, kind: once ? "run_once" : "run",
       scope: hive === "HKCU" ? "user" : "machine", enabled, disabledAtMs: enabled ? null : Date.now() - 12 * 86_400_000,
       canToggle: !once, approvedKey: once ? "" : `${hive}\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run`,
-      value, file: "", publisher, description, exists: true, host: false, ...extra,
+      value, file: "", publisher, description, exists: true, host: false, own: false, ...extra,
     };
   };
   const folder = (user: boolean, fileName: string, command: string, executable: string, publisher: string, description: string,
@@ -102,12 +102,14 @@ export function startupList(): StartupEntry[] {
       id: `file:${file}`, name: fileName.replace(/\.[^.]+$/, ""), command, executable, location, kind: "folder",
       scope: user ? "user" : "machine", enabled, disabledAtMs: null, canToggle: true,
       approvedKey: `${user ? "HKCU" : "HKLM"}\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\StartupFolder`,
-      value: fileName, file, publisher, description, exists: true, host: false,
+      value: fileName, file, publisher, description, exists: true, host: false, own: false,
     };
   };
   return [
     reg("HKCU", RUN, "OneDrive", "\"C:\\Users\\jdoe\\AppData\\Local\\Microsoft\\OneDrive\\OneDrive.exe\" /background",
         "C:\\Users\\jdoe\\AppData\\Local\\Microsoft\\OneDrive\\OneDrive.exe", "Microsoft Corporation", "Microsoft OneDrive"),
+    reg("HKCU", RUN, "Vigil", "\"C:\\Program Files\\Vigil\\vigil.exe\" --tray --no-elevate", "C:\\Program Files\\Vigil\\vigil.exe",
+        "andresayac", "Vigil", true, { own: true }),
     reg("HKLM", RUN, "SecurityHealth", "%windir%\\system32\\SecurityHealthSystray.exe", "C:\\Windows\\System32\\SecurityHealthSystray.exe",
         "Microsoft Corporation", "Windows Security notification icon"),
     reg("HKCU", RUN, "Steam", "\"C:\\Program Files (x86)\\Steam\\steam.exe\" -silent", "C:\\Program Files (x86)\\Steam\\steam.exe",
@@ -131,6 +133,86 @@ export function startupList(): StartupEntry[] {
            "C:\\Program Files\\Example Notes\\notes.exe", "Example Software", "Example Notes"),
     folder(false, "cleanup.bat", "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\StartUp\\cleanup.bat",
            "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\StartUp\\cleanup.bat", "", ""),
+  ];
+}
+
+export function tasksList(): ScheduledTask[] {
+  const trigger = (kind: string, extra: Partial<TaskTrigger> = {}): TaskTrigger => ({
+    kind, enabled: true, start: "", end: "", every: 0, days: [], weeks: [], months: [], repeatSecs: 0, repeatForSecs: 0,
+    delaySecs: 0, randomDelaySecs: 0, detail: "", ...extra,
+  });
+  const exec = (program: string, args = "", workingDir = "") => ({
+    kind: "exec", command: program, arguments: args, workingDir, classId: "", data: "", program,
+  });
+  const task = (path: string, extra: Partial<ScheduledTask>): ScheduledTask => {
+    const cut = path.lastIndexOf("\\");
+    const folder = cut <= 0 ? "\\" : path.slice(0, cut);
+    const base: ScheduledTask = {
+      path, name: path.slice(cut + 1), folder, state: "ready", enabled: true, hidden: false, author: "", description: "",
+      created: "2025-11-02T09:14:00", triggers: [], actions: [], account: "DESKTOP-ABC123\\jdoe", accountKind: "user",
+      runLevel: "least", logonType: "interactive", elevated: false, lastRun: "2026-11-21T08:00:12", lastResult: 0,
+      nextRun: "2026-11-22T08:00:00", file: `C:\\Windows\\System32\\Tasks${path}`, program: "", programExists: true,
+      microsoft: path.toLowerCase().startsWith("\\microsoft\\"), userWritable: false,
+    };
+    const merged = { ...base, ...extra };
+    merged.program ||= merged.actions.find((a) => a.program)?.program ?? "";
+    merged.elevated = merged.runLevel === "highest" || merged.accountKind === "system";
+    return merged;
+  };
+  const system = { account: "NT AUTHORITY\\SYSTEM", accountKind: "system", logonType: "service" };
+  return [
+    task("\\ContosoUpdateTaskMachineCore", {
+      author: "Contoso Ltd.", description: "Keeps Contoso apps up to date.", ...system,
+      triggers: [trigger("boot"), trigger("daily", { start: "2025-11-02T03:00:00", every: 1, randomDelaySecs: 3600 })],
+      actions: [exec("C:\\Program Files (x86)\\Contoso\\Update\\ContosoUpdate.exe", "/c")],
+      lastRun: "2026-11-21T03:12:40", nextRun: "2026-11-22T03:00:00",
+    }),
+    task("\\ContosoUpdateTaskUser", {
+      author: "Contoso Ltd.", triggers: [trigger("logon", { detail: "DESKTOP-ABC123\\jdoe" }),
+        trigger("time", { start: "2025-11-02T09:00:00", repeatSecs: 3600 })],
+      actions: [exec("C:\\Users\\jdoe\\AppData\\Local\\Contoso\\Update\\ContosoUpdate.exe", "/ua /installsource scheduler")],
+      lastRun: "2026-11-21T09:00:03", nextRun: "2026-11-21T10:00:00",
+    }),
+    task("\\Example Notes\\Backup", {
+      author: "Example Software", description: "Copies your notes to the backup folder.",
+      triggers: [trigger("weekly", { start: "2025-11-03T20:30:00", every: 1, days: ["monday", "thursday"] })],
+      actions: [exec("C:\\Program Files\\Example Notes\\notes.exe", "--backup --quiet", "C:\\Program Files\\Example Notes")],
+      lastRun: "2026-11-20T20:30:01", lastResult: 1, nextRun: "2026-11-24T20:30:00",
+    }),
+    task("\\SyncHelper", {
+      ...system, runLevel: "highest", userWritable: true, hidden: true,
+      triggers: [trigger("time", { start: "2025-11-02T00:00:00", repeatSecs: 900 })],
+      actions: [exec("C:\\Users\\jdoe\\AppData\\Roaming\\SyncHelper\\synchelper.exe", "--silent")],
+      lastRun: "2026-11-21T09:45:00", nextRun: "2026-11-21T10:00:00", state: "running", lastResult: 0x41301,
+    }),
+    task("\\PrintAgent Refresh", {
+      author: "DESKTOP-ABC123\\jdoe", runLevel: "highest", userWritable: true,
+      triggers: [trigger("session", { detail: "session_unlock" })],
+      actions: [exec("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+        "-NoProfile -WindowStyle Hidden -File \"C:\\Users\\jdoe\\AppData\\Local\\PrintAgent\\refresh.ps1\"")],
+      lastRun: "", lastResult: 0x41303, nextRun: "",
+    }),
+    task("\\Fabrikam\\Telemetry Upload", {
+      author: "Fabrikam Inc.", enabled: false, state: "disabled", accountKind: "service", account: "NT AUTHORITY\\LOCAL SERVICE",
+      logonType: "service", triggers: [trigger("monthly_dow", { start: "2025-11-02T12:00:00", weeks: ["1", "last"], days: ["sunday"] })],
+      actions: [exec("C:\\Program Files\\Fabrikam\\uploader.exe")], lastRun: "2026-10-05T12:00:09", lastResult: 0x80070005,
+      nextRun: "",
+    }),
+    task("\\Old Game Launcher", {
+      triggers: [trigger("logon"), trigger("idle", { enabled: false })],
+      actions: [exec("D:\\Games\\Launcher\\launcher.exe", "-tray")], programExists: false,
+      lastRun: "2026-06-14T18:22:31", lastResult: 0x80070002, nextRun: "",
+    }),
+    task("\\Microsoft\\Windows\\Defrag\\ScheduledDefrag", {
+      author: "Microsoft Corporation", description: "This task optimizes local storage drives.", ...system, runLevel: "highest",
+      triggers: [trigger("weekly", { start: "2025-01-01T01:00:00", every: 1, days: ["wednesday"] })],
+      actions: [exec("C:\\Windows\\System32\\defrag.exe", "-c -h -o -$")],
+    }),
+    task("\\Microsoft\\Windows\\WindowsUpdate\\Scheduled Start", {
+      author: "Microsoft Corporation", ...system, triggers: [trigger("event", { detail: "System" })],
+      actions: [{ kind: "com", command: "", arguments: "", workingDir: "", classId: "{A1B2C3D4-0000-4000-8000-00000000F00D}", data: "",
+        program: "C:\\Windows\\System32\\usosvc.dll" }],
+    }),
   ];
 }
 

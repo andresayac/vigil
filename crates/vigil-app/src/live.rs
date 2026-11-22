@@ -1,8 +1,8 @@
 //! Live sampling for the Performance, Processes and Overview pages.
 //!
 //! One background thread samples the whole system and the process list once a second, but only
-//! while the UI says a live page is open (`set_live(true)`); otherwise it sleeps on a condition
-//! variable and costs nothing.
+//! while the UI says a live page is open (`set_live(true)`) and the window is visible (not hidden
+//! in the tray); otherwise it sleeps on a condition variable and costs nothing.
 
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
@@ -23,15 +23,23 @@ struct Payload {
     error: Option<String>,
 }
 
-type Shared = Arc<(Mutex<bool>, Condvar)>;
+/// A live page is open, and the window is visible.
+#[derive(Clone, Copy)]
+struct Flags {
+    page: bool,
+    visible: bool,
+}
+
+type Shared = Arc<(Mutex<Flags>, Condvar)>;
 
 pub struct Live {
     active: Shared,
 }
 
 impl Live {
-    pub fn start(app: AppHandle) -> Self {
-        let active: Shared = Arc::new((Mutex::new(false), Condvar::new()));
+    /// `visible`: the window starts shown (false when Vigil starts hidden in the tray).
+    pub fn start(app: AppHandle, visible: bool) -> Self {
+        let active: Shared = Arc::new((Mutex::new(Flags { page: false, visible }), Condvar::new()));
         let worker = Arc::clone(&active);
         if let Err(error) = thread::Builder::new()
             .name("vigil-live".into())
@@ -43,21 +51,30 @@ impl Live {
     }
 
     pub fn set_active(&self, value: bool) {
+        self.change(|flags| flags.page = value);
+    }
+
+    /// The window was shown (true) or hidden in the tray (false).
+    pub fn set_visible(&self, value: bool) {
+        self.change(|flags| flags.visible = value);
+    }
+
+    fn change(&self, edit: impl FnOnce(&mut Flags)) {
         let (lock, wake) = &*self.active;
-        *lock_ignoring_poison(lock) = value;
+        edit(&mut lock_ignoring_poison(lock));
         wake.notify_all();
     }
 }
 
-fn lock_ignoring_poison(lock: &Mutex<bool>) -> MutexGuard<'_, bool> {
+fn lock_ignoring_poison(lock: &Mutex<Flags>) -> MutexGuard<'_, Flags> {
     lock.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 fn wait_until_active(shared: &Shared) {
     let (lock, wake) = &**shared;
-    let mut active = lock_ignoring_poison(lock);
-    while !*active {
-        active = wake.wait(active).unwrap_or_else(PoisonError::into_inner);
+    let mut flags = lock_ignoring_poison(lock);
+    while !(flags.page && flags.visible) {
+        flags = wake.wait(flags).unwrap_or_else(PoisonError::into_inner);
     }
 }
 

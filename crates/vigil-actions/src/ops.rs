@@ -579,6 +579,43 @@ fn undo_task_disable(u: Params<'_>, _store: &Store) -> Result<String> {
     Ok(tr!("enabled the scheduled task \"{0}\" again", full))
 }
 
+fn op_task_enable(p: Params<'_>, _store: &Store, _id: &str) -> Result<Outcome> {
+    let full = task_full(p)?;
+    if task_enabled(&task_xml(&full)?) {
+        return Ok(Outcome::done(tr!("\"{0}\" was already enabled", full)));
+    }
+    let result = run(schtasks(&["/Change", "/TN", &full, "/ENABLE"]), 60)?;
+    if result.code != 0 {
+        return fail(tr!("could not enable the task: {0}", first_line(&result.text())));
+    }
+    Ok(Outcome::new(
+        tr!("enabled the scheduled task \"{0}\"", full),
+        Some(json!({ "full": full })),
+    ))
+}
+
+fn undo_task_enable(u: Params<'_>, _store: &Store) -> Result<String> {
+    let full = u.req_str("full")?;
+    let result = run(schtasks(&["/Change", "/TN", &full, "/DISABLE"]), 60)?;
+    if result.code != 0 {
+        return fail(tr!("could not disable the task: {0}", first_line(&result.text())));
+    }
+    Ok(tr!("disabled the scheduled task \"{0}\" again", full))
+}
+
+/// Runs a task now, as Task Scheduler's "Run" does (its own account and run level). Not undoable.
+fn op_task_run(p: Params<'_>, _store: &Store, _id: &str) -> Result<Outcome> {
+    let full = task_full(p)?;
+    if !task_enabled(&task_xml(&full)?) {
+        return fail(tr!("\"{0}\" is disabled; enable it first", full));
+    }
+    let result = run(schtasks(&["/Run", "/TN", &full]), 60)?;
+    if result.code != 0 {
+        return fail(tr!("could not run the task: {0}", first_line(&result.text())));
+    }
+    Ok(Outcome::done(tr!("started the scheduled task \"{0}\"", full)))
+}
+
 /// UTF-16 with a byte order mark and Windows line ends, as Task Scheduler exports task definitions.
 fn utf16_file(text: &str) -> Vec<u8> {
     let text = text.replace("\r\n", "\n").replace('\n', "\r\n");
@@ -1311,6 +1348,13 @@ pub(crate) fn builtin() -> Vec<Builtin> {
             Some(undo_fn(undo_task_delete)),
             false,
         ),
+        (
+            "task.enable",
+            run_fn(op_task_enable),
+            Some(undo_fn(undo_task_enable)),
+            false,
+        ),
+        ("task.run", run_fn(op_task_run), None, false),
         (
             "startup.disable",
             run_fn(op_startup_disable),

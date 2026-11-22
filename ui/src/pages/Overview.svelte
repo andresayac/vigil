@@ -3,6 +3,7 @@
   import Readouts from "../components/Readouts.svelte";
   import Tile from "../components/Tile.svelte";
   import VerdictStrip from "../components/VerdictStrip.svelte";
+  import WatchCard from "../components/WatchCard.svelte";
   import * as api from "../lib/api";
   import { changesOf } from "../lib/changes";
   import { pct, size, when as whenText } from "../lib/format";
@@ -106,6 +107,7 @@
       <p class="muted">{t("overview.emptyBody")}</p>
       <div><button class="primary" onclick={onscan}>{t("overview.firstScan")}</button></div>
     </section>
+    <div class="watch-alone"><WatchCard onpage={(key) => onpage(key)} /></div>
   {:else if a}
     <section class="hero">
       <div class="risk" style:color={riskColor(level)}>{riskLabel(level)}</div>
@@ -152,6 +154,7 @@
       </section>
 
       <div class="side">
+        <WatchCard onpage={(key) => onpage(key)} />
         {#if changes}
           <section class="panel since">
             <h2>{sinceWhen ? t("overview.since", { when: sinceWhen }) : t("overview.sinceUndated")}</h2>
@@ -236,6 +239,7 @@
   .link:hover:not(:disabled) { background: transparent; text-decoration: underline; }
   .empty { display: flex; flex-direction: column; gap: 10px; max-width: 900px; padding-top: 30px; }
   .empty p { margin: 0; }
+  .watch-alone { max-width: 560px; }
   .progress { display: flex; flex-direction: column; gap: 10px; }
   .bar { height: 4px; background: var(--sunken); border-radius: 2px; overflow: hidden; position: relative; }
   .bar div { position: absolute; inset: 0 60% 0 0; background: var(--chart); animation: slide 1.4s ease-in-out infinite; }

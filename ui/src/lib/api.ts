@@ -2,10 +2,11 @@
 // back to fictitious data from mock.ts.
 import * as mock from "./mock";
 import type {
-  ActionOutcome, ActionRequest, ActionSpec, Affinity, AiProvider, AiStatus, Analysis, AppInfo, CleanupTarget, Connection, Hardware,
+  ActionOutcome, ActionRequest, ActionSpec, Affinity, AiProvider, AiStatus, Analysis, AppInfo, CleanupTarget, Connection, FirewallView, Hardware,
   Insight, JournalRecord, LivePayload, ProcessDetails, QuarantineEntry, ReviewOffer, ScanProgress, SecretChanges, Service, Settings,
-  SpaceScan, StartupEntry, StartupSignature, TuningState, Volume,
+  ScheduledTask, SpaceScan, StartupEntry, StartupSignature, TuningState, Volume,
 } from "./types";
+import type { WatchAlert, WatchSettings, WatchStatus } from "./types";
 
 export const inApp = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -142,6 +143,14 @@ export async function startupList(): Promise<StartupEntry[]> {
 export async function startupSignatures(paths: string[]): Promise<Record<string, StartupSignature>> {
   return inApp ? call<Record<string, StartupSignature>>("startup_signatures", { paths }) : mock.startupSignatures(paths);
 }
+/** Every scheduled task (read-only); changes go through runAction ({ kind: "task" }). */
+export async function tasksList(): Promise<ScheduledTask[]> {
+  return inApp ? call<ScheduledTask[]>("tasks_list") : mock.tasksList();
+}
+/** Firewall profiles and every rule with its flags (read-only); changes go through runAction ({ kind: "firewall-rule" }). */
+export async function firewallList(): Promise<FirewallView> {
+  return inApp ? call<FirewallView>("firewall_list") : mock.firewallList();
+}
 export async function quarantine(): Promise<QuarantineEntry[]> {
   return inApp ? call<QuarantineEntry[]>("quarantine_list") : [];
 }
@@ -206,3 +215,42 @@ export async function aiModels(provider: string, endpoint: string): Promise<stri
 export async function aiStatus(): Promise<AiStatus> {
   return inApp ? call<AiStatus>("ai_status") : mock.aiStatus();
 }
+
+// ---------------------------------------------------------------- background watch
+// Vigil's own state (alerts, switches); the only system change here, Start with Windows, goes
+// through runAction like every other change.
+export async function watchStatus(): Promise<WatchStatus> {
+  return inApp ? call<WatchStatus>("watch_status") : mock.watchStatus();
+}
+/** Every alert kept (at most 200), newest first. */
+export async function watchAlerts(): Promise<WatchAlert[]> {
+  return inApp ? call<WatchAlert[]>("watch_alerts") : mock.watchAlerts();
+}
+/** ids: the alerts to mark as read; null marks them all. */
+export async function watchMarkRead(ids: number[] | null): Promise<WatchStatus> {
+  return inApp ? call<WatchStatus>("watch_mark_read", { ids }) : mock.watchMarkRead(ids);
+}
+export async function watchClear(): Promise<WatchStatus> {
+  return inApp ? call<WatchStatus>("watch_clear") : mock.watchClear();
+}
+export async function watchSetWatching(on: boolean): Promise<WatchStatus> {
+  return inApp ? call<WatchStatus>("watch_set_watching", { on }) : mock.watchSetWatching(on);
+}
+/** pause: no notifications for an hour (alerts are still recorded); false resumes them. */
+export async function watchPauseNotifications(pause: boolean): Promise<WatchStatus> {
+  return inApp ? call<WatchStatus>("watch_pause_notifications", { pause }) : mock.watchPauseNotifications(pause);
+}
+export async function watchConfigure(settings: WatchSettings): Promise<WatchStatus> {
+  return inApp ? call<WatchStatus>("watch_configure", { settings }) : mock.watchConfigure(settings);
+}
+/** Start with Windows: confirmed natively and journaled by Rust (undo from History). */
+export async function setAutostart(on: boolean): Promise<ActionOutcome> {
+  if (inApp) return runAction({ kind: "tuning", op: "vigil.autostart", params: { on } });
+  mock.setAutostart(on);
+  return { cancelled: false, records: [], message: "" };
+}
+/** The watch state changed (a check ran, alerts arrived, a switch moved). */
+export const onWatch = (handler: (status: WatchStatus) => void) => onEvent<WatchStatus>("watch", handler);
+/** The tray or a notification asks for a page (scan: open the New scan dialog). */
+export const onOpenPage = (handler: (request: { page: string; scan: boolean }) => void) =>
+  onEvent<{ page: string; scan: boolean }>("open", handler);

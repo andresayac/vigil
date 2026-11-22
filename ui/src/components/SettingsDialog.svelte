@@ -2,7 +2,8 @@
   import * as api from "../lib/api";
   import { isLocalAddress, providerName, staysLocal } from "../lib/ai";
   import { LANGUAGES, t, type Key } from "../lib/i18n/index.svelte";
-  import type { AiProvider, Effort, SecretChanges, Settings } from "../lib/types";
+  import type { AiProvider, Effort, SecretChanges, Settings, WatchSettings } from "../lib/types";
+  import { refreshWatch, setStatus } from "../lib/watch.svelte";
   import Modal from "./Modal.svelte";
 
   let { open, settings, dataDir = "", onclose, onsaved }: {
@@ -23,6 +24,11 @@
   let loadingModels = $state(false);
   let error = $state("");
   let saving = $state(false);
+  /** Background watch: saved with the other settings; Start with Windows runs at once (it changes Windows). */
+  let watchDraft = $state<WatchSettings | null>(null);
+  let autostart = $state(false);
+  let autostartBusy = $state(false);
+  let autostartError = $state("");
 
   $effect(() => {
     if (open && settings) {
@@ -33,6 +39,12 @@
       modelsNote = "";
       error = "";
       void api.aiProviders().then((list) => (providers = list)).catch(() => (providers = []));
+      watchDraft = null;
+      autostartError = "";
+      void api.watchStatus().then((status) => {
+        watchDraft = structuredClone(status.settings);
+        autostart = status.autostart;
+      }).catch(() => (watchDraft = null));
     }
   });
 
@@ -88,6 +100,25 @@
   const stored = (id: string) => !!draft?.secrets[id];
   const mode = (id: string) => secretMode[id] ?? (stored(id) ? "keep" : "replace");
 
+  /** Start with Windows is a change to Windows: Rust confirms it natively and journals it (undo from History). */
+  async function changeAutostart(box: HTMLInputElement): Promise<void> {
+    const wanted = box.checked;
+    autostartBusy = true;
+    autostartError = "";
+    try {
+      const outcome = await api.setAutostart(wanted);
+      const failed = outcome.records.find((r) => !r.ok);
+      if (failed) autostartError = failed.message;
+      await refreshWatch();
+      autostart = (await api.watchStatus()).autostart;
+    } catch (e) {
+      autostartError = String(e);
+    } finally {
+      box.checked = autostart;
+      autostartBusy = false;
+    }
+  }
+
   async function save(): Promise<void> {
     if (!draft) return;
     const secrets: SecretChanges = {};
@@ -98,6 +129,7 @@
     saving = true;
     try {
       const saved = await api.saveSettings(draft, Object.keys(secrets).length ? secrets : null);
+      if (watchDraft) setStatus(await api.watchConfigure($state.snapshot(watchDraft)));
       onsaved(saved);
       onclose();
     } catch (e) {
@@ -259,6 +291,42 @@
       </div>
     </section>
 
+    {#if watchDraft}
+      <section>
+        <h3>{t("settings.watch.title")}</h3>
+        <div class="group">
+          <div class="setting">
+            <div class="text"><span>{t("settings.watch.watching")}</span><span class="faint">{t("settings.watch.watchingNote")}</span></div>
+            <input type="checkbox" class="toggle" role="switch" bind:checked={watchDraft.watching} aria-label={t("settings.watch.watching")} />
+          </div>
+          <div class="setting">
+            <div class="text"><span>{t("settings.watch.close")}</span><span class="faint">{t("settings.watch.closeNote")}</span></div>
+            <select value={watchDraft.closeToTray ? "tray" : "quit"} aria-label={t("settings.watch.close")}
+                    onchange={(e) => watchDraft && (watchDraft.closeToTray = e.currentTarget.value === "tray")}>
+              <option value="tray">{t("settings.watch.closeTray")}</option>
+              <option value="quit">{t("settings.watch.closeQuit")}</option>
+            </select>
+          </div>
+          <div class="setting">
+            <div class="text"><span>{t("settings.watch.autostart")}</span><span class="faint">{t("settings.watch.autostartNote")}</span></div>
+            <input type="checkbox" class="toggle" role="switch" checked={autostart} disabled={autostartBusy}
+                   aria-label={t("settings.watch.autostart")} onchange={(e) => void changeAutostart(e.currentTarget)} />
+          </div>
+          {#if autostartError}<p class="warn-text">{autostartError}</p>{/if}
+          <div class="setting notify">
+            <div class="text"><span>{t("settings.watch.notify")}</span><span class="faint">{t("settings.watch.notifyNote")}</span></div>
+            <div class="checks">
+              <label><input type="checkbox" bind:checked={watchDraft.notifyStartup} />{t("settings.watch.notifyStartup")}</label>
+              <label><input type="checkbox" bind:checked={watchDraft.notifyServices} />{t("settings.watch.notifyServices")}</label>
+              <label><input type="checkbox" bind:checked={watchDraft.notifyTasks} />{t("settings.watch.notifyTasks")}</label>
+              <label><input type="checkbox" bind:checked={watchDraft.notifySecurity} />{t("settings.watch.notifySecurity")}</label>
+              <label><input type="checkbox" bind:checked={watchDraft.notifyPorts} />{t("settings.watch.notifyPorts")}</label>
+            </div>
+          </div>
+        </div>
+      </section>
+    {/if}
+
     <section>
       <h3>{t("settings.processes")}</h3>
       <div class="group">
@@ -302,5 +370,8 @@
   .note { margin: 0; padding: 0 14px; }
   .warn-text { margin: 0; padding: 0 14px; color: var(--warn); font-size: 12px; }
   .error { color: var(--bad); margin: 0; }
+  .notify { align-items: flex-start; }
+  .checks { display: flex; flex-direction: column; gap: 6px; flex: none; min-width: 220px; }
+  .checks label { display: flex; align-items: center; gap: 8px; font-size: 13px; }
   p.faint { margin: 4px 0 0; font-size: 12px; }
 </style>

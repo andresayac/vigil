@@ -262,7 +262,7 @@ impl DetailsReader {
     }
 }
 
-fn lookup_account(sid: PSID) -> Option<String> {
+pub(crate) fn lookup_account(sid: PSID) -> Option<String> {
     let mut name = vec![0u16; 256];
     let mut domain = vec![0u16; 256];
     let mut name_len = name.len() as u32;

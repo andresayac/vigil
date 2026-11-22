@@ -20,10 +20,11 @@ fn main() {
 
     // Vigil asks for administrator rights when it starts (UAC). If the user declines, it keeps
     // running in read-only mode. Debug builds only ask with --elevate, so `cargo run` stays simple.
+    // `--tray` (the start at sign-in) never asks: a prompt nobody expects is not shown at sign-in.
     let ask = if cfg!(debug_assertions) {
         has("--elevate")
     } else {
-        !has("--no-elevate")
+        !has("--no-elevate") && !has("--tray")
     };
     if ask
         && !has("--elevated")

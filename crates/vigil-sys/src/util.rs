@@ -3,7 +3,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use windows::Win32::System::Registry::{
-    HKEY, HKEY_LOCAL_MACHINE, REG_ROUTINE_FLAGS, RRF_RT_REG_DWORD, RRF_RT_REG_SZ, RegGetValueW,
+    HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, REG_ROUTINE_FLAGS, RRF_RT_REG_DWORD, RRF_RT_REG_SZ, RegGetValueW,
 };
 use windows::core::PCWSTR;
 
@@ -58,8 +58,17 @@ fn reg_get(key: HKEY, subkey: &str, value: &str, flags: REG_ROUTINE_FLAGS, data:
 
 /// A REG_SZ value under HKEY_LOCAL_MACHINE, trimmed ("" when missing).
 pub(crate) fn hklm_string(subkey: &str, value: &str) -> String {
+    reg_string(HKEY_LOCAL_MACHINE, subkey, value)
+}
+
+/// A REG_SZ value under HKEY_CURRENT_USER, trimmed ("" when missing).
+pub(crate) fn hkcu_string(subkey: &str, value: &str) -> String {
+    reg_string(HKEY_CURRENT_USER, subkey, value)
+}
+
+fn reg_string(key: HKEY, subkey: &str, value: &str) -> String {
     let mut data = vec![0u8; 1024];
-    match reg_get(HKEY_LOCAL_MACHINE, subkey, value, RRF_RT_REG_SZ, &mut data) {
+    match reg_get(key, subkey, value, RRF_RT_REG_SZ, &mut data) {
         Some(size) => {
             let units: Vec<u16> = data[..size.min(data.len())]
                 .as_chunks::<2>()

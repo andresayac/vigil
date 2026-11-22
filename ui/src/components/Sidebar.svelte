@@ -32,6 +32,8 @@ export interface MenuEntry {
     onelevate,
     onscan,
     onsettings,
+    watchLine = "",
+    watchState = "",
   }: {
     pages: PageDef[];
     current: string;
@@ -43,6 +45,9 @@ export interface MenuEntry {
     onelevate: () => void;
     onscan: () => void;
     onsettings: () => void;
+    /** The background watch in one line, and its state ("on", "paused", "other"; "" while unknown). */
+    watchLine?: string;
+    watchState?: string;
   } = $props();
 
   const KEY = "vigil.nav.compact";
@@ -116,6 +121,11 @@ export interface MenuEntry {
           <button onclick={onelevate}>{t("nav.restartElevated")}</button>
         {/if}
         <div class="faint">{lastScan}</div>
+        {#if watchLine}
+          <button class="watch {watchState}" onclick={() => onnavigate("alerts")} title={t("nav.watchTip")}>
+            <span class="dot"></span><span class="label">{watchLine}</span>
+          </button>
+        {/if}
       </div>
     {:else if info && !info.elevated}
       <button class="item" title={t("nav.readOnlyRestart")} aria-label={t("nav.restartElevated")} onclick={onelevate}>
@@ -185,6 +195,14 @@ export interface MenuEntry {
   .mode .icon { font-size: 14px; }
   .mode.ok { color: var(--ok); }
   .mode.warn, .icon.warn { color: var(--warn); }
+  .watch {
+    display: flex; align-items: center; gap: 8px; border: 0; background: transparent; padding: 2px 0; min-height: 22px; margin: 0;
+    color: var(--ink2); font-size: 12px; text-align: left;
+  }
+  .watch:hover:not(:disabled) { background: transparent; color: var(--ink); }
+  .watch .dot { width: 8px; height: 8px; border-radius: 4px; background: var(--ink3); flex: none; }
+  .watch.on .dot { background: var(--ok); }
+  .watch.paused .dot { background: var(--warn); }
   .anchor { position: relative; }
   /* MenuFlyout, opening to the right of the pane. */
   .menu {

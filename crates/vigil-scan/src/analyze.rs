@@ -444,6 +444,20 @@ fn split_list(value: &str) -> Vec<String> {
 }
 
 /// Startup-entry references and configuration findings (modified BootExecute...).
+/// The command of Vigil's own sign-in entry (Settings > Start with Windows): this very program,
+/// started hidden in the tray. The same text as `vigil_sys::startup::own_command`.
+pub fn own_autostart_command(exe: &std::path::Path) -> String {
+    format!("\"{}\" --tray --no-elevate", exe.display())
+}
+
+/// Vigil's own entry: the user's Run value `Vigil` holding exactly that command. It is left out of
+/// the inventory like Vigil's own processes; the same name with any other command is analyzed.
+fn own_autostart(location: &str, name: &str, command: &str) -> bool {
+    location.to_ascii_uppercase().starts_with("HKCU\\")
+        && name.eq_ignore_ascii_case("Vigil")
+        && std::env::current_exe().is_ok_and(|exe| command.trim().eq_ignore_ascii_case(&own_autostart_command(&exe)))
+}
+
 fn autorun_refs(raw: &Value) -> (Vec<Ref>, Vec<Map<String, Value>>) {
     let mut refs = Vec::new();
     let mut config = Vec::new();
@@ -490,6 +504,7 @@ fn autorun_refs(raw: &Value) -> (Vec<Ref>, Vec<Map<String, Value>>) {
         };
 
         match source {
+            "run" if own_autostart(&location, &name, &command) => {}
             "run" => add(
                 &command,
                 tr!("startup entry \"{0}\" in {1}{2}", name, location, off),
@@ -1563,5 +1578,21 @@ mod tests {
         assert_eq!(valid_date(&json!("1999-11-30T00:00:00")), Value::Null);
         assert_eq!(valid_date(&json!("2024-01-01")), json!("2024-01-01"));
         assert!(DETECTION_RESOURCE.is_valid() && MSIX_RE.is_valid() && LIST_PART.is_valid());
+    }
+
+    #[test]
+    fn vigil_own_sign_in_entry_is_not_inventoried() {
+        let exe = std::env::current_exe().expect("test program");
+        let own = own_autostart_command(&exe);
+        let run = |location: &str, name: &str, command: &str| json!({"source": "run", "location": location, "name": name, "command": command, "enabled": true});
+        let user_run = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
+        let raw = json!({"autoruns": [
+            run(user_run, "Vigil", &own),
+            run(user_run, "Vigil", &format!("{own} & calc.exe")),
+            run(r"HKLM\Software\Microsoft\Windows\CurrentVersion\Run", "Vigil", &own),
+            run(user_run, "Updater", r#""C:\Program Files\Example\updater.exe""#),
+        ]});
+        let (refs, _) = autorun_refs(&raw);
+        assert_eq!(refs.len(), 3, "only the exact own entry is left out");
     }
 }

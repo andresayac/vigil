@@ -83,6 +83,17 @@ pub enum Request {
         op: String,
         id: String,
     },
+    /// Enable, disable, run or delete a scheduled task (`path` from `tasks_list`).
+    Task {
+        op: String,
+        path: String,
+    },
+    /// Turn a firewall rule on or off, or delete it (`key` from `firewall_list`).
+    #[serde(rename = "firewall-rule")]
+    FirewallRule {
+        op: String,
+        key: String,
+    },
 }
 
 /// One process instance as the page saw it.
@@ -130,6 +141,10 @@ pub struct Context<'a> {
     pub services: &'a [vigil_sys::services::Service],
     /// The live startup apps (read for startup requests only).
     pub startup: &'a [vigil_sys::startup::StartupEntry],
+    /// The live scheduled tasks (read for task requests only).
+    pub tasks: &'a [vigil_sys::tasks::ScheduledTask],
+    /// The live firewall rules (read for firewall-rule requests only).
+    pub firewall: &'a [vigil_sys::firewall::FirewallRule],
 }
 
 pub const PRIORITY_LABEL: [(&str, &str); 5] = [
@@ -282,7 +297,100 @@ pub fn build(request: &Request, ctx: &Context<'_>) -> Result<Plan, String> {
         Request::Shell { op, path, url, name } => shell_plan(op, path.as_deref(), url.as_deref(), name.as_deref()),
         Request::Service { op, name, start_type } => service_plan(op, name, start_type.as_deref(), ctx),
         Request::Startup { op, id } => startup_plan(op, id, ctx),
+        Request::Task { op, path } => task_plan(op, path, ctx),
+        Request::FirewallRule { op, key } => crate::firewall::plan(op, key, ctx),
     }
+}
+
+/// A scheduled task. It must be in the live list and outside `\Microsoft\`; its folder and name
+/// come from that list, never from the page. The action engine checks the guard again.
+fn task_plan(op: &str, path: &str, ctx: &Context<'_>) -> Result<Plan, String> {
+    let task = ctx
+        .tasks
+        .iter()
+        .find(|t| t.path.eq_ignore_ascii_case(path.trim()))
+        .ok_or(tr!("The scheduled task is no longer there. Refresh the list."))?;
+    if task.microsoft {
+        return Err(tr!(
+            "Tasks under \\Microsoft\\ belong to Windows and are not changed from Vigil."
+        ));
+    }
+    let quoted = format!("\"{}\"", task.path);
+    let target = tr!("scheduled task {0}", task.path);
+    let risky = task.elevated && task.user_writable;
+    let built = match op {
+        "enable" => {
+            if task.enabled {
+                return Err(tr!("The task is already enabled."));
+            }
+            let built = spec(
+                "task.enable",
+                tr!("Enable task {0}", quoted),
+                target,
+                tr!("Task Scheduler starts it again when its triggers fire. It is not run now."),
+            )
+            .group("fix");
+            if risky {
+                built.warning(&tr!(
+                    "This task runs with full rights a program from a folder that standard users can change. Enable it only if you trust that program."
+                ))
+            } else if !task.program.is_empty() && !task.program_exists {
+                built.warning(&tr!("The program this task starts was not found, so the task will fail when it runs."))
+            } else {
+                built
+            }
+        }
+        "disable" => {
+            if !task.enabled {
+                return Err(tr!("The task is already disabled."));
+            }
+            spec(
+                "task.disable",
+                tr!("Disable task {0}", quoted),
+                target,
+                tr!("Turns the scheduled task off; it stays in Task Scheduler and can be enabled again."),
+            )
+            .group("disable")
+        }
+        "run" => {
+            if !task.enabled {
+                return Err(tr!("Enable the task before running it."));
+            }
+            let explain = if task.account.is_empty() {
+                tr!("Starts the task now, as Task Scheduler's Run command does: with the task's own account and rights, not yours. Running it cannot be undone.")
+            } else {
+                tr!(
+                    "Starts the task now, as Task Scheduler's Run command does: as {0}, with the task's own rights, not yours. Running it cannot be undone.",
+                    task.account
+                )
+            };
+            let built = spec("task.run", tr!("Run task {0}", quoted), target, explain)
+                .group("inspect")
+                .irreversible();
+            if risky {
+                built.warning(&tr!(
+                    "This task runs with full rights a program from a folder that standard users can change. Run it only if you trust that program."
+                ))
+            } else {
+                built
+            }
+        }
+        "delete" => spec(
+            "task.delete",
+            tr!("Delete task {0}", quoted),
+            target,
+            tr!(
+                "Removes the task from Task Scheduler. Its XML definition is saved first, so History can recreate it. The program it starts is not deleted."
+            ),
+        )
+        .group("remove")
+        .destructive(),
+        _ => return Err(tr!("Unknown request: {0}", op)),
+    };
+    Ok(Plan::Run {
+        spec: built.params(json!({ "path": task.folder, "name": task.name })),
+        item: None,
+    })
 }
 
 /// Turning a startup app on or off. The entry must be in the live list; its key, value or file
@@ -976,6 +1084,31 @@ fn tuning_plan(op: &str, params: &Value, ctx: &Context<'_>) -> Result<Plan, Stri
         )
         .group("fix")
         .irreversible(),
+        "vigil.autostart" => {
+            let on = flag(params, "on")?;
+            let command = crate::autostart::command().map_err(|e| e.to_string())?;
+            spec(
+                "vigil.autostart",
+                if on {
+                    tr!("Start Vigil in the tray when I sign in")
+                } else {
+                    tr!("Do not start Vigil when I sign in")
+                },
+                format!(r"{}\{}", crate::autostart::RUN_KEY, vigil_sys::startup::OWN_VALUE),
+                if on {
+                    tr!(
+                        "Adds Vigil to the programs Windows starts when you sign in (your account only). It \
+                         starts hidden in the tray, without asking for administrator rights: {0}",
+                        command
+                    )
+                } else {
+                    tr!("Removes Vigil from the programs Windows starts when you sign in.")
+                },
+            )
+            .params(json!({"on": on}))
+            .group("fix")
+            .no_admin()
+        }
         "system.restore_point" => spec(
             "system.restore_point",
             tr!("Create a restore point"),
@@ -1112,7 +1245,7 @@ fn shell_plan(op: &str, path: Option<&str>, url: Option<&str>, name: Option<&str
         }
         "console" => {
             let name = name.unwrap_or("");
-            if !matches!(name, "taskschd.msc" | "services.msc" | "eventvwr.msc") {
+            if !matches!(name, "taskschd.msc" | "services.msc" | "eventvwr.msc" | "wf.msc") {
                 return Err(tr!("Unknown console."));
             }
             spec("shell.console", name, "", "").params(json!({"name": name}))
@@ -1207,6 +1340,8 @@ mod tests {
             drive_media: &[],
             services: &[],
             startup: &[],
+            tasks: &[],
+            firewall: &[],
         }
     }
 
@@ -1354,6 +1489,8 @@ mod tests {
             drive_media: &[],
             services: &[],
             startup: &[],
+            tasks: &[],
+            firewall: &[],
         };
         let stale = Request::Process {
             op: "terminate".into(),
@@ -1416,6 +1553,8 @@ mod tests {
             drive_media: &[],
             services: &services,
             startup: &[],
+            tasks: &[],
+            firewall: &[],
         };
         let ask = |op: &str, name: &str, start: Option<&str>| {
             build(
@@ -1483,6 +1622,7 @@ mod tests {
             description: "Example Updater".into(),
             exists: true,
             host: false,
+            own: false,
         }
     }
 
@@ -1505,6 +1645,8 @@ mod tests {
             drive_media: &[],
             services: &[],
             startup: &entries,
+            tasks: &[],
+            firewall: &[],
         };
         let ask = |op: &str, id: &str| {
             build(
@@ -1548,6 +1690,93 @@ mod tests {
         assert!(matches!(parsed, Request::Startup { ref op, .. } if op == "enable"));
     }
 
+    fn task(path: &str, enabled: bool) -> vigil_sys::tasks::ScheduledTask {
+        let (folder, name) = path.rsplit_once('\\').expect("a library path");
+        vigil_sys::tasks::ScheduledTask {
+            path: path.into(),
+            name: name.into(),
+            folder: if folder.is_empty() { "\\".into() } else { folder.into() },
+            enabled,
+            state: if enabled { "ready" } else { "disabled" }.into(),
+            account: r"DESKTOP-ABC123\jdoe".into(),
+            account_kind: "user".into(),
+            program: r"C:\Program Files\Vendor\updater.exe".into(),
+            program_exists: true,
+            microsoft: path.to_lowercase().starts_with("\\microsoft\\"),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn task_requests_are_checked_against_the_live_list() {
+        let mut risky = task(r"\Vendor\Helper", false);
+        risky.elevated = true;
+        risky.user_writable = true;
+        let tasks = [
+            task(r"\Vendor\Updater Task", true),
+            task(r"\Root task", false),
+            task(r"\Microsoft\Windows\Defrag\ScheduledDefrag", true),
+            risky,
+        ];
+        let ctx = Context {
+            analysis: None,
+            processes: &[],
+            cleanup: &[],
+            space_files: &[],
+            power_plans: &[],
+            drive_media: &[],
+            services: &[],
+            startup: &[],
+            tasks: &tasks,
+            firewall: &[],
+        };
+        let ask = |op: &str, path: &str| {
+            build(
+                &Request::Task {
+                    op: op.into(),
+                    path: path.into(),
+                },
+                &ctx,
+            )
+        };
+        let disable = spec_of(ask("disable", r"\vendor\updater task"));
+        assert_eq!(disable.op, "task.disable");
+        assert_eq!(disable.params, json!({"path": r"\Vendor", "name": "Updater Task"}));
+        assert!(disable.reversible && disable.admin && !disable.destructive);
+        let run = spec_of(ask("run", r"\Vendor\Updater Task"));
+        assert_eq!(run.op, "task.run");
+        assert!(!run.reversible, "running a task cannot be undone");
+        assert!(run.explain.contains(r"DESKTOP-ABC123\jdoe"), "{}", run.explain);
+        let delete = spec_of(ask("delete", r"\Vendor\Updater Task"));
+        assert!(delete.destructive && delete.reversible);
+        assert!(delete.explain.contains("XML"), "{}", delete.explain);
+        let enable = spec_of(ask("enable", r"\Root task"));
+        assert_eq!(enable.params, json!({"path": "\\", "name": "Root task"}));
+        assert!(enable.warning.is_empty());
+        assert!(
+            !spec_of(ask("enable", r"\Vendor\Helper")).warning.is_empty(),
+            "full rights from a writable folder"
+        );
+        assert!(ask("enable", r"\Vendor\Updater Task").is_err(), "already enabled");
+        assert!(ask("disable", r"\Root task").is_err(), "already disabled");
+        assert!(ask("run", r"\Root task").is_err(), "a disabled task is not run");
+        for op in ["disable", "run", "delete"] {
+            assert!(
+                ask(op, r"\Microsoft\Windows\Defrag\ScheduledDefrag").is_err(),
+                "Windows tasks stay as they are"
+            );
+        }
+        assert!(ask("disable", r"\Vendor\Ghost").is_err(), "unknown tasks are refused");
+        assert!(
+            ask("export", r"\Vendor\Updater Task").is_err(),
+            "unknown operations are refused"
+        );
+        let parsed: Request =
+            serde_json::from_value(json!({"kind": "task", "op": "run", "path": r"\Vendor\Updater Task"}))
+                .expect("request");
+        assert!(matches!(parsed, Request::Task { ref op, .. } if op == "run"));
+    }
+
     #[test]
     fn windows_components_and_essential_services_are_locked() {
         let windir = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
@@ -1580,5 +1809,26 @@ mod tests {
             r"C:\Program Files\Example\updater.exe",
             ""
         )));
+    }
+
+    #[test]
+    fn autostart_request_is_rebuilt_by_rust() {
+        let ctx = context(&[]);
+        let ask = |params: Value| {
+            build(
+                &Request::Tuning {
+                    op: "vigil.autostart".into(),
+                    params,
+                },
+                &ctx,
+            )
+        };
+        let on = spec_of(ask(json!({"on": true, "command": "calc.exe"})));
+        assert_eq!(on.params, json!({"on": true}), "the page cannot choose the command");
+        assert!(!on.admin && on.reversible && !on.destructive);
+        assert!(on.target.ends_with(r"CurrentVersion\Run\Vigil"));
+        assert!(on.explain.contains("--tray --no-elevate"));
+        assert_eq!(spec_of(ask(json!({"on": false}))).params, json!({"on": false}));
+        assert!(ask(json!({})).is_err());
     }
 }

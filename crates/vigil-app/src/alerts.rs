@@ -1,0 +1,83 @@
+//! Commands of the background watch: its state, the alerts and its settings (Overview's Watching
+//! card, the Alerts page, the sidebar and Settings). They change Vigil's own files only.
+
+use std::sync::Arc;
+
+use tauri::{AppHandle, Emitter, Manager, State};
+
+use crate::watch::{Alert, Status, WatchSettings, Watcher};
+
+type CmdResult<T> = Result<T, String>;
+
+fn changed(app: &AppHandle, watcher: &Watcher) -> Status {
+    let status = watcher.status();
+    let _ = app.emit("watch", status.clone());
+    crate::tray::refresh(app);
+    status
+}
+
+#[tauri::command]
+pub fn watch_status(watcher: State<'_, Arc<Watcher>>) -> Status {
+    watcher.status()
+}
+
+/// Every alert kept, newest first.
+#[tauri::command]
+pub fn watch_alerts(watcher: State<'_, Arc<Watcher>>) -> Vec<Alert> {
+    watcher.store.load().alerts
+}
+
+/// Marks alerts as read (`ids` missing: all of them).
+#[tauri::command]
+pub fn watch_mark_read(app: AppHandle, ids: Option<Vec<u64>>) -> CmdResult<Status> {
+    let watcher = app.state::<Arc<Watcher>>();
+    watcher.store.update(|file| {
+        for alert in &mut file.alerts {
+            if ids.as_ref().is_none_or(|ids| ids.contains(&alert.id)) {
+                alert.read = true;
+            }
+        }
+    })?;
+    Ok(changed(&app, &watcher))
+}
+
+/// Deletes every alert (what is watched and its baseline stay).
+#[tauri::command]
+pub fn watch_clear(app: AppHandle) -> CmdResult<Status> {
+    let watcher = app.state::<Arc<Watcher>>();
+    watcher.store.update(|file| file.alerts.clear())?;
+    Ok(changed(&app, &watcher))
+}
+
+#[tauri::command]
+pub fn watch_set_watching(app: AppHandle, on: bool) -> Status {
+    if crate::tray::set_watching(&app, Some(on)) {
+        app.state::<Arc<Watcher>>().check_soon();
+    }
+    app.state::<Arc<Watcher>>().status()
+}
+
+/// Pauses notifications for an hour (`pause` true) or resumes them.
+#[tauri::command]
+pub fn watch_pause_notifications(app: AppHandle, pause: bool) -> Status {
+    crate::tray::pause_notifications(&app, pause);
+    app.state::<Arc<Watcher>>().status()
+}
+
+/// Saves the Background watch settings.
+#[tauri::command]
+pub fn watch_configure(app: AppHandle, settings: WatchSettings) -> CmdResult<Status> {
+    let watcher = app.state::<Arc<Watcher>>();
+    let resumed = watcher.store.update(|file| {
+        let resumed = settings.watching && !file.settings.watching;
+        file.settings = WatchSettings {
+            tray_notice_shown: file.settings.tray_notice_shown,
+            ..settings
+        };
+        resumed
+    })?;
+    if resumed {
+        watcher.check_soon();
+    }
+    Ok(changed(&app, &watcher))
+}

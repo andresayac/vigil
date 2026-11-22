@@ -5,16 +5,22 @@
 //! a native confirmation dialog and run by the action engine, so text coming from the inspected
 //! computer (process names, command lines) can never trigger anything.
 
+mod alerts;
+mod autostart;
 mod cli;
 mod commands;
 mod confirm;
+mod firewall;
 mod live;
+mod notify;
 mod planner;
 mod requests;
 mod secrets;
 mod settings;
 mod storage_ops;
 mod tools;
+mod tray;
+mod watch;
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
@@ -31,6 +37,8 @@ struct AppInfo {
     data_warning: Option<String>,
     /// The language the core writes its texts in ("en", "es", "fr", "pt", "zh").
     language: String,
+    /// Started with `--tray` (at sign-in): the window stays hidden until opened from the tray.
+    start_hidden: bool,
 }
 
 #[tauri::command]
@@ -47,7 +55,13 @@ async fn app_info(app: AppHandle) -> AppInfo {
         data_dir: state.root.display().to_string(),
         data_warning: state.warning.clone(),
         language: vigil_i18n::language().to_string(),
+        start_hidden: started_in_tray(),
     }
+}
+
+/// `--tray`: start hidden, watching from the tray.
+fn started_in_tray() -> bool {
+    std::env::args().skip(1).any(|a| a == "--tray")
 }
 
 /// The UI calls this when a live page opens (true) and when the last one closes (false).
@@ -97,13 +111,35 @@ pub fn run() {
         }
     };
     storage_ops::register_all();
+    autostart::register_all();
+    // One copy watches and owns the tray icon. Started at sign-in while another copy already
+    // watches: nothing to do.
+    let owner = watch::claim_watch();
+    let hidden = started_in_tray();
+    if hidden && !owner {
+        return;
+    }
+    let watch_dir = watch::default_dir().unwrap_or_else(|| state.root.join("watch"));
+    let watcher = std::sync::Arc::new(watch::Watcher::new(watch_dir, state.admin, owner));
     let result = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(state)
-        .setup(|app| {
-            let live = live::Live::start(app.handle().clone());
+        .manage(std::sync::Arc::clone(&watcher))
+        .setup(move |app| {
+            let live = live::Live::start(app.handle().clone(), !hidden);
             app.manage(live);
+            if owner {
+                tray::install(app.handle());
+            }
+            watcher.start(app.handle().clone());
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event
+                && tray::close_to_tray(window.app_handle())
+            {
+                api.prevent_close();
+            }
         })
         .invoke_handler(tauri::generate_handler![
             app_info,
@@ -140,8 +176,17 @@ pub fn run() {
             commands::services_list,
             commands::startup_list,
             commands::startup_signatures,
+            commands::tasks_list,
+            firewall::firewall_list,
             commands::ai_providers,
             commands::ai_models,
+            alerts::watch_status,
+            alerts::watch_alerts,
+            alerts::watch_mark_read,
+            alerts::watch_clear,
+            alerts::watch_set_watching,
+            alerts::watch_pause_notifications,
+            alerts::watch_configure,
         ])
         .run(tauri::generate_context!());
     if let Err(error) = result {

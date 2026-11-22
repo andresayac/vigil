@@ -97,6 +97,7 @@ A server on this computer (`localhost`) keeps everything here: nothing leaves th
 |---|---|---|
 | **Overview** | The verdict on the whole computer, one sliver per finding, what to do first, the security state (Defender, firewall, UAC, Remote Desktop, updates) and coverage notes. | Start a scan, jump to findings. |
 | **Findings** | Every item with its verdict (Remove, Disable, Review, No signals, Safe, Trusted), local score, type and presence. The side panel explains what it is, why it was flagged, the signals, where it appears, file and signature details, command lines and network activity. | The actions that make sense for that item, ignore it, copy its details. |
+| **Firewall rules** | The domain, private and public profiles and every Windows Defender Firewall rule, read live, with the rules that deserve a look marked: open to any address on public networks for every program, opening a remote-access port (Remote Desktop, SSH, VNC, WinRM, Telnet), allowing a program in a folder any user can write to, or left over for a program that no longer exists. | Turn a rule on or off, delete it (its full definition is saved first; rules of the groups Windows defines can only be turned off), open the program's location or Windows Defender Firewall. |
 | **Quarantine** | Files moved to quarantine. | Restore to the original location, delete permanently. |
 | **History** | Every change made from the app, with what was saved to undo it. | Undo a step, or a whole "Remove completely". |
 | **Performance** | Task Manager style: CPU (per core and clock), memory (in use, modified, standby, free, committed), each GPU (engines, VRAM), each disk and network adapter, with five minutes of history, a cursor shared by every chart, marks where Vigil changed something, and the processes using each resource most. | End a process, efficiency mode, priority, low disk and memory priority, trim its memory, show it in Processes. |
@@ -120,6 +121,7 @@ What is offered depends on how the item is present on the system:
 - Startup entries: switch off with the same switch Task Manager uses, or delete (the value is saved first). Also
   debugger hooks (Image File Execution Options), Winlogon values, AppInit DLLs, logon scripts.
 - Files: quarantine, block network access with Windows Firewall rules, scan with Microsoft Defender.
+- Firewall rules: turn on or off, delete (the whole rule definition is saved first, so History can recreate it).
 - Programs: start their own uninstaller. Browser extensions: open the browser's extensions page.
 - Settings: turn the firewall on, turn real-time protection on, update Defender, remove Defender exclusions, turn
   Remote Desktop or the proxy off, disable the Guest account or other local accounts.

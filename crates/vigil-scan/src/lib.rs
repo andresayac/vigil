@@ -37,7 +37,7 @@ mod winreg;
 #[cfg(test)]
 mod reference;
 
-pub use analyze::signature_text;
+pub use analyze::{own_autostart_command, signature_text};
 pub use engine::{local_verdict, sort_for_report};
 pub use error::ScanError;
 

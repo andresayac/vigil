@@ -87,9 +87,10 @@ pub fn open_url(url: &str) -> Result<()> {
     Ok(())
 }
 
-const CONSOLES: [&str; 4] = ["taskschd.msc", "services.msc", "eventvwr.msc", "compmgmt.msc"];
+const CONSOLES: [&str; 5] = ["taskschd.msc", "services.msc", "eventvwr.msc", "compmgmt.msc", "wf.msc"];
 
-/// Opens one of the management consoles (Task Scheduler, Services, Event Viewer, Computer Management).
+/// Opens one of the management consoles (Task Scheduler, Services, Event Viewer, Computer
+/// Management, Windows Defender Firewall with Advanced Security).
 pub fn open_console(name: &str) -> Result<()> {
     if !CONSOLES.contains(&name) {
         return fail(tr!("unknown console"));

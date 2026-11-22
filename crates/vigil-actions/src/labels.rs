@@ -15,6 +15,8 @@ const OP_LABELS: &[(&str, &str)] = &[
     ("driver.disable", tl!("Disable driver")),
     ("task.disable", tl!("Disable task")),
     ("task.delete", tl!("Delete task")),
+    ("task.enable", tl!("Enable task")),
+    ("task.run", tl!("Run task")),
     ("startup.disable", tl!("Disable startup entry")),
     ("startup.enable", tl!("Enable startup entry")),
     ("registry.delete", tl!("Delete registry value")),
@@ -25,6 +27,9 @@ const OP_LABELS: &[(&str, &str)] = &[
     ("program.uninstall", tl!("Uninstall program")),
     ("firewall.block", tl!("Block network access")),
     ("firewall.enable", tl!("Turn firewall on")),
+    ("firewall.rule_disable", tl!("Turn off firewall rule")),
+    ("firewall.rule_enable", tl!("Turn on firewall rule")),
+    ("firewall.rule_delete", tl!("Delete firewall rule")),
     ("defender.scan_file", tl!("Defender file scan")),
     ("defender.full_scan", tl!("Defender full scan")),
     ("defender.update", tl!("Update Defender")),
@@ -54,6 +59,7 @@ const OP_LABELS: &[(&str, &str)] = &[
     ("storage.clean", tl!("Clean up junk")),
     ("storage.empty_bin", tl!("Empty Recycle Bin")),
     ("storage.recycle", tl!("Send to Recycle Bin")),
+    ("vigil.autostart", tl!("Start with Windows")),
 ];
 
 /// The History name of an operation, in the current language; an unknown operation is shown by its id.

@@ -201,6 +201,7 @@
         <span class="cell name" title={e.name}>
           {#if icon}<img class="app-icon" src={icon} alt="" />{:else}<i class="icon app-icon generic">{""}</i>{/if}
           <span class="text">{displayName(e)}</span>
+          {#if e.own}<span class="own" title={t("startup.ownTip")}>{t("startup.own")}</span>{/if}
         </span>
         <span class="cell" title={publisherText(e)}>{publisherText(e)}</span>
         <span class="cell">{statusText(e)}</span>
@@ -287,6 +288,9 @@
   button.row.off .cell { color: var(--ink2); }
   .cell { padding: 0 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; line-height: 28px; }
   .cell.name { display: flex; align-items: center; gap: 8px; padding-left: 12px; }
+  .own {
+    flex: none; font-size: 11px; line-height: 16px; padding: 0 6px; border-radius: 8px; border: 1px solid var(--rule); color: var(--ink2);
+  }
   .text { overflow: hidden; text-overflow: ellipsis; }
   .app-icon { flex: none; width: 16px; height: 16px; }
   .app-icon.generic { font-size: 16px; color: var(--ink2); }

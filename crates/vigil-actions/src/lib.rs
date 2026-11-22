@@ -19,6 +19,7 @@ mod cmdline;
 mod datadir;
 mod engine;
 mod error;
+mod firewall;
 mod guards;
 mod json_text;
 mod labels;

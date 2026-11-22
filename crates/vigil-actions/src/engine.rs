@@ -109,7 +109,11 @@ struct OpEntry {
 
 static OPS: LazyLock<RwLock<HashMap<String, OpEntry>>> = LazyLock::new(|| {
     let mut table = HashMap::new();
-    for (op, run, undo, no_admin) in crate::ops::builtin().into_iter().chain(crate::tuning::builtin()) {
+    for (op, run, undo, no_admin) in crate::ops::builtin()
+        .into_iter()
+        .chain(crate::tuning::builtin())
+        .chain(crate::firewall::builtin())
+    {
         table.insert(op.to_string(), OpEntry { run, undo, no_admin });
     }
     RwLock::new(table)

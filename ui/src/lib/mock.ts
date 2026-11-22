@@ -51,7 +51,7 @@ export function appInfo(): AppInfo {
     version: "1.0.0 (preview)", elevated: false, cpuName: "Example 8-Core Processor", language: "en",
     adapters: [{ luid: "0x00000000_0x0000A1B2", name: "Example GPU 16 GB", vendorId: 0x10de, dedicatedTotal: 16 * 2 ** 30,
                  sharedTotal: 31 * 2 ** 30, software: false }],
-    dataDir: "C:\\Users\\jdoe\\AppData\\Local\\Vigil", dataWarning: null,
+    dataDir: "C:\\Users\\jdoe\\AppData\\Local\\Vigil", dataWarning: null, startHidden: false,
   };
 }
 
@@ -125,4 +125,6 @@ export function connections(): Connection[] {
   ];
 }
 
+export * from "./mock-firewall";
 export * from "./mock-pages";
+export * from "./mock-watch";

@@ -892,6 +892,14 @@ async fn build_plan(app: &AppHandle, request: &Request) -> CmdResult<Plan> {
         Request::Startup { .. } => blocking(vigil_sys::startup::list).await?,
         _ => Vec::new(),
     };
+    let tasks = match request {
+        Request::Task { .. } => scheduled_tasks().await?,
+        _ => Vec::new(),
+    };
+    let firewall = match request {
+        Request::FirewallRule { .. } => crate::firewall::live_rules().await?,
+        _ => Vec::new(),
+    };
     let st = state(app);
     let inner = st.lock();
     let cleanup: Vec<Value> = inner
@@ -905,6 +913,8 @@ async fn build_plan(app: &AppHandle, request: &Request) -> CmdResult<Plan> {
         cleanup: &cleanup,
         services: &services,
         startup: &startup,
+        tasks: &tasks,
+        firewall: &firewall,
         space_files: &inner.space_files,
         power_plans: &power_plans,
         drive_media: &drive_media,
@@ -1358,6 +1368,51 @@ pub async fn startup_signatures(paths: Vec<String>) -> CmdResult<std::collection
     .await
 }
 
+// ------------------------------------------------------------------------------------ scheduled tasks
+
+/// Every scheduled task, read now (read-only).
+#[tauri::command]
+pub async fn tasks_list() -> CmdResult<Vec<vigil_sys::tasks::ScheduledTask>> {
+    scheduled_tasks().await
+}
+
+async fn scheduled_tasks() -> CmdResult<Vec<vigil_sys::tasks::ScheduledTask>> {
+    let mut tasks = blocking(|| vigil_sys::tasks::list().map_err(|e| e.to_string())).await??;
+    for task in &mut tasks {
+        task.user_writable = task_writable(task);
+    }
+    Ok(tasks)
+}
+
+/// A program the task runs (or its COM DLL, or the script a Windows host such as PowerShell runs
+/// for it) is in a folder a standard user can change.
+fn task_writable(task: &vigil_sys::tasks::ScheduledTask) -> bool {
+    task.actions.iter().any(|action| {
+        !action.program.is_empty()
+            && (user_writable(&action.program)
+                || (vigil_sys::startup::is_host(&action.program)
+                    && argument_paths(&action.arguments).iter().any(|p| user_writable(p))))
+    })
+}
+
+/// The absolute paths (`C:\...`, `%LOCALAPPDATA%\...`) a command line's arguments name.
+fn argument_paths(arguments: &str) -> Vec<String> {
+    arguments
+        .split(['"', '\'', ' ', '\t', '=', ','])
+        .map(|word| {
+            let expanded = word
+                .strip_prefix('%')
+                .and_then(|rest| rest.split_once('%'))
+                .and_then(|(name, tail)| std::env::var(name).ok().map(|value| format!("{value}{tail}")));
+            expanded.unwrap_or_else(|| word.to_string())
+        })
+        .filter(|word| {
+            let bytes = word.as_bytes();
+            bytes.len() > 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'\\'
+        })
+        .collect()
+}
+
 // ------------------------------------------------------------------------------------ process inspector
 
 #[derive(Serialize)]
@@ -1444,7 +1499,7 @@ pub async fn process_details(pid: u32) -> CmdResult<ProcessDetails> {
 
 #[cfg(test)]
 mod inspector_tests {
-    use super::user_writable;
+    use super::{argument_paths, task_writable, user_writable};
 
     #[test]
     fn writable_folders_are_flagged() {
@@ -1453,5 +1508,40 @@ mod inspector_tests {
         assert!(user_writable(&format!(r"{profile}\AppData\Local\Temp\x.dll")));
         assert!(!user_writable(&format!(r"{root}\System32\ntdll.dll")));
         assert!(!user_writable(r"C:\Program Files\App\app.dll"));
+    }
+
+    #[test]
+    fn tasks_that_run_files_from_writable_folders_are_flagged() {
+        let root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+        let action = |program: &str, arguments: &str| vigil_sys::tasks::TaskAction {
+            kind: "exec".into(),
+            program: program.into(),
+            arguments: arguments.into(),
+            ..Default::default()
+        };
+        let task = |actions: Vec<vigil_sys::tasks::TaskAction>| vigil_sys::tasks::ScheduledTask {
+            actions,
+            ..Default::default()
+        };
+        let powershell = format!(r"{root}\System32\WindowsPowerShell\v1.0\powershell.exe");
+        assert!(task_writable(&task(vec![action(
+            &powershell,
+            r#"-NoProfile -File "%LOCALAPPDATA%\Vendor\sync.ps1""#
+        )])));
+        let profile = std::env::var("USERPROFILE").unwrap_or_default();
+        assert!(task_writable(&task(vec![action(
+            &format!(r"{profile}\AppData\Local\Temp\x.exe"),
+            ""
+        )])));
+        assert!(!task_writable(&task(vec![action(&powershell, "-Command Get-Date")])));
+        assert!(!task_writable(&task(vec![action(
+            r"C:\Program Files\Vendor\updater.exe",
+            "/check"
+        )])));
+        assert!(!task_writable(&task(Vec::new())));
+        assert_eq!(
+            argument_paths(r#"/a="C:\One Two\x.ps1",D:\y.dll -z"#),
+            [r"C:\One", r"D:\y.dll"]
+        );
     }
 }

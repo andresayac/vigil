@@ -13,11 +13,13 @@ mod util;
 pub mod apps;
 pub mod cpusets;
 pub mod elevation;
+pub mod firewall;
 pub mod inspect;
 pub mod metrics;
 pub mod net;
 pub mod process;
 pub mod services;
 pub mod startup;
+pub mod tasks;
 
 pub use error::SysError;
