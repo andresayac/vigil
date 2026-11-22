@@ -123,6 +123,6 @@ cargo run -p vigil-app                      :: the app (debug builds do not ask 
 cargo run -p vigil-app -- --demo            :: every page with fictitious data
 cargo run -p vigil-app -- scan --ai off     :: command-line scan, local rules only
 cargo build --release -p vigil-app          :: target\release\vigil.exe (fxc.exe from the Windows SDK)
-makensis /DVERSION=x.y.z /DEXE=... /DOUT=... installer\vigil.nsi   :: the installer
+powershell -File installer\build-setup.ps1 -Out dist                 :: the setup (NSIS)
 cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings
 ```

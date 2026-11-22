@@ -383,7 +383,7 @@ shaders in release builds; Visual Studio's C++ workload installs it). The instal
 cargo run -p vigil-app                    :: the app, debug build (starts without asking for elevation)
 cargo run -p vigil-app -- --demo          :: every page with fictitious data; reads and changes nothing
 cargo build --release -p vigil-app        :: target\release\vigil.exe (also the portable executable)
-makensis /DVERSION=x.y.z /DEXE=%CD%\target\release\vigil.exe /DOUT=%CD%\Vigil_x.y.z_x64-setup.exe installer\vigil.nsi
+powershell -File installer\build-setup.ps1 -Out dist   :: the setup, from target\release\vigil.exe
 ```
 
 Checks:

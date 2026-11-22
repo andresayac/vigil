@@ -19,7 +19,9 @@ cargo run -p vigil-app -- --demo               :: every page with fictitious dat
 cargo run -p vigil-app -- --elevate            :: the app, asking for administrator rights (UAC)
 cargo run -p vigil-app -- scan --ai off        :: the command-line scan, local rules only
 cargo build --release -p vigil-app             :: target\release\vigil.exe (needs fxc.exe from the Windows SDK)
-makensis /DVERSION=x.y.z /DEXE=<full path to vigil.exe> /DOUT=<full path of the setup> installer\vigil.nsi
+powershell -File installer\build-setup.ps1 -Out dist   :: the setup from target\release\vigil.exe (NSIS)
+powershell -File installer\test-installer.ps1 -ChecksOnly -Exe target\release\vigil.exe
+                                               :: the installer test's checks that need no rights (CI runs all)
 ```
 
 Run clippy and the tests before you finish any change. Never trigger a UAC prompt from automation: debug builds
