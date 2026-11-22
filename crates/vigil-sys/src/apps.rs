@@ -145,6 +145,12 @@ fn query_string(block: &[u8], query: &str) -> Option<String> {
 }
 
 fn read_description(path: &str) -> Option<String> {
+    version_string(path, "FileDescription")
+}
+
+/// A string of a file's version resource (`FileDescription`, `OriginalFilename`…), from the first
+/// translation it declares or the usual US English / Unicode fallbacks.
+pub(crate) fn version_string(path: &str, field: &str) -> Option<String> {
     let name = wide(path);
     // SAFETY: `name` is NUL-terminated.
     let size = unsafe { GetFileVersionInfoSizeW(PCWSTR(name.as_ptr()), None) };
@@ -178,7 +184,7 @@ fn read_description(path: &str) -> Option<String> {
     codes.extend(["040904b0".to_string(), "040904e4".to_string(), "000004b0".to_string()]);
     codes
         .iter()
-        .find_map(|code| query_string(&block, &format!(r"\StringFileInfo\{code}\FileDescription")))
+        .find_map(|code| query_string(&block, &format!(r"\StringFileInfo\{code}\{field}")))
 }
 
 /// The file description of an executable ("Google Chrome", "Visual Studio Code"), cached per path.

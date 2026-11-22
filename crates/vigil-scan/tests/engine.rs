@@ -159,7 +159,7 @@ fn html_report_follows_the_language() {
     let spanish = page("es");
     for heading in [
         "<html lang=\"es\">",
-        "<h1>Vigil — informe del examen de seguridad</h1>",
+        "<h1>Vigil — informe del análisis de seguridad</h1>",
         "<h2>Estado de seguridad del sistema</h2>",
         "Siguientes pasos recomendados",
         "Buscar por nombre, ruta o id.",

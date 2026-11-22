@@ -47,7 +47,7 @@ fn insights_follow_the_language() {
     let en = uptime(&english, "Windows has been running for 20 days.").expect("English uptime insight");
     let es = uptime(&spanish, "Windows lleva 20 días en ejecución.").expect("Spanish uptime insight");
     let zh = uptime(&chinese, "Windows 已连续运行 20 天。").expect("Chinese uptime insight");
-    assert!(es.fix.starts_with("Reinicie de vez en cuando"), "{}", es.fix);
+    assert!(es.fix.starts_with("Reinicia de vez en cuando"), "{}", es.fix);
     assert!(zh.fix.starts_with("请不时重启"), "{}", zh.fix);
     // Levels and areas are data for the UI and stay the same in every language.
     assert_eq!((en.level, en.area.as_str()), (es.level, es.area.as_str()));

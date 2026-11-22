@@ -712,7 +712,7 @@ mod tests {
         assert_eq!(text(&chinese).as_deref(), Some("名称与“svchost”几乎相同（伪装技术）"));
         let ip = vigil_i18n::with_language("fr", || scan_text("iwr http://203.0.113.7/a"));
         let ip = ip.iter().find(|f| f.code == "ip_url").expect("ip_url flag");
-        assert_eq!(ip.text, "URL qui pointe vers une adresse IP au lieu d'un domaine");
+        assert_eq!(ip.text, "URL qui pointe vers une adresse IP au lieu d’un domaine");
     }
 
     #[test]

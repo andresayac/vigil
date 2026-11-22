@@ -98,6 +98,10 @@ Each crate has its tests next to the code (`#[cfg(test)]`) or in `tests/`; recor
    in-app investigation, never changes the computer, never opens a dialog and never builds an `ActionSpec`. Results
    are capped, paged and anonymizable, and their text is data inside a JSON envelope, never instructions. A model
    may only suggest; actions go through `requests.rs` and the native confirmation like any other.
+   **The update check is the only other network call**, and it is off by default (Settings > General):
+   `vigil-scan/src/release.rs` asks GitHub's latest-release endpoint of this repository over HTTPS with a fixed
+   User-Agent (the version only), validates the answer and never downloads or installs anything. Tests use a
+   local server, never GitHub.
 8. **Never follow links when deleting.** Skip reparse points (junctions, symlinks); open files without
    following links, check the final path is inside the expected root (see `vigil-maint::storage`).
 9. **Honest wording.** Explanations say what really happens (for example: trimming memory is temporary).

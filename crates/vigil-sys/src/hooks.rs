@@ -746,11 +746,15 @@ mod tests {
     };
 
     /// A scratch key under `HKCU\Software\VigilTests`, deleted when dropped.
-    struct Scratch(String);
+    struct Scratch(String, #[allow(dead_code)] std::sync::MutexGuard<'static, ()>);
 
     impl Scratch {
         fn new(name: &str) -> Self {
-            Scratch(format!(r"Software\VigilTests\hooks-{name}-{}", std::process::id()))
+            let lock = crate::util::TEST_REGISTRY.lock().unwrap_or_else(|p| p.into_inner());
+            Scratch(
+                format!(r"Software\VigilTests\hooks-{name}-{}", std::process::id()),
+                lock,
+            )
         }
 
         fn set(&self, sub: &str, value: &str, kind: REG_VALUE_TYPE, data: &[u8]) {

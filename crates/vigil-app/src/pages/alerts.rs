@@ -18,8 +18,9 @@ use crate::theme::tokens;
 use crate::ui;
 use crate::ui::kit::{self, J as _};
 
-const KINDS: [&str; 12] = [
+const KINDS: [&str; 13] = [
     "startup", "service", "task", "security", "port", "hook", "driver", "hosts", "network", "bits", "event", "scan",
+    "update",
 ];
 
 pub struct AlertsPage {
@@ -228,8 +229,11 @@ impl Render for AlertsPage {
             let target = a.s("target").to_string();
             let id = a.at("id").as_u64();
             let scan = a.s("kind") == "scan";
+            // A newer Vigil: its `target` is the release page (the core checks it again).
+            let release = a.s("kind") == "update";
             let label = target_label(&target);
             let action: Option<String> = match label {
+                _ if release => Some(t("update.openRelease")),
                 Some(l) => Some(tf("alerts.open", &[("page", &t(l))])),
                 None if unread => Some(t("alerts.markRead")),
                 None => None,
@@ -288,7 +292,9 @@ impl Render for AlertsPage {
                                 if unread && let Some(id) = id {
                                     c.mark_read(Some(vec![id]), cx);
                                 }
-                                if scan {
+                                if release {
+                                    let _ = c.shell.update(cx, |shell, cx| shell.open_release(&target, window, cx));
+                                } else if scan {
                                     crate::pages::watchui::open_auto_report(&c, window, cx);
                                 } else if label.is_some() {
                                     c.go(&target, window, cx);

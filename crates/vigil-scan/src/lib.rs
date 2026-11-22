@@ -21,6 +21,7 @@ pub mod export;
 pub mod model;
 pub mod pipeline;
 pub mod privacy;
+pub mod release;
 pub mod remedy;
 pub mod report;
 pub mod rules;
@@ -47,6 +48,7 @@ mod secrets;
 mod shellext;
 mod sigcache;
 mod svcsec;
+mod vulndrv;
 mod winreg;
 
 #[cfg(test)]

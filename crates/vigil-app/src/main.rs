@@ -41,6 +41,7 @@ mod settings_ui;
 mod shell;
 mod theme;
 mod ui;
+mod welcome;
 mod win;
 
 use std::sync::Arc;

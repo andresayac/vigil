@@ -62,6 +62,10 @@ pub struct SettingsView {
     error: Option<String>,
     saving: bool,
     acting: Acting,
+    /// "Check now" for a newer Vigil is asking.
+    update_checking: bool,
+    /// What "Check now" found: the newer release, nothing newer, or why it failed.
+    update_result: Option<Result<Option<vigil_core::version_check::Latest>, String>>,
 }
 
 impl Acts for SettingsView {
@@ -110,6 +114,8 @@ impl SettingsView {
             error: None,
             saving: false,
             acting: Acting::default(),
+            update_checking: false,
+            update_result: None,
         };
         view.read_watch();
         if let Some(time) = view.watch.as_ref().map(|w| w.scan_time.clone()) {
@@ -271,6 +277,7 @@ impl SettingsView {
                 let resumed = settings.watching && !file.settings.watching;
                 file.settings = WatchSettings {
                     tray_notice_shown: file.settings.tray_notice_shown,
+                    welcome_shown: file.settings.welcome_shown,
                     ..settings
                 };
                 resumed
@@ -286,6 +293,66 @@ impl SettingsView {
             .update(cx, |shell, cx| shell.apply_settings(theme, window, cx));
         crate::platform::Tray::refresh();
         window.close_dialog(cx);
+    }
+
+    /// "Check now": asks GitHub once for a newer Vigil (also when the daily check is off). The
+    /// demo never goes online.
+    fn check_update(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.ctx.demo() {
+            self.update_result = Some(Err(t("settings.update.demo")));
+            cx.notify();
+            return;
+        }
+        self.update_checking = true;
+        cx.notify();
+        let watcher = self.ctx.watcher.clone();
+        let task = cx
+            .background_spawn(async move { vigil_core::version_check::check_now(watcher.as_ref().map(|w| &w.store)) });
+        let weak = cx.entity().downgrade();
+        window
+            .spawn(cx, async move |cx| {
+                let result = task.await;
+                let _ = cx.update(|_, cx| {
+                    let _ = weak.update(cx, |this, cx| {
+                        this.update_checking = false;
+                        if let Ok(latest) = &result {
+                            let latest = latest.clone();
+                            let _ = this.ctx.shell.update(cx, |shell, cx| shell.set_update(latest, cx));
+                        }
+                        this.update_result = Some(result);
+                        cx.notify();
+                    });
+                });
+            })
+            .detach();
+    }
+
+    /// The line under "Check now": the last check and what it found.
+    fn update_line(&self) -> String {
+        match &self.update_result {
+            Some(Ok(Some(latest))) => tf("update.available", &[("version", &latest.version)]),
+            Some(Ok(None)) => tf(
+                "settings.update.upToDate",
+                &[("version", vigil_core::version_check::current())],
+            ),
+            Some(Err(problem)) => tf("settings.update.failed", &[("problem", problem)]),
+            None => {
+                let last = self
+                    .ctx
+                    .watcher
+                    .as_ref()
+                    .map(|w| w.store.load().update.last_check)
+                    .unwrap_or(0);
+                if last > 0 {
+                    tf(
+                        "settings.update.lastCheck",
+                        &[("when", &crate::pages::watchui::clock(last))],
+                    )
+                } else {
+                    t("settings.update.never")
+                }
+            }
+        }
     }
 
     fn row(&self, label: String, note: Option<String>, control: AnyElement, tk: &Tokens) -> Div {
@@ -476,6 +543,63 @@ impl Render for SettingsView {
         );
 
         // The AI agent.
+        // General: the opt-in check for a newer Vigil.
+        if let Some(w) = self.watch.clone() {
+            body = body.child(kit::h3(t("settings.general")));
+            body = body.child(self.watch_toggle(
+                "se-update",
+                t("settings.update.check"),
+                Some(t("settings.update.checkNote")),
+                w.update_check,
+                |s, on| s.update_check = on,
+                cx,
+                &tk,
+            ));
+            let newer = matches!(&self.update_result, Some(Ok(Some(_))));
+            let line = self.update_line();
+            let mut control = div().flex().gap_2().items_center().child(
+                ui::button(
+                    "se-update-now",
+                    t(if self.update_checking {
+                        "settings.update.checking"
+                    } else {
+                        "settings.update.now"
+                    }),
+                )
+                .disabled(self.update_checking)
+                .on_click(cx.listener(|this, _, window, cx| this.check_update(window, cx))),
+            );
+            if let Some(Ok(Some(latest))) = &self.update_result {
+                let url = latest.url.clone();
+                let shell = self.ctx.shell.clone();
+                control = control.child(ui::accent_button("se-update-open", t("update.openRelease")).on_click(
+                    move |_, window, cx| {
+                        let _ = shell.update(cx, |shell, cx| shell.open_release(&url, window, cx));
+                    },
+                ));
+            }
+            let note = if newer {
+                kit::colored(line, tk.accent)
+            } else {
+                kit::faint(line, &tk)
+            };
+            body = body.child(
+                self.row(
+                    t("settings.update.nowLabel"),
+                    None,
+                    div()
+                        .flex()
+                        .flex_col()
+                        .items_end()
+                        .gap_1()
+                        .child(control)
+                        .child(note)
+                        .into_any_element(),
+                    &tk,
+                ),
+            );
+        }
+
         body = body.child(kit::h3(t("settings.ai.title")));
         let provider = self.provider().cloned();
         let provider_id = draft.ai.provider.clone();

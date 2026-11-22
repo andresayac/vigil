@@ -416,6 +416,18 @@ pub fn info_bar(
     on_close: Option<OnClose>,
     tk: &Tokens,
 ) -> impl IntoElement {
+    info_bar_with(id, severity, message, None, on_close, tk)
+}
+
+/// An InfoBar with one action button after the message (WinUI's InfoBar action).
+pub fn info_bar_with(
+    id: impl Into<ElementId>,
+    severity: Severity,
+    message: impl Into<SharedString>,
+    action: Option<(SharedString, OnClose)>,
+    on_close: Option<OnClose>,
+    tk: &Tokens,
+) -> impl IntoElement {
     let (glyph, color) = match severity {
         Severity::Info => (icons::INFO, tk.accent),
         Severity::Success => (icons::SUCCESS, tk.ok),
@@ -439,6 +451,15 @@ pub fn info_bar(
         .border_color(tk.rule)
         .child(icons::icon(glyph, 16.0, color))
         .child(div().flex_1().text_size(px(13.)).child(message))
+        .when_some(action, |this, (label, run)| {
+            this.child(
+                button(
+                    ElementId::NamedChild(std::sync::Arc::new(id.clone()), "action".into()),
+                    label,
+                )
+                .on_click(move |_, window, cx| run(window, cx)),
+            )
+        })
         .when_some(on_close, |this, close| {
             this.child(
                 icon_button(

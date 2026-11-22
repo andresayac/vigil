@@ -106,6 +106,11 @@ pub(crate) fn logical_processors() -> u32 {
     count.max(1)
 }
 
+/// Tests that write under `HKCU\Software\VigilTests` take this lock for as long as their scratch key
+/// lives: one test deleting the empty parent while another creates its key would break both.
+#[cfg(test)]
+pub(crate) static TEST_REGISTRY: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;

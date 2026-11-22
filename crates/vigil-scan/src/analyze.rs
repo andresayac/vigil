@@ -1601,6 +1601,8 @@ struct Ctx {
     /// Privileged services' programs whose real permissions were read: whether standard users can
     /// change the program or its folder (`svcsec.rs`).
     acl_writable: HashMap<String, bool>,
+    /// Driver files on Microsoft's vulnerable driver blocklist, by lower-case path (`vulndrv.rs`).
+    vulnerable_drivers: HashMap<String, Value>,
 }
 
 fn evaluate_file(entity: &Entity, files: &Files, ctx: &Ctx) -> Item {
@@ -1869,6 +1871,9 @@ fn evaluate_file(entity: &Entity, files: &Files, ctx: &Ctx) -> Item {
     }
 
     let low = lower(&path);
+    if let Some(found) = ctx.vulnerable_drivers.get(&low) {
+        item.add_flag(crate::vulndrv::flag(found));
+    }
     if ctx.detected_paths.contains(&low) {
         item.add_flag(Flag::new(
             "defender_detected",
@@ -2068,6 +2073,7 @@ pub(crate) fn evaluate_entities(raw: &Value, refs: Vec<Ref>, files: &Files) -> V
         detected_paths: detected,
         exclusions,
         acl_writable: crate::svcsec::acl_writable(raw),
+        vulnerable_drivers: crate::vulndrv::matches_by_path(raw),
     };
 
     let items = entities

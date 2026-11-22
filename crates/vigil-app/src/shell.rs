@@ -139,6 +139,8 @@ pub struct Shell {
     notice: Option<(Severity, String)>,
     /// The command palette (Ctrl+K) while it is open.
     palette: Option<Entity<Palette>>,
+    /// A newer Vigil the update check found (Settings > General), until dismissed.
+    update: Option<vigil_core::version_check::Latest>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -235,6 +237,7 @@ impl Shell {
             acting: Acting::default(),
             notice: None,
             palette: None,
+            update: None,
             _subscriptions: subscriptions,
         };
         // The data folder could not be fully restricted to administrators: say so.
@@ -245,10 +248,34 @@ impl Shell {
             .map(|w| (Severity::Warning, w));
         shell.apply_theme(window, cx);
         shell.open(page, window, cx);
+        // A newer Vigil found by an earlier check (in this copy or the tray copy).
+        if !shell.demo {
+            shell.update = shell
+                .watcher
+                .as_ref()
+                .and_then(|w| vigil_core::version_check::offer(&w.store.load().update));
+        }
+        // The first-run welcome, once (not when a dialog was asked for on the command line).
+        let welcome_shown = shell.watcher.as_ref().is_none_or(|w| w.settings().welcome_shown);
+        if dialog.is_none() && crate::welcome::show_at_start(shell.demo, welcome_shown) {
+            cx.defer_in(window, |shell, window, cx| {
+                let ctx = shell.ctx(cx);
+                crate::welcome::open(ctx, window, cx);
+            });
+        }
         if let Some(dialog) = dialog {
             cx.defer_in(window, move |shell, window, cx| match dialog.as_str() {
                 "settings" => shell.open_settings(window, cx),
                 "scan" => shell.scan_dialog(window, cx),
+                // `welcome` or `welcome=N`: the welcome, at step N (previews of each step).
+                other if other == "welcome" || other.starts_with("welcome=") => {
+                    let step = other
+                        .strip_prefix("welcome=")
+                        .and_then(|n| n.parse::<usize>().ok())
+                        .map_or(0, |n| n.saturating_sub(1));
+                    let ctx = shell.ctx(cx);
+                    crate::welcome::open_at(ctx, step, window, cx);
+                }
                 "run" => {
                     let ctx = shell.ctx(cx);
                     crate::dialogs::run_task(ctx, window, cx);
@@ -550,7 +577,12 @@ impl Shell {
 
     /// Asks Windows for administrator rights (UAC); on success the elevated copy starts and this
     /// one quits. Declining keeps this copy as it is.
-    fn restart_elevated(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn restart_elevated(&mut self, cx: &mut Context<Self>) {
+        if self.demo {
+            self.notice = Some((Severity::Info, t("app.demoNoActions")));
+            cx.notify();
+            return;
+        }
         // The elevated copy waits for this one (`--after`), so it never finds the window taken.
         let me = std::process::id().to_string();
         match vigil_sys::elevation::relaunch_elevated(&["--elevated", "--after", &me]) {
@@ -594,9 +626,20 @@ impl Shell {
         common::send(self, request, window, cx);
     }
 
-    fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let ctx = self.ctx(cx);
         crate::settings_ui::open(ctx, window, cx);
+    }
+
+    /// Shows (or hides) the bar about a newer Vigil (after "Check now" in Settings).
+    pub fn set_update(&mut self, latest: Option<vigil_core::version_check::Latest>, cx: &mut Context<Self>) {
+        self.update = latest;
+        cx.notify();
+    }
+
+    /// Opens a release page of Vigil in the browser (the core checks the address again).
+    pub fn open_release(&mut self, url: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.shell_request("url", Some(url), None, window, cx);
     }
 
     /// Settings were saved: the theme and the language apply now (the page is drawn again in the
@@ -797,6 +840,10 @@ impl Shell {
                     s.shell_request("console", None, Some("eventvwr.msc"), w, cx)
                 }))
                 .separator()
+                .item(item(t("menu.welcome"), |s, w, cx| {
+                    let ctx = s.ctx(cx);
+                    crate::welcome::open(ctx, w, cx);
+                }))
                 .item(item(t("menu.about"), |_, w, cx| crate::dialogs::about(w, cx)))
         })
     }
@@ -1073,6 +1120,35 @@ impl Render for Shell {
                     &tk,
                 ))
         });
+        // A newer Vigil: its version, a link to the release page, and a close button.
+        let update = self.update.clone().map(|latest| {
+            let shell = cx.entity().downgrade();
+            let open = {
+                let shell = shell.clone();
+                let url = latest.url.clone();
+                Box::new(move |window: &mut Window, cx: &mut App| {
+                    let _ = shell.update(cx, |shell, cx| shell.open_release(&url, window, cx));
+                }) as ui::OnClose
+            };
+            div()
+                .absolute()
+                .top(px(if self.notice.is_some() { 76. } else { 12. }))
+                .right(px(20.))
+                .w(px(560.))
+                .child(ui::info_bar_with(
+                    "shell-update",
+                    Severity::Info,
+                    tf("update.available", &[("version", &latest.version)]),
+                    Some((t("update.openRelease").into(), open)),
+                    Some(Box::new(move |_, cx: &mut App| {
+                        let _ = shell.update(cx, |shell, cx| {
+                            shell.update = None;
+                            cx.notify();
+                        });
+                    })),
+                    &tk,
+                ))
+        });
         let acting = self
             .acting
             .bar("shell-result", &tk)
@@ -1102,6 +1178,7 @@ impl Render for Shell {
                     .overflow_hidden()
                     .child(body)
                     .children(notice)
+                    .children(update)
                     .children(acting),
             )
             .children(palette)

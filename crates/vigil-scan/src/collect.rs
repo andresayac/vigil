@@ -1492,6 +1492,7 @@ fn job_label(name: &str) -> &'static str {
         "autoruns" => tl!("startup entries"),
         "programs" => tl!("installed programs"),
         "extensions" => tl!("browser extensions"),
+        "vulnerable_drivers" => tl!("vulnerable drivers"),
         _ => tl!("configuration"),
     }
 }
@@ -1529,6 +1530,8 @@ fn jobs() -> Vec<(&'static str, Job)> {
         ("programs", |_, _, _| Ok(Value::Array(collect_programs()))),
         ("extensions", |_, _, _| Ok(Value::Array(collect_extensions()))),
         ("sysconfig", |_, _, _| Ok(collect_sysconfig())),
+        // Hashes every driver file: its own job, so it runs next to the others.
+        ("vulnerable_drivers", |_, days, _| Ok(crate::vulndrv::collect(days))),
     ]
 }
 
@@ -1606,6 +1609,11 @@ pub(crate) fn collect_all(workdir: &Path, days: u32, progress: &dyn Fn(&str), ca
         notes.extend(list(config.at(crate::secrets::SECTION).at("notes")).iter().cloned());
         notes.extend(list(config.at(crate::certs::SECTION).at("notes")).iter().cloned());
         notes.extend(list(config.at(crate::bits::SECTION).at("notes")).iter().cloned());
+    }
+    if let Some(section) = data.get("vulnerable_drivers") {
+        notes.extend(list(section.at("notes")).iter().cloned());
+    }
+    if let Some(config) = data.get("sysconfig") {
         if truthy(config.at(crate::shellext::SECTION).at("capped")) {
             notes.push(json!({
                 "area": tr!("Explorer extensions"),
@@ -1632,6 +1640,11 @@ pub(crate) fn collect_all(workdir: &Path, days: u32, progress: &dyn Fn(&str), ca
         }
     };
 
+    // The vulnerable driver check runs as its own job but belongs with the configuration.
+    let mut sysconfig = whole("sysconfig", json!({}));
+    if let (Some(map), Some(section)) = (sysconfig.as_object_mut(), data.get("vulnerable_drivers")) {
+        map.insert(crate::vulndrv::SECTION.into(), section.clone());
+    }
     let mut processes = section("processes", "processes");
     let filled = processes.as_array_mut().map_or(0, |list| fill_process_paths(list));
     let system = whole("system", json!({}));
@@ -1664,7 +1677,7 @@ pub(crate) fn collect_all(workdir: &Path, days: u32, progress: &dyn Fn(&str), ca
         "autoruns": whole("autoruns", json!([])),
         "programs": whole("programs", json!([])),
         "extensions": whole("extensions", json!([])),
-        "sysconfig": whole("sysconfig", json!({})),
+        "sysconfig": sysconfig,
         "files": {},
         "notes": notes,
     })

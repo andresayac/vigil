@@ -148,6 +148,10 @@ pub struct WatchSettings {
     pub scan_day: u8,
     /// The time of the scan, "HH:MM" in local time.
     pub scan_time: String,
+    /// Check GitHub for a newer Vigil once a day (`crate::version_check`); off by default.
+    pub update_check: bool,
+    /// The first-run welcome was shown (in any copy of Vigil).
+    pub welcome_shown: bool,
 }
 
 impl Default for WatchSettings {
@@ -166,6 +170,8 @@ impl Default for WatchSettings {
             scan_schedule: "off".into(),
             scan_day: 1,
             scan_time: "12:30".into(),
+            update_check: false,
+            welcome_shown: false,
         }
     }
 }
@@ -181,6 +187,8 @@ impl WatchSettings {
             "port" => self.notify_ports,
             "hook" | "driver" | "hosts" | "network" | "bits" => self.notify_hooks,
             "event" => self.notify_events,
+            // A newer Vigil is a quiet alert: the window shows it, no notification pops up.
+            "update" => false,
             _ => true,
         }
     }
@@ -196,7 +204,8 @@ pub struct Alert {
     /// When it was noticed (ms since 1970).
     pub time: i64,
     /// "startup", "service", "task", "security", "port", "hook", "driver", "hosts", "event", "scan"
-    /// (an automatic scan found something), or "watch" (about the watch itself).
+    /// (an automatic scan found something), "update" (a newer Vigil; `target` is its release page)
+    /// or "watch" (about the watch itself).
     pub kind: String,
     pub title: String,
     pub detail: String,
@@ -296,6 +305,9 @@ pub struct Fingerprint {
     pub hooks: BTreeMap<String, BTreeMap<String, String>>,
     /// Driver service name (lower case) -> driver.
     pub drivers: Option<BTreeMap<String, DriverPrint>>,
+    /// Drivers on Microsoft's vulnerable driver blocklist: driver service name (lower case) -> its
+    /// file. `None` when the blocklist or the drivers could not be read.
+    pub vulnerable_drivers: Option<BTreeMap<String, String>>,
     pub hosts: Option<HostsPrint>,
     /// DNS servers per adapter and the proxies (`None` when they could not be read).
     pub network: Option<NetPrint>,
@@ -741,6 +753,9 @@ fn diff_items(old: &Fingerprint, new: &Fingerprint) -> Vec<Alert> {
         }
     }
     out.extend(hook_alerts(&old.hooks, &new.hooks));
+    if let (Some(old_list), Some(new_list)) = (&old.vulnerable_drivers, &new.vulnerable_drivers) {
+        out.extend(vulnerable_alerts(old_list, new_list, new.drivers.as_ref()));
+    }
     if let (Some(old), Some(new)) = (&old.drivers, &new.drivers) {
         out.extend(driver_alerts(old, new));
     }
@@ -1005,6 +1020,8 @@ pub fn merged_at(old: &Fingerprint, new: Fingerprint, now: i64) -> Fingerprint {
         version: FINGERPRINT_VERSION,
         hooks,
         drivers,
+        // A file's hash does not flap: what was read now replaces what was there.
+        vulnerable_drivers: new.vulnerable_drivers.or_else(|| old.vulnerable_drivers.clone()),
         hosts: new.hosts.or_else(|| old.hosts.clone()),
         network: new.network.or_else(|| old.network.clone()),
         events,
@@ -1048,6 +1065,7 @@ pub fn read_fingerprint(elevated: bool, previous: &Fingerprint) -> Fingerprint {
     };
     let (events, event_hits, logs_hidden) = read_events(&WindowsLogs, &previous.events, now_ms());
     let (bits, bits_read, bits_all_users) = read_bits(elevated, previous.bits_read, now_ms());
+    let drivers = vigil_sys::hooks::drivers();
     Fingerprint {
         startup: startup_print(),
         services: vigil_sys::services::list_light().ok().map(|list| service_print(&list)),
@@ -1058,7 +1076,8 @@ pub fn read_fingerprint(elevated: bool, previous: &Fingerprint) -> Fingerprint {
         ports_absent: BTreeMap::new(),
         version: FINGERPRINT_VERSION,
         hooks: vigil_sys::hooks::read(&vigil_sys::hooks::default_sources()),
-        drivers: vigil_sys::hooks::drivers().map(|list| driver_print(&list)),
+        vulnerable_drivers: drivers.as_deref().and_then(vulnerable_print),
+        drivers: drivers.as_deref().map(driver_print),
         hosts: read_hosts(&hosts_path(), previous.hosts.as_ref()),
         network: network_print(),
         events,
@@ -1643,6 +1662,60 @@ pub fn driver_alerts(old: &BTreeMap<String, DriverPrint>, new: &BTreeMap<String,
     out
 }
 
+/// The drivers whose file is on Microsoft's vulnerable driver blocklist. Each file is hashed once
+/// and again only when its size or time changes, so a check costs a file status per driver.
+/// `None` when there is no readable blocklist.
+pub fn vulnerable_print(list: &[vigil_sys::hooks::Driver]) -> Option<BTreeMap<String, String>> {
+    let policy = vigil_sys::drvblock::installed_policy()?;
+    let windows = vigil_sys::drvblock::windows_dir();
+    let mut out = BTreeMap::new();
+    for driver in list {
+        let path = if driver.path.trim().is_empty() {
+            format!(r"{windows}\System32\drivers\{}.sys", driver.name)
+        } else {
+            vigil_sys::netcfg::driver_file(&driver.path, &windows)
+        };
+        if let Some(Some(_)) = vigil_sys::drvblock::check_cached(&policy.rules, &path) {
+            out.insert(driver.name.to_lowercase(), path);
+        }
+    }
+    Some(out)
+}
+
+/// A driver newly on the blocklist list of this computer: critical when it starts with Windows.
+pub fn vulnerable_alerts(
+    old: &BTreeMap<String, String>,
+    new: &BTreeMap<String, String>,
+    drivers: Option<&BTreeMap<String, DriverPrint>>,
+) -> Vec<Alert> {
+    let mut out = Vec::new();
+    for (name, path) in new {
+        if old.contains_key(name) {
+            continue;
+        }
+        let start = drivers
+            .and_then(|d| d.get(name))
+            .map(|d| d.start.as_str())
+            .unwrap_or("");
+        let severity = if matches!(start, "boot" | "system" | "auto") {
+            "critical"
+        } else {
+            "warning"
+        };
+        out.push(alert(
+            "driver",
+            severity,
+            "alerts",
+            tr!("Vulnerable driver installed: {0}", name),
+            tr!(
+                "{0} is on Microsoft's list of drivers that attackers load to switch off security software. Uninstall or update the program that added it, and turn on the vulnerable driver blocklist in Windows Security.",
+                path
+            ),
+        ));
+    }
+    out
+}
+
 // ------------------------------------------------------------------------------------ network settings
 
 /// Each connected adapter's DNS servers and the proxies; `None` when one of them cannot be read.
@@ -2223,6 +2296,8 @@ pub struct WatchFile {
     pub language: String,
     /// Automatic scans: the schedule's arming time, the last run and its result.
     pub auto_scan: crate::autoscan::AutoScanState,
+    /// The check for a newer Vigil: when it last ran and what it found.
+    pub update: crate::version_check::UpdateState,
 }
 
 /// Drops the oldest alerts beyond [`MAX_ALERTS`], never an unread critical one (up to [`MAX_KEPT`]).
@@ -2816,6 +2891,8 @@ impl Watcher {
                     self.state_changed();
                     host.changed(&self.status());
                 }
+                // The opt-in daily check for a newer Vigil (its own thread; also while paused).
+                crate::version_check::tick(self);
             } else if self.state_changed() {
                 // The other copy (or a window of this one) changed the state: show it.
                 host.changed(&self.status());
@@ -4005,6 +4082,55 @@ mod more_tests {
             path: path.into(),
             start: "system".into(),
         }
+    }
+
+    #[test]
+    fn vulnerable_drivers_become_alerts_once() {
+        vigil_i18n::with_language("en", || {
+            let drivers = BTreeMap::from([
+                ("rtcore64".to_string(), driver(r"\??\C:\Tools\RTCore64.sys")),
+                (
+                    "gdrv".to_string(),
+                    DriverPrint {
+                        path: r"\??\C:\Tools\gdrv.sys".into(),
+                        start: "demand".into(),
+                    },
+                ),
+            ]);
+            let old = BTreeMap::from([("known".to_string(), r"C:\Tools\known.sys".to_string())]);
+            let new = BTreeMap::from([
+                ("known".to_string(), r"C:\Tools\known.sys".to_string()),
+                ("rtcore64".to_string(), r"C:\Tools\RTCore64.sys".to_string()),
+                ("gdrv".to_string(), r"C:\Tools\gdrv.sys".to_string()),
+            ]);
+            let got = titles(&vulnerable_alerts(&old, &new, Some(&drivers)));
+            assert_eq!(
+                got,
+                vec![
+                    (
+                        "driver".into(),
+                        "warning".into(),
+                        "Vulnerable driver installed: gdrv".into()
+                    ),
+                    (
+                        "driver".into(),
+                        "critical".into(),
+                        "Vulnerable driver installed: rtcore64".into()
+                    ),
+                ]
+            );
+            // The first check after the upgrade (no section before) only records them.
+            let before = Fingerprint::default();
+            let after = Fingerprint {
+                vulnerable_drivers: Some(new),
+                drivers: Some(drivers),
+                ..Fingerprint::default()
+            };
+            assert!(diff(&before, &after).iter().all(|a| !a.title.starts_with("Vulnerable")));
+            // A section that could not be read keeps the old one.
+            let kept = merged(&after, Fingerprint::default());
+            assert_eq!(kept.vulnerable_drivers, after.vulnerable_drivers);
+        });
     }
 
     #[test]

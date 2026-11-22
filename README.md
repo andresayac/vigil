@@ -190,8 +190,8 @@ program or svchost DLL), scheduled tasks (new ones outside `\Microsoft\`, and ch
 a task that runs something outside the Windows folder), the security switches (Defender real-time protection, tamper
 protection and the policy that turns Defender off, the three firewall profiles, UAC, Remote Desktop, WDigest password
 caching, LSA protection), remote-access ports (SSH, Telnet, Remote Desktop, VNC, TeamViewer, WinRM) listening on every
-network interface with the program that listens, kernel and file system drivers (a new one, or one moved outside the
-Windows driver folders), the hosts file (names it newly redirects), each connected adapter's DNS servers and the
+network interface with the program that listens, kernel and file system drivers (a new one, one moved outside the
+Windows driver folders, or one on Microsoft's vulnerable driver blocklist, each file hashed once until it changes), the hosts file (names it newly redirects), each connected adapter's DNS servers and the
 proxies (servers the network hands out changing is information; servers set by hand or a new proxy is worth a
 look), and the registry places Windows reads to load or
 run something: image hijacks (including the Ease of Access programs of the sign-in screen), Winlogon, AppInit and
@@ -384,6 +384,15 @@ are never "optimizations").
      from the Bits-Client log, recent transfers of programs from such places or jobs created by a program in such
      a folder. Windows' own jobs are quiet. Jobs are listed only while the BITS service already runs (listing
      them would start it); a standard user sees only their own;
+   - vulnerable drivers: every driver the service database names (and, as administrator, every loaded one) is
+     hashed the way code integrity does (Authenticode SHA-1 and SHA-256) and checked against Microsoft's
+     vulnerable driver blocklist, read offline from the copy Windows keeps
+     (`System32\CodeIntegrity\driversipolicy.p7b`). A listed driver that runs or starts with Windows is
+     critical, one that is only installed is worth a look; a driver named by its original file name only is one
+     step lower. The list's rules that deny a signer for some versions of a file are not checked, and the
+     policy's signature is verified with the certificates on the computer only, so it may show as intact rather
+     than chained to Microsoft. Drivers Windows refused to load (code integrity log) are reported as
+     information: the protection worked;
 2. **Grouping**: every reference is resolved to the file that really decides what runs (the DLL behind `rundll32`,
    the script behind `wscript`, the payload of an encoded PowerShell command...), so each file is judged once.
 3. **Local rules**: digital signatures, locations, names that imitate Windows, command-line patterns (miners,
@@ -418,6 +427,14 @@ it too.
 - The background watch notices changes about a minute after they happen and cannot stop them. Without
   administrator rights it cannot read scheduled tasks, so it watches them only while Vigil runs elevated.
 - Rootkits that hide from Windows itself can hide from Vigil too.
+
+## Updates
+
+Vigil never updates itself. In **Settings > General**, "Check for new versions once a day" is **off by default**.
+When you turn it on (or press **Check now**), Vigil asks `api.github.com` for the latest release of this
+repository: the request carries only Vigil's version in its User-Agent (no identifiers, no cookies, nothing about
+the computer). A newer version is announced in the window and in Alerts with a link to its release page; you
+download and install it yourself. The first start also shows a short welcome (More > Welcome opens it again).
 
 ## Security notes
 

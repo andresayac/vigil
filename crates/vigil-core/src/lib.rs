@@ -35,6 +35,7 @@ pub mod state;
 pub mod storage_ops;
 pub mod tools;
 pub mod userdir;
+pub mod version_check;
 pub mod watch;
 
 /// `vigil scan`: the command-line scan. Returns the exit code.

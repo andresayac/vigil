@@ -85,6 +85,12 @@ LangString RUNNING ${LANG_FRENCH} "Vigil est en cours d’exécution. Quittez-le
 LangString RUNNING ${LANG_PORTUGUESEBR} "O Vigil está em execução. Feche-o pelo ícone na área de notificação e escolha Repetir."
 LangString RUNNING ${LANG_SIMPCHINESE} "Vigil 正在运行。请从通知区域的图标退出它，然后选择“重试”。"
 
+LangString NEEDS64 ${LANG_ENGLISH} "Vigil needs 64-bit Windows 10 or 11."
+LangString NEEDS64 ${LANG_SPANISH} "Vigil necesita Windows 10 u 11 de 64 bits."
+LangString NEEDS64 ${LANG_FRENCH} "Vigil nécessite Windows 10 ou 11 en version 64 bits."
+LangString NEEDS64 ${LANG_PORTUGUESEBR} "O Vigil precisa do Windows 10 ou 11 de 64 bits."
+LangString NEEDS64 ${LANG_SIMPCHINESE} "Vigil 需要 64 位 Windows 10 或 11。"
+
 ; Sets System.AppUserModel.ID on a shortcut (IShellLinkW + IPersistFile + IPropertyStore).
 !macro SetShortcutAumid LNK ID
   Push $0
@@ -163,7 +169,7 @@ FunctionEnd
 
 Function .onInit
   ${IfNot} ${RunningX64}
-    MessageBox MB_ICONSTOP "Vigil needs 64-bit Windows 10 or 11."
+    MessageBox MB_ICONSTOP "$(NEEDS64)" /SD IDOK
     Abort
   ${EndIf}
   SetRegView 64

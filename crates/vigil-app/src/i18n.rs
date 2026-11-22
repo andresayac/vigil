@@ -158,6 +158,73 @@ mod tests {
         }
     }
 
+    /// The `{name}` placeholders a text uses.
+    fn placeholders(text: &str) -> BTreeSet<String> {
+        let mut found = BTreeSet::new();
+        let mut rest = text;
+        while let Some(start) = rest.find('{') {
+            let after = &rest[start + 1..];
+            match after.find('}') {
+                Some(end) if end > 0 && after[..end].chars().all(|c| c.is_ascii_alphanumeric() || c == '_') => {
+                    found.insert(after[..end].to_string());
+                    rest = &after[end + 1..];
+                }
+                _ => rest = after,
+            }
+        }
+        found
+    }
+
+    /// Every translation fills the same placeholders as English. A plural's "other" form has the
+    /// full set; its other forms (e.g. "one") may leave the count out, but never add a name.
+    #[test]
+    fn every_translation_keeps_the_english_placeholders() {
+        let all = catalogs();
+        let english = all.get("en").expect("en");
+        let mut problems = Vec::new();
+        for (code, _) in SOURCES {
+            let Some(catalog) = all.get(code) else { continue };
+            for (key, source) in english {
+                let wanted = match source {
+                    Msg::Text(text) => placeholders(text),
+                    Msg::Plural(forms) => forms.get("other").map(|t| placeholders(t)).unwrap_or_default(),
+                };
+                match catalog.get(key) {
+                    Some(Msg::Text(text)) => {
+                        if placeholders(text) != wanted {
+                            problems.push(format!("{code} {key}: {wanted:?} vs {:?}", placeholders(text)));
+                        }
+                    }
+                    Some(Msg::Plural(forms)) => {
+                        for (form, text) in forms {
+                            let got = placeholders(text);
+                            let ok = if form == "other" {
+                                got == wanted
+                            } else {
+                                got.is_subset(&wanted)
+                            };
+                            if !ok {
+                                problems.push(format!("{code} {key}[{form}]: {wanted:?} vs {got:?}"));
+                            }
+                        }
+                    }
+                    None => {}
+                }
+            }
+        }
+        assert!(
+            problems.is_empty(),
+            "{} placeholder problems:\n{problems:#?}",
+            problems.len()
+        );
+    }
+
+    #[test]
+    fn placeholders_are_read_like_the_filler() {
+        let found = placeholders("{name} ({count}) {x-y} {} {a_1}");
+        assert_eq!(found.into_iter().collect::<Vec<_>>(), ["a_1", "count", "name"]);
+    }
+
     /// The text of every source file of the window.
     fn sources() -> Vec<(std::path::PathBuf, String)> {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");

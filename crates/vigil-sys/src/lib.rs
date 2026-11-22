@@ -18,6 +18,7 @@ pub mod bootimpact;
 pub mod certs;
 pub mod cpusets;
 pub mod defender;
+pub mod drvblock;
 pub mod elevation;
 pub mod firewall;
 pub mod hooks;

@@ -426,6 +426,9 @@ fn config_steps(topic: &str) -> Vec<Step> {
                 "If nothing you use explains it, cancel the job with Remove-BitsTransfer and scan the downloaded file with Microsoft Defender."
             ))
             .admin(true)],
+        "vulnerable_driver_loaded" => vulnerable_driver_steps(),
+        "vulnerable_driver_blocked" => vec![Step::new(tr!("Find the program that tried to load the driver"))
+            .note(tr!("The file names above usually point to it: a hardware tool, a game anti-cheat, an overclocking or RGB utility. Update it or uninstall it; Windows keeps blocking the driver either way."))],
         "amsi_disabled" => vec![Step::new(tr!("Turn script scanning back on"))
             .note(tr!(
                 "Delete the AmsiEnable value shown here with regedit (or set it to 1), then run a full Microsoft Defender scan."
@@ -445,6 +448,16 @@ fn config_steps(topic: &str) -> Vec<Step> {
 }
 
 /// Manual steps for an item (shown in the report; never run by the scan).
+/// What to do about a driver on Microsoft's vulnerable driver blocklist.
+fn vulnerable_driver_steps() -> Vec<Step> {
+    vec![
+        Step::new(tr!("Uninstall or update the program that installed this driver"))
+            .note(tr!("Hardware tools, game anti-cheats and overclocking or RGB utilities ship such drivers; newer versions usually replace the vulnerable one. Restart afterwards so the old driver is unloaded.")),
+        Step::new(tr!("Turn on the Microsoft Vulnerable Driver Blocklist"))
+            .note(tr!("Windows Security → Device security → Core isolation details → Microsoft Vulnerable Driver Blocklist. Windows then refuses to load the drivers on the list.")),
+    ]
+}
+
 pub fn build_remediation(item: &Item) -> Vec<Value> {
     let mut steps: Vec<Step> = Vec::new();
     match item.kind.as_str() {
@@ -459,6 +472,9 @@ pub fn build_remediation(item: &Item) -> Vec<Value> {
                         steps.push(step);
                     }
                 }
+            }
+            if item.flags.iter().any(|f| f.code == crate::vulndrv::FLAG) {
+                steps.splice(0..0, vulnerable_driver_steps());
             }
             steps.truncate(16);
             if item.kind == "executable"

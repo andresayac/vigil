@@ -294,8 +294,12 @@ fn classify(spec: ActionSpec, item: Option<String>) -> Plan {
     }
 }
 
-/// URLs the app opens: Windows Security and Settings pages, and a VirusTotal hash lookup.
+/// URLs the app opens: Windows Security and Settings pages, a VirusTotal hash lookup, and a release
+/// page of Vigil's own repository (a newer version found by the update check).
 pub fn allowed_url(url: &str) -> bool {
+    if vigil_scan::release::valid_release_url(url) {
+        return true;
+    }
     let low = url.to_ascii_lowercase();
     let simple = |rest: &str| rest.chars().all(|c| c.is_ascii_alphanumeric() || "-_/.".contains(c));
     if let Some(rest) = low.strip_prefix("windowsdefender://") {
@@ -1419,6 +1423,9 @@ mod tests {
         assert!(!allowed_url("https://example.com/"));
         assert!(!allowed_url("file:///C:/Windows/System32/calc.exe"));
         assert!(!allowed_url("ms-settings:"));
+        assert!(allowed_url("https://github.com/andresayac/vigil/releases/tag/v9.0.0"));
+        assert!(!allowed_url("https://github.com/someone/vigil/releases/tag/v9.0.0"));
+        assert!(!allowed_url("https://github.com/andresayac/vigil/releases/tag/v9?x=1"));
     }
 
     #[test]
