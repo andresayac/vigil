@@ -113,6 +113,8 @@ static OPS: LazyLock<RwLock<HashMap<String, OpEntry>>> = LazyLock::new(|| {
         .into_iter()
         .chain(crate::tuning::builtin())
         .chain(crate::firewall::builtin())
+        .chain(crate::defender::builtin())
+        .chain(crate::programs::builtin())
     {
         table.insert(op.to_string(), OpEntry { run, undo, no_admin });
     }

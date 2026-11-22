@@ -14,6 +14,9 @@ mod firewall;
 mod live;
 mod notify;
 mod planner;
+mod programs;
+mod protection;
+mod reliability;
 mod requests;
 mod secrets;
 mod settings;
@@ -95,7 +98,8 @@ pub fn scan_cli(args: &[String]) -> i32 {
     cli::run(args)
 }
 
-/// The read-only commands `vigil list`, `vigil ports`, `vigil services` and `vigil --help`;
+/// The read-only commands `vigil list`, `vigil ports`, `vigil services`, `vigil reliability` and
+/// `vigil --help`;
 /// `None` when `command` is not one of them.
 pub fn tool_cli(command: &str, args: &[String]) -> Option<i32> {
     tools::COMMANDS.contains(&command).then(|| tools::run(command, args))
@@ -132,6 +136,7 @@ pub fn run() {
                 tray::install(app.handle());
             }
             watcher.start(app.handle().clone());
+            protection::start_monitor(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -178,6 +183,10 @@ pub fn run() {
             commands::startup_signatures,
             commands::tasks_list,
             firewall::firewall_list,
+            programs::programs_list,
+            programs::program_signatures,
+            protection::protection_state,
+            reliability::reliability_read,
             commands::ai_providers,
             commands::ai_models,
             alerts::watch_status,

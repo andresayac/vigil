@@ -31,7 +31,7 @@ vigil scan --ai off                :: local rules only
 vigil scan --help                  :: every option
 ```
 
-Three more commands give a quick look at the live system from a terminal or a script. Like the scan they only read;
+A few more commands give a quick look at the live system from a terminal or a script. Like the scan they only read;
 changes are made from the app. Each one has `--help`, `--json` for machine-readable output and `--lang CODE`:
 
 ```bat
@@ -39,6 +39,8 @@ vigil list                         :: the 25 processes using the most CPU, measu
 vigil list --sort mem -n 10        :: sort by cpu, mem, name or pid; -n 0 shows every process
 vigil ports --listening            :: listening ports with the process and service behind each one
 vigil services --running --json    :: running Windows services, as JSON
+vigil programs --recent            :: programs installed in the last 7 days, newest first
+vigil reliability --days 90        :: blue screens, crashes and other problems of the last 90 days
 vigil --help                       :: every command
 ```
 
@@ -98,6 +100,7 @@ A server on this computer (`localhost`) keeps everything here: nothing leaves th
 | **Overview** | The verdict on the whole computer, one sliver per finding, what to do first, the security state (Defender, firewall, UAC, Remote Desktop, updates) and coverage notes. | Start a scan, jump to findings. |
 | **Findings** | Every item with its verdict (Remove, Disable, Review, No signals, Safe, Trusted), local score, type and presence. The side panel explains what it is, why it was flagged, the signals, where it appears, file and signature details, command lines and network activity. | The actions that make sense for that item, ignore it, copy its details. |
 | **Alerts** | What the background watch noticed (below): new startup entries, new or changed services, new scheduled tasks, security settings turned off and remote-access ports opened to the network, with how much each one matters. | Open the page where the item lives, mark alerts as read, clear them. |
+| **Protection** | Microsoft Defender, read live: whether it protects the computer (or another antivirus does, with Defender in passive mode), its switches (real-time, behavior monitoring, tamper protection, cloud protection, sample submission, potentially unwanted app blocking, network protection, controlled folder access), security intelligence and scan dates, the threat history and the exclusions, with the risky ones marked (a whole drive, a folder any program can write to, a program file type, a process excluded by name). | Quick or full scan in the background with its progress and Stop, the Microsoft Defender Offline scan, update security intelligence, turn a switch on (never off), remove an exclusion, remove the active threats, open Windows Security. |
 | **Firewall rules** | The domain, private and public profiles and every Windows Defender Firewall rule, read live, with the rules that deserve a look marked: open to any address on public networks for every program, opening a remote-access port (Remote Desktop, SSH, VNC, WinRM, Telnet), allowing a program in a folder any user can write to, or left over for a program that no longer exists. | Turn a rule on or off, delete it (its full definition is saved first; rules of the groups Windows defines can only be turned off), open the program's location or Windows Defender Firewall. |
 | **Quarantine** | Files moved to quarantine. | Restore to the original location, delete permanently. |
 | **History** | Every change made from the app, with what was saved to undo it. | Undo a step, or a whole "Remove completely". |
@@ -108,8 +111,10 @@ A server on this computer (`localhost`) keeps everything here: nothing leaves th
 | **Optimize** | Apps that start with Windows and services that start at boot, power plans, memory, Game Mode and GPU scheduling, GPU per app, hibernation file, drives. | Turn startup entries off, start services only when needed, switch or add power plans, free standby memory, choose the GPU for an app, turn hibernation off, TRIM or defragment a drive. |
 | **Startup apps** | What starts at sign-in, read live: the Run and RunOnce keys of your account and of every user, and both Startup folders, with publisher, signature and status. Entries that run through rundll32, script hosts or PowerShell name the host that runs them. | Turn an entry on or off with the switch Windows uses (undo it from History), open its location. |
 | **Scheduled tasks** | Every task in Task Scheduler, read live, with its triggers in plain words, last and next run, last result, account and rights, and the program each action starts. Tasks that run a file with full rights from a folder any user can change are marked, as are tasks whose program no longer exists. Tasks under `\Microsoft\` can be hidden. | Enable, disable, delete (the task definition is saved first, so History can recreate it), run now, open Task Scheduler. Windows tasks under `\Microsoft\` are shown but never changed. |
+| **Installed programs** | Every program in Settings' list of installed apps, read live from the Uninstall keys (the machine's, 32-bit ones included, yours and those of other signed-in accounts), with publisher, version, install date, declared size and the signatures of its program and uninstaller. Marked: programs installed in the last 7 days, remote access and tunnelling tools, unsigned files, and leftover entries whose uninstaller and files are gone. | Uninstall with the program's own uninstaller, remove a leftover entry (its registry key is saved first, so History can bring it back), open the install folder or Settings' Installed apps. Microsoft's entries are never removed. |
 | **Storage** | Every drive's free space, junk files by place and a space analyzer (treemap, biggest folders, largest files). | Clean the selected places, clean up the component store, send large files to the Recycle Bin. |
 | **System** | Windows, processor, memory modules, graphics adapters and driver age, disks with health, temperature and wear, board, BIOS, page file, battery, and concrete findings such as memory running below its rated speed. | Copy a plain-text summary. |
+| **Reliability** | What went wrong in the last 7, 30 or 90 days, read from the Windows event logs: blue screens (stop code and whether the memory dump is still there), unexpected shutdowns, program crashes grouped by program with the module they failed in, programs that stopped responding, service failures, hardware (WHEA) and disk errors, failed updates, installs and removals, and startup times. A daily timeline and short, plain hints say what the records point to (the graphics driver, memory, a disk, one module behind several crashes). | Copy an event's details, open Event Viewer or Reliability Monitor. Nothing is changed. |
 
 ### Background watch
 
@@ -142,7 +147,14 @@ What is offered depends on how the item is present on the system:
   debugger hooks (Image File Execution Options), Winlogon values, AppInit DLLs, logon scripts.
 - Files: quarantine, block network access with Windows Firewall rules, scan with Microsoft Defender.
 - Firewall rules: turn on or off, delete (the whole rule definition is saved first, so History can recreate it).
+- Microsoft Defender: quick or full scan (in the background; Stop asks Defender to end it), the Microsoft Defender
+  Offline scan (restarts the computer at once), update security intelligence, turn real-time protection, cloud
+  protection, sample submission or potentially unwanted app blocking on (History restores the previous value), remove
+  an exclusion (History adds it back), remove the active threats. Nothing on the Protection page turns protection off.
 - Programs: start their own uninstaller. Browser extensions: open the browser's extensions page.
+- Installed programs: remove a leftover entry whose uninstaller and files are gone (the Uninstall key is exported
+  first, so History can import it back; entries published by Microsoft and products Windows Installer still knows
+  are refused).
 - Settings: turn the firewall on, turn real-time protection on, update Defender, remove Defender exclusions, turn
   Remote Desktop or the proxy off, disable the Guest account or other local accounts.
 

@@ -3,12 +3,12 @@
   import Readouts, { type Readout } from "../components/Readouts.svelte";
   import * as api from "../lib/api";
   import { day, num, size } from "../lib/format";
-  import { t } from "../lib/i18n/index.svelte";
+  import { locale, t } from "../lib/i18n/index.svelte";
   import { stateColor } from "../lib/labels";
   import { live } from "../lib/live.svelte";
-  import type { GpuAdapter, Hardware, Insight } from "../lib/types";
+  import type { GpuAdapter, Hardware, Insight, Reliability } from "../lib/types";
 
-  let { elevated }: { elevated: boolean } = $props();
+  let { elevated, onpage }: { elevated: boolean; onpage?: (page: string) => void } = $props();
 
   let hw = $state<Hardware | null>(null);
   let found = $state<Insight[]>([]);
@@ -16,6 +16,7 @@
   let error = $state("");
   let copied = $state(false);
   let adapters = $state<GpuAdapter[]>([]);
+  let reliability = $state<Reliability | null>(null);
 
   async function load(force = false): Promise<void> {
     loading = true;
@@ -32,6 +33,7 @@
   onMount(() => {
     void load();
     void api.appInfo().then((info) => (adapters = info.adapters.filter((a) => !a.software)));
+    void api.reliability(30).then((r) => (reliability = r)).catch(() => {});
   });
 
   const date = (v: unknown) => day(v);
@@ -41,6 +43,19 @@
     return Number.isNaN(t) ? null : (Date.now() - t) / 86_400_000;
   };
   const problems = $derived(found.filter((i) => i.level === "warn" || i.level === "bad"));
+  /** "Last 30 days: 2 blue screens and 16 program crashes." from the event logs. */
+  const reliabilityLine = $derived.by(() => {
+    if (!reliability) return "";
+    const c = reliability.counts;
+    const parts = [
+      c.bluescreen ? t("system.relBluescreens", { count: c.bluescreen }) : "",
+      c.shutdown ? t("system.relShutdowns", { count: c.shutdown }) : "",
+      c.app_crash ? t("system.relCrashes", { count: c.app_crash }) : "",
+    ].filter(Boolean);
+    if (!parts.length) return t("system.reliabilityQuiet", { days: reliability.days });
+    const list = new Intl.ListFormat(locale(), { style: "long", type: "conjunction" }).format(parts);
+    return t("system.reliabilityLine", { days: reliability.days, list });
+  });
 
   interface Card { title: string; rows: Readout[]; note?: string }
 
@@ -151,6 +166,14 @@
     </section>
   {/if}
 
+  {#if reliabilityLine}
+    <section class="panel reliability">
+      <i class="icon">{""}</i>
+      <span>{reliabilityLine}</span>
+      {#if onpage}<button class="link" onclick={() => onpage?.("reliability")}>{t("system.seeReliability")}</button>{/if}
+    </section>
+  {/if}
+
   <div class="cards">
     {#each cards as card (card.title)}
       <section class="panel card">
@@ -170,4 +193,8 @@
   .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(460px, 1fr)); gap: 14px; align-items: start; }
   .card { display: flex; flex-direction: column; gap: 10px; }
   .card p { margin: 0; }
+  .reliability { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 16px; }
+  .reliability .icon { color: var(--ink2); }
+  .link { min-height: 0; padding: 2px 4px; border: 0; background: transparent; color: var(--accent); }
+  .link:hover:not(:disabled) { background: transparent; text-decoration: underline; }
 </style>

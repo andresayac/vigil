@@ -9,15 +9,19 @@
 mod error;
 mod nt;
 mod util;
+mod xml;
 
 pub mod apps;
 pub mod cpusets;
+pub mod defender;
 pub mod elevation;
 pub mod firewall;
 pub mod inspect;
 pub mod metrics;
 pub mod net;
 pub mod process;
+pub mod programs;
+pub mod reliability;
 pub mod services;
 pub mod startup;
 pub mod tasks;

@@ -94,6 +94,24 @@ pub enum Request {
         op: String,
         key: String,
     },
+    /// Uninstall a program, remove its leftover entry or open its install folder (`id` from
+    /// `programs_list`; the program is read again from its Uninstall key).
+    Program {
+        op: String,
+        id: String,
+    },
+    /// Microsoft Defender, from the Protection page: scans, update, turning a setting on
+    /// (`setting`), removing an exclusion (`list` + `value`) or the active threats. Checked
+    /// against a fresh read (see `protection::plan`).
+    Defender {
+        op: String,
+        #[serde(default)]
+        setting: String,
+        #[serde(default)]
+        list: String,
+        #[serde(default)]
+        value: String,
+    },
 }
 
 /// One process instance as the page saw it.
@@ -299,6 +317,9 @@ pub fn build(request: &Request, ctx: &Context<'_>) -> Result<Plan, String> {
         Request::Startup { op, id } => startup_plan(op, id, ctx),
         Request::Task { op, path } => task_plan(op, path, ctx),
         Request::FirewallRule { op, key } => crate::firewall::plan(op, key, ctx),
+        Request::Program { op, id } => crate::programs::plan(op, id),
+        // Planned in `commands::build_plan` from a fresh read of Defender (not part of `Context`).
+        Request::Defender { op, .. } => Err(tr!("Unknown request: {0}", op)),
     }
 }
 

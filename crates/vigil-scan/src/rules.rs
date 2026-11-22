@@ -245,6 +245,12 @@ pub(crate) static OBSOLETE_SOFTWARE: LazyLock<Rx> = LazyLock::new(|| {
     )
 });
 
+/// A remote access, remote control or tunnelling tool named in the text (a program's name,
+/// publisher or paths), from the same list the scan uses.
+pub fn is_remote_access_tool(text: &str) -> bool {
+    REMOTE_TOOLS.is_match(text)
+}
+
 /// Signals based on names (program, service, task, path).
 pub fn label_flags(names: &[&str]) -> Vec<Flag> {
     let text = names

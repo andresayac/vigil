@@ -109,8 +109,15 @@ const TOOLS: [&str; 8] = [
     "powercfg.cpl",
 ];
 
-/// Opens one of a few Windows tools (performance options, disk cleanup, defragmenter...).
+/// Reliability Monitor: Performance Monitor's `/rel` view, asked for by this name.
+const RELIABILITY_MONITOR: &str = "reliability";
+
+/// Opens one of a few Windows tools (performance options, disk cleanup, defragmenter, Reliability
+/// Monitor...).
 pub fn open_tool(name: &str) -> Result<()> {
+    if name == RELIABILITY_MONITOR {
+        return launch(&tool("perfmon.exe"), &["/rel"]);
+    }
     if !TOOLS.contains(&name) {
         return fail(tr!("unknown tool"));
     }

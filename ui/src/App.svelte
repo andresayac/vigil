@@ -19,9 +19,12 @@
   import Network from "./pages/Network.svelte";
   import Optimize from "./pages/Optimize.svelte";
   import Overview from "./pages/Overview.svelte";
+  import Protection from "./pages/Protection.svelte";
   import Performance from "./pages/Performance.svelte";
   import Processes from "./pages/Processes.svelte";
+  import Programs from "./pages/Programs.svelte";
   import Quarantine from "./pages/Quarantine.svelte";
+  import Reliability from "./pages/Reliability.svelte";
   import Services from "./pages/Services.svelte";
   import Startup from "./pages/Startup.svelte";
   import Storage from "./pages/Storage.svelte";
@@ -81,6 +84,7 @@
     { key: "overview", title: t("page.overview"), icon: "", section: t("nav.security") },
     { key: "findings", title: t("page.findings"), icon: "", section: t("nav.security"), count: String(urgent || review || ""), alert: urgent > 0 },
     { key: "alerts", title: t("page.alerts"), icon: "\uEA8F", section: t("nav.security"), count: unreadAlerts ? String(unreadAlerts) : "" },
+    { key: "protection", title: t("page.protection"), icon: "\uF760", section: t("nav.security") },
     { key: "firewall", title: t("page.firewall"), icon: "", section: t("nav.security") },
     { key: "quarantine", title: t("page.quarantine"), icon: "", section: t("nav.security") },
     { key: "history", title: t("page.history"), icon: "", section: t("nav.security") },
@@ -91,8 +95,10 @@
     { key: "optimize", title: t("page.optimize"), icon: "", section: t("nav.maintenance") },
     { key: "startup", title: t("page.startup"), icon: "", section: t("nav.maintenance") },
     { key: "tasks", title: t("page.tasks"), icon: "", section: t("nav.maintenance") },
+    { key: "programs", title: t("page.programs"), icon: "", section: t("nav.maintenance") },
     { key: "storage", title: t("page.storage"), icon: "", section: t("nav.maintenance") },
     { key: "system", title: t("page.system"), icon: "", section: t("nav.maintenance") },
+    { key: "reliability", title: t("page.reliability"), icon: "", section: t("nav.maintenance") },
   ]);
 
   const lastScan = $derived(report.analysis
@@ -158,6 +164,8 @@
         <History {elevated} />
       {:else if page === "alerts"}
         <Alerts onpage={go} />
+      {:else if page === "protection"}
+        <Protection {elevated} />
       {:else if page === "performance"}
         <Performance cpuName={info?.cpuName ?? ""} initial={resource} {elevated} onshowprocess={(pid) => { focusPid = pid; page = "processes"; }} />
       {:else if page === "processes"}
@@ -173,10 +181,14 @@
         <Startup {elevated} />
       {:else if page === "tasks"}
         <Tasks {elevated} />
+      {:else if page === "programs"}
+        <Programs {elevated} />
       {:else if page === "storage"}
         <Storage {elevated} />
       {:else if page === "system"}
-        <System {elevated} />
+        <System {elevated} onpage={go} />
+      {:else if page === "reliability"}
+        <Reliability {elevated} />
       {/if}
     {/key}
   </main>

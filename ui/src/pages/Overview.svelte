@@ -200,6 +200,7 @@
         <section class="panel">
           <h2>{t("overview.security")}</h2>
           <Readouts rows={readouts(a.posture ?? {})} nameWidth={200} />
+          <div><button class="link" onclick={() => onpage("protection")}>{t("overview.openProtection")}</button></div>
         </section>
         {#if a.notes?.length}
           <section class="panel">

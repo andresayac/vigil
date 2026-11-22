@@ -352,7 +352,7 @@ pub(crate) fn undo_service_disable(u: Params<'_>, _store: &Store) -> Result<Stri
     Ok(format!("restored \"{name}\" to {} start", start_arg(start, delayed)))
 }
 
-fn export_key(key: &str, store: &Store, record_id: &str) -> Result<String> {
+pub(crate) fn export_key(key: &str, store: &Store, record_id: &str) -> Result<String> {
     let target = store.backup_dir().join(format!("{record_id}.reg"));
     let target_text = target.to_string_lossy().into_owned();
     let result = run(
@@ -1059,8 +1059,7 @@ fn undo_firewall_enable(u: Params<'_>, _store: &Store) -> Result<String> {
 // --------------------------------------------------------------------------- Microsoft Defender
 
 fn mpcmdrun() -> Result<String> {
-    let base = std::env::var("ProgramFiles").unwrap_or_else(|_| r"C:\Program Files".to_string());
-    let path = format!("{base}\\Windows Defender\\MpCmdRun.exe");
+    let path = crate::defender::mpcmdrun_path();
     if !Path::new(&path).is_file() {
         return fail(tr!("Microsoft Defender's command-line tool was not found"));
     }
@@ -1100,12 +1099,9 @@ fn op_defender_scan_file(p: Params<'_>, _store: &Store, _id: &str) -> Result<Out
     }
 }
 
+/// One mechanism for every scan Vigil starts: the Protection page follows it (see `defender`).
 fn op_defender_full_scan(_p: Params<'_>, _store: &Store, _id: &str) -> Result<Outcome> {
-    runner::launch(&mpcmdrun()?, &["-Scan", "-ScanType", "2"])?;
-    Ok(Outcome::done(tr!(
-        "started a full Microsoft Defender scan in the background; it can take an hour. Results appear in Windows \
-         Security → Protection history"
-    )))
+    crate::defender::start_scan("full")
 }
 
 fn op_defender_update(_p: Params<'_>, _store: &Store, _id: &str) -> Result<Outcome> {

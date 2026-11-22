@@ -27,6 +27,7 @@ struct Seams {
     editable: Vec<String>,
     settings: Vec<(String, String)>,
     no_sleep: bool,
+    uninstall_root: Option<String>,
 }
 
 thread_local! {
@@ -70,6 +71,19 @@ pub fn allow_editable_key(key: &str) {
 /// Makes the waits for a service return at once.
 pub fn set_no_sleep(value: bool) {
     SEAMS.with(|s| s.borrow_mut().no_sleep = value);
+}
+
+/// Makes `program.remove_entry` work on the entries under this key instead of the real Uninstall
+/// keys (and only there). Only keys under `HKCU\Software\VigilTests` are accepted.
+pub fn set_uninstall_root(key: Option<&str>) {
+    let key = key
+        .filter(|k| k.to_lowercase().starts_with("hkcu\\software\\vigiltests\\"))
+        .map(str::to_string);
+    SEAMS.with(|s| s.borrow_mut().uninstall_root = key);
+}
+
+pub(crate) fn uninstall_root() -> Option<String> {
+    SEAMS.with(|s| s.borrow().uninstall_root.clone())
 }
 
 /// Clears every seam of this thread.

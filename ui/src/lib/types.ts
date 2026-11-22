@@ -269,6 +269,48 @@ export interface StartupSignature {
   signer: string;
 }
 
+/** An installed program, read from its Uninstall key (vigil_app::programs::ProgramView). */
+export interface InstalledProgram {
+  /** The full path of its Uninstall key; what program requests name. */
+  id: string;
+  keyName: string;
+  name: string;
+  publisher: string;
+  version: string;
+  /** Local day, YYYY-MM-DD ("" when unknown). */
+  installed: string;
+  /** The day is the key's last change: the installer wrote no date. */
+  installedEstimated: boolean;
+  /** Bytes the installer declared (0: none). */
+  size: number;
+  location: string;
+  locationExists: boolean;
+  locationEmpty: boolean;
+  uninstall: string;
+  quietUninstall: string;
+  uninstaller: string;
+  uninstallerExists: boolean;
+  /** msiexec, rundll32…: a Windows host runs the uninstall. */
+  uninstallerHost: boolean;
+  /** An .exe or .ico for the row's icon. */
+  icon: string;
+  /** The program's own executable, when the entry names one. */
+  executable: string;
+  msi: boolean;
+  productCode: string;
+  msiKnown: boolean;
+  noRemove: boolean;
+  scope: "machine" | "machine32" | "user";
+  /** Another account's program: its SID and name. */
+  sid: string;
+  account: string;
+  /** Its uninstaller and files are gone; only the entry is left. */
+  leftover: boolean;
+  /** A remote access, remote control or tunnelling tool. */
+  remote: boolean;
+  microsoft: boolean;
+}
+
 /** When a scheduled task starts (vigil_sys::tasks::TaskTrigger). */
 export interface TaskTrigger {
   /** "logon", "boot", "idle", "time", "daily", "weekly", "monthly", "monthly_dow", "event", "registration", "session", "custom". */
@@ -416,6 +458,53 @@ export interface FirewallSummary {
 
 export interface FirewallView { profiles: FirewallProfile[]; rules: FirewallRule[]; summary: FirewallSummary }
 
+/** A Microsoft Defender protection switch (Protection page). */
+export interface DefenderSwitch {
+  key: "realtime" | "behavior" | "tamper" | "cloud" | "samples" | "pua" | "network" | "cfa";
+  state: "on" | "off" | "audit" | "unknown";
+}
+/** Unix ms; 0 when it never ran. */
+export interface DefenderScanTimes { startMs: number; endMs: number; ageDays: number | null }
+export interface DefenderThreat {
+  id: string; name: string;
+  severity: "low" | "moderate" | "high" | "severe" | "unknown";
+  category: "virus" | "trojan" | "backdoor" | "ransomware" | "worm" | "spyware" | "exploit" | "tool" | "pua" | "other";
+  resources: string[];
+  /** Detected and not dealt with yet. */
+  active: boolean;
+  executed: boolean;
+  status: "detected" | "cleaned" | "quarantined" | "removed" | "allowed" | "blocked" | "failed" | "abandoned" | "unknown";
+  actionSuccess: boolean; detectedMs: number; changedMs: number; process: string; detections: number;
+}
+export interface DefenderExclusion {
+  kind: "path" | "process" | "extension"; value: string;
+  flags: ("drive" | "writable" | "executable" | "anyFolder")[];
+}
+/** The last scan Vigil started in this session (also the payload of `defender-scan` events). */
+export interface DefenderScan {
+  id: number; kind: "quick" | "full"; startedMs: number; running: boolean; finishedMs: number;
+  /** MpCmdRun's exit code: 0 nothing needs attention, 2 something does. */
+  code: number | null; cancelled: boolean;
+}
+export interface DefenderScanEvent extends DefenderScan { elapsedSecs: number; found: number | null }
+export interface Protection {
+  available: boolean; problem: string; serviceEnabled: boolean; antivirusEnabled: boolean;
+  mode: "normal" | "passive" | "edr" | "off" | "";
+  switches: DefenderSwitch[];
+  signatureVersion: string; signatureUpdatedMs: number; signatureAgeDays: number | null; signatureOutOfDate: boolean;
+  engineVersion: string; platformVersion: string;
+  quickScan: DefenderScanTimes; fullScan: DefenderScanTimes; fullScanRequired: boolean;
+  /** A scan started (by anyone) and has not ended yet. */
+  runningScan: { kind: "quick" | "full"; startMs: number } | null;
+  tamperSource: string;
+  otherAntivirus: { name: string; enabled: boolean; upToDate: boolean }[];
+  defenderRegistered: boolean | null;
+  threats: DefenderThreat[]; exclusions: DefenderExclusion[];
+  /** Defender hides the exclusions from standard users. */
+  exclusionsHidden: boolean;
+  scan: DefenderScan | null;
+}
+
 /** One logical processor (a Windows CPU Set). `index` is what affinity requests use. */
 export interface LogicalProcessor {
   index: number; id: number; group: number; number: number;
@@ -448,7 +537,16 @@ export type ActionRequest =
   | { kind: "service"; op: ServiceOp; name: string; startType?: string }
   | { kind: "startup"; op: "enable" | "disable"; id: string }
   | { kind: "task"; op: "enable" | "disable" | "run" | "delete"; path: string }
-  | { kind: "firewall-rule"; op: "enable" | "disable" | "delete"; key: string };
+  | { kind: "program"; op: "uninstall" | "remove_entry" | "folder"; id: string }
+  | { kind: "firewall-rule"; op: "enable" | "disable" | "delete"; key: string }
+  | {
+      kind: "defender";
+      op: "quick-scan" | "full-scan" | "cancel-scan" | "offline-scan" | "update" | "turn-on" | "remove-exclusion" | "remove-threats";
+      /** turn-on: realtime, pua, cloud or samples. */
+      setting?: string;
+      /** remove-exclusion: the list (path, process, extension) and the value, checked against a fresh read. */
+      list?: string; value?: string;
+    };
 
 export interface ActionOutcome { cancelled: boolean; records: JournalRecord[]; message: string; error?: boolean }
 
@@ -573,4 +671,93 @@ export interface WatchStatus {
   /** The newest alerts (at most five). */
   recent: WatchAlert[];
   error: string | null;
+}
+
+// ---------------------------------------------------------------- reliability (event logs, read-only)
+
+export type ReliabilityCategory =
+  | "bluescreen" | "shutdown" | "app_crash" | "app_hang" | "service" | "hardware" | "disk" | "update" | "install";
+
+/** One event from the Windows event logs, interpreted. Every text in it comes from the logs (untrusted). */
+export interface ReliabilityEvent {
+  /** Unique within a read: "System:12345". */
+  id: string;
+  category: ReliabilityCategory;
+  /** What happened within the category: "bugcheck", "kernel_power", "power_loss", "power_button", "unexpected",
+   *  "crash", "hang", "crashed", "start_failed", "start_timeout", "stopped_with_error", "fatal", "corrected",
+   *  "bad_block", "controller_error", "paging_error", "retried", "corruption", "needs_repair", "install_failed",
+   *  "installed", "removed", "remove_failed". */
+  kind: string;
+  severity: "critical" | "error" | "warning" | "info";
+  /** ms since 1970 */
+  timeMs: number;
+  /** Local ISO time. */
+  time: string;
+  log: string;
+  provider: string;
+  eventId: number;
+  recordId: number;
+  /** The program, service, update, product, device or volume ("" when none). */
+  subject: string;
+  version: string;
+  module: string;
+  moduleVersion: string;
+  code: string;
+  codeName: string;
+  parameters: string;
+  /** The program's path, or the memory dump of a blue screen. */
+  path: string;
+  /** The memory dump still exists (blue screens only). */
+  pathExists: boolean | null;
+  publisher: string;
+  /** How many times a service has terminated so far. */
+  count: number;
+  /** As Windows formats it, in the system's language. */
+  message: string;
+}
+
+/** Crashes or hangs of one program. */
+export interface ReliabilityAppGroup {
+  key: string;
+  name: string;
+  path: string;
+  count: number;
+  firstMs: number;
+  lastMs: number;
+  versions: string[];
+  topModule: string;
+  topModuleCount: number;
+  /** Event ids, newest first. */
+  events: string[];
+}
+
+export interface ReliabilityBoot { timeMs: number; time: string; bootMs: number; mainPathMs: number; postBootMs: number }
+
+/** A plain-language pointer; title and text are written by Rust in the user's language. */
+export interface ReliabilityHint {
+  code: string;
+  severity: "warn" | "info";
+  subject: string;
+  count: number;
+  detail: string;
+  /** The events behind it, newest first. */
+  events: string[];
+  title: string;
+  text: string;
+}
+
+export interface Reliability {
+  days: number;
+  sinceMs: number;
+  readMs: number;
+  /** Newest first. */
+  events: ReliabilityEvent[];
+  counts: Record<ReliabilityCategory, number>;
+  crashingApps: ReliabilityAppGroup[];
+  hangingApps: ReliabilityAppGroup[];
+  boots: ReliabilityBoot[];
+  hints: ReliabilityHint[];
+  /** Logs that could not be read (the boot performance log needs administrator rights). */
+  unreadLogs: string[];
+  truncated: boolean;
 }

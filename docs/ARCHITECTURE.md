@@ -20,7 +20,8 @@ crates/
   vigil-i18n/           translations of the core's texts (English source in the code, catalogs in locales/)
   vigil-sys/            live data: processes (NtQuerySystemInformation), PDH metrics, DXGI GPUs, connections,
                         elevation, the process inspector (modules, hosted services), Windows services, startup
-                        entries, scheduled tasks (Task Scheduler COM), firewall rules (INetFwPolicy2)
+                        entries, scheduled tasks (Task Scheduler COM), firewall rules (INetFwPolicy2),
+                        installed programs (the Uninstall keys), reliability events (the Event Log API)
   vigil-scan/           read-only scan: PowerShell collectors (embedded), rules, analysis, posture, reports,
                         the AI agent (the OpenAI- and Anthropic-compatible API standards, local CLI
                         agents), anonymization, VirusTotal

@@ -107,7 +107,7 @@ fn stored_quarantine_is_restored_byte_identical() {
 fn stored_registry_records_are_undone() {
     let fx = Fixture::new();
     install_fixture(&fx);
-    let scratch = ScratchKey::new("v2fixture");
+    let scratch = ScratchKey::new("formats-fixture");
     let approved = format!("{}\\Approved", scratch.key);
     let run_key = format!("{}\\Run", scratch.key);
     // The state the recorded session left: the entry switched off, the other value deleted.

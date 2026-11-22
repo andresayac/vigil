@@ -1,5 +1,6 @@
-//! `vigil list`, `vigil ports`, `vigil services` and `vigil --help`: read-only views of the
-//! computer for a terminal or a script (`--json`). They never change anything.
+//! `vigil list`, `vigil ports`, `vigil services`, `vigil programs`, `vigil reliability` and `vigil --help`:
+//! read-only views of the computer for a terminal or a script (`--json`). They never change
+//! anything.
 
 use std::time::Duration;
 
@@ -18,6 +19,8 @@ Usage:
   vigil list [options]        running processes
   vigil ports [options]       network connections and listening ports
   vigil services [options]    Windows services
+  vigil programs [options]    installed programs
+  vigil reliability [options] crashes, blue screens and other problems
 
   --no-elevate                open the app without asking for administrator rights
   --lang CODE                 language: auto, en, es, fr, pt or zh
@@ -50,7 +53,16 @@ Usage: vigil services [--running] [--json] [--lang CODE]
   --json       machine-readable output");
 
 /// The commands handled here.
-pub const COMMANDS: [&str; 6] = ["list", "ports", "services", "help", "--help", "-h"];
+pub const COMMANDS: [&str; 8] = [
+    "list",
+    "ports",
+    "services",
+    "programs",
+    "reliability",
+    "help",
+    "--help",
+    "-h",
+];
 
 /// Runs one of [`COMMANDS`]; returns the exit code.
 pub fn run(command: &str, args: &[String]) -> i32 {
@@ -65,6 +77,8 @@ pub fn run(command: &str, args: &[String]) -> i32 {
         "list" => list(args),
         "ports" => ports(args),
         "services" => services(args),
+        "programs" => crate::programs::cli(args),
+        "reliability" => crate::reliability::cli(args),
         _ => {
             say(&tr!(TOP_HELP));
             Ok(())
@@ -80,7 +94,7 @@ pub fn run(command: &str, args: &[String]) -> i32 {
 }
 
 /// Flags shared by the commands: (json, help) and the remaining arguments checked by `accept`.
-fn flags(
+pub(crate) fn flags(
     args: &[String],
     mut accept: impl FnMut(&str, &mut dyn Iterator<Item = &String>) -> Result<bool, String>,
 ) -> Result<(bool, bool), String> {
@@ -104,7 +118,7 @@ fn flags(
     Ok((json, help))
 }
 
-fn print_json(value: &Value) {
+pub(crate) fn print_json(value: &Value) {
     say(&serde_json::to_string_pretty(value).unwrap_or_default());
 }
 
@@ -117,7 +131,7 @@ fn clip(text: &str, width: usize) -> String {
 }
 
 /// A plain text table: headers, then rows; the last column is not padded.
-fn table(headers: &[String], rows: &[Vec<String>], widths: &[usize]) {
+pub(crate) fn table(headers: &[String], rows: &[Vec<String>], widths: &[usize]) {
     let line = |cells: &[String]| {
         let mut out = String::new();
         for (i, cell) in cells.iter().enumerate() {

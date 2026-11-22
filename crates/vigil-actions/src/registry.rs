@@ -11,8 +11,8 @@ use windows::Win32::Foundation::{
 use windows::Win32::System::Registry::{
     HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_ALL_ACCESS, KEY_READ, KEY_SET_VALUE, KEY_WOW64_64KEY, REG_BINARY,
     REG_DWORD, REG_EXPAND_SZ, REG_MULTI_SZ, REG_OPTION_NON_VOLATILE, REG_QWORD, REG_SAM_FLAGS, REG_SZ, REG_VALUE_TYPE,
-    RegCloseKey, RegCreateKeyExW, RegDeleteTreeW, RegDeleteValueW, RegEnumValueW, RegOpenKeyExW, RegQueryValueExW,
-    RegSetValueExW,
+    RegCloseKey, RegCreateKeyExW, RegDeleteKeyW, RegDeleteTreeW, RegDeleteValueW, RegEnumValueW, RegOpenKeyExW,
+    RegQueryValueExW, RegSetValueExW,
 };
 use windows::core::{HSTRING, PCWSTR, PWSTR};
 
@@ -427,6 +427,9 @@ pub(crate) fn delete_scratch_tree(sub: &str) -> Result<()> {
     if status != ERROR_SUCCESS && status != ERROR_FILE_NOT_FOUND {
         return fail(win32_text(status));
     }
+    // The shared parent goes too once no test uses it; RegDeleteKeyW refuses a key with subkeys.
+    // SAFETY: a fixed path under HKCU.
+    let _ = unsafe { RegDeleteKeyW(HKEY_CURRENT_USER, windows::core::w!(r"Software\VigilTests")) };
     Ok(())
 }
 

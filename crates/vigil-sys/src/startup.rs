@@ -659,7 +659,7 @@ fn read_version_strings(path: &str) -> (String, String) {
 mod tests {
     use super::*;
     use windows::Win32::System::Registry::{
-        KEY_WRITE, REG_BINARY, REG_OPTION_NON_VOLATILE, RegCreateKeyExW, RegDeleteTreeW, RegSetValueExW,
+        KEY_WRITE, REG_BINARY, REG_OPTION_NON_VOLATILE, RegCreateKeyExW, RegDeleteKeyW, RegDeleteTreeW, RegSetValueExW,
     };
 
     /// A temporary folder of the test, deleted when dropped (also when the test fails).
@@ -721,9 +721,11 @@ mod tests {
     impl Drop for Scratch {
         fn drop(&mut self) {
             let path = wide(&self.0);
-            // SAFETY: deletes only the test's own scratch key.
+            // SAFETY: deletes only the test's own scratch key, then the shared parent if no other
+            // test still uses it (RegDeleteKeyW refuses a key that has subkeys).
             unsafe {
                 let _ = RegDeleteTreeW(HKEY_CURRENT_USER, PCWSTR(path.as_ptr()));
+                let _ = RegDeleteKeyW(HKEY_CURRENT_USER, windows::core::w!(r"Software\VigilTests"));
             }
         }
     }

@@ -127,4 +127,7 @@ export function connections(): Connection[] {
 
 export * from "./mock-firewall";
 export * from "./mock-pages";
+export * from "./mock-protection";
+export * from "./mock-programs";
+export * from "./mock-reliability";
 export * from "./mock-watch";

@@ -851,6 +851,16 @@ impl Drop for Busy<'_> {
 }
 
 async fn build_plan(app: &AppHandle, request: &Request) -> CmdResult<Plan> {
+    if let Request::Defender {
+        op,
+        setting,
+        list,
+        value,
+    } = request
+    {
+        let live = crate::protection::read_async().await?;
+        return crate::protection::plan(op, setting, list, value, &live);
+    }
     let processes = match request {
         Request::Process { .. } => {
             blocking(|| {
@@ -1462,7 +1472,11 @@ pub async fn process_icons(paths: Vec<String>) -> CmdResult<std::collections::Ha
             .take(512)
             .filter(|path| {
                 let file = Path::new(path);
-                file.is_absolute() && file.extension().is_some_and(|e| e.eq_ignore_ascii_case("exe"))
+                // Executables, and the .ico files installers name as a program's icon.
+                file.is_absolute()
+                    && file
+                        .extension()
+                        .is_some_and(|e| e.eq_ignore_ascii_case("exe") || e.eq_ignore_ascii_case("ico"))
             })
             .filter_map(|path| vigil_sys::apps::icon_data_url(&path).map(|url| (path, url)))
             .collect()

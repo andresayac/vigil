@@ -35,12 +35,13 @@ pub struct SignatureInfo {
     pub error: Option<String>,
 }
 
-const SCRIPT: &str = r#"
+/// `Get-SignatureInfo $path`: the fields of [`SignatureInfo`] for one file.
+const CHECK: &str = r#"
 function ConvertTo-Iso($Value) {
     if ($null -eq $Value) { return $null }
     try { return ([datetime]$Value).ToString('yyyy-MM-ddTHH:mm:ss') } catch { return $null }
 }
-$p = $env:PC_PATH
+function Get-SignatureInfo($p) {
 $r = [ordered]@{ path = $p; exists = $null }
 $item = $null
 try {
@@ -83,15 +84,27 @@ if ($item -and -not $item.PSIsContainer) {
     $r.exists = $true
     $r.is_dir = $true
 }
-ConvertTo-Json -InputObject $r -Compress -Depth 4
+$r
+}
 "#;
+
+const ONE: &str = "ConvertTo-Json -InputObject (Get-SignatureInfo $env:PC_PATH) -Compress -Depth 4";
+
+/// Several files, one per line of `PC_PATHS`, answered as one JSON array in the same order.
+const MANY: &str = r#"
+$list = @(foreach ($p in ("$env:PC_PATHS" -split "`n")) { if ($p) { [pscustomobject](Get-SignatureInfo $p) } })
+ConvertTo-Json -InputObject $list -Compress -Depth 4
+"#;
+
+/// The most files one PowerShell checks (their paths travel in one environment variable).
+const BATCH: usize = 40;
 
 /// The live check, or `None` when it could not run.
 pub(crate) fn signature_info(path: &str) -> Option<SignatureInfo> {
     if let Some(check) = crate::testing::signature() {
         return check(path);
     }
-    let (args, env) = runner::ps_command(SCRIPT, &[("path", path)]);
+    let (args, env) = runner::ps_command(&format!("{CHECK}\n{ONE}"), &[("path", path)]);
     let result = runner::run_system(&args, 120, Some(&env)).ok()?;
     if result.code != 0 {
         return None;
@@ -107,6 +120,55 @@ pub(crate) fn signature_info(path: &str) -> Option<SignatureInfo> {
 /// Checks a file's signature now.
 pub fn verify_signature(path: &Path) -> Result<SignatureInfo> {
     signature_info(&path.to_string_lossy()).ok_or_else(|| ActionError::new(tr!("the signature could not be checked")))
+}
+
+/// Checks many files at once: one PowerShell per few dozen files instead of one per file. The
+/// answer has one entry per path, in order; `None` for a file that could not be checked.
+pub fn verify_signatures(paths: &[String]) -> Vec<Option<SignatureInfo>> {
+    if let Some(check) = crate::testing::signature() {
+        return paths.iter().map(|p| check(p)).collect();
+    }
+    let mut out = Vec::with_capacity(paths.len());
+    for chunk in paths.chunks(BATCH) {
+        // A path with a line break cannot be passed this way (and names no real file).
+        let clean: Vec<&str> = chunk
+            .iter()
+            .map(|p| if p.contains(['\r', '\n']) { "" } else { p.as_str() })
+            .collect();
+        let found = batch(&clean).unwrap_or_default();
+        for path in &clean {
+            out.push(
+                found
+                    .iter()
+                    .find(|info| !path.is_empty() && info.path == *path)
+                    .cloned(),
+            );
+        }
+    }
+    out
+}
+
+fn batch(paths: &[&str]) -> Option<Vec<SignatureInfo>> {
+    let joined = paths
+        .iter()
+        .filter(|p| !p.is_empty())
+        .copied()
+        .collect::<Vec<_>>()
+        .join("\n");
+    if joined.is_empty() {
+        return Some(Vec::new());
+    }
+    let (args, env) = runner::ps_command(&format!("{CHECK}\n{MANY}"), &[("paths", &joined)]);
+    let result = runner::run_system(&args, 300, Some(&env)).ok()?;
+    if result.code != 0 {
+        return None;
+    }
+    let line = result
+        .out
+        .lines()
+        .rev()
+        .find(|line| line.trim_start().starts_with('['))?;
+    serde_json::from_str(line.trim()).ok()
 }
 
 const MICROSOFT_SIGNERS: [&str; 10] = [

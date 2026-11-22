@@ -26,6 +26,7 @@ mod labels;
 mod ops;
 mod params;
 mod procs;
+mod programs;
 mod quarantine;
 mod registry;
 mod runner;
@@ -33,6 +34,7 @@ mod signature;
 mod store;
 mod tuning;
 
+pub mod defender;
 pub mod run;
 pub mod shell;
 #[doc(hidden)]
@@ -50,7 +52,7 @@ pub use procs::{CRITICAL_PROCESSES, Proc, find_processes, io_memory_priority, pr
 pub use quarantine::{delete_quarantined, mask, quarantine_file, restore_quarantined};
 pub use registry::{reg_delete, reg_read, reg_write, restore_value, split_key};
 pub use runner::{Runner, SystemRunner, ToolResult, first_line, set_runner};
-pub use signature::{SignatureInfo, is_microsoft_signed, verify_signature};
+pub use signature::{SignatureInfo, is_microsoft_signed, verify_signature, verify_signatures};
 pub use store::{QuarantineEntry, Record, Store};
 pub use tuning::size_text;
 

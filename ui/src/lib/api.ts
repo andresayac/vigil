@@ -7,6 +7,9 @@ import type {
   ScheduledTask, SpaceScan, StartupEntry, StartupSignature, TuningState, Volume,
 } from "./types";
 import type { WatchAlert, WatchSettings, WatchStatus } from "./types";
+import type { DefenderScanEvent, Protection } from "./types";
+import type { InstalledProgram } from "./types";
+import type { Reliability } from "./types";
 
 export const inApp = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -151,6 +154,24 @@ export async function tasksList(): Promise<ScheduledTask[]> {
 export async function firewallList(): Promise<FirewallView> {
   return inApp ? call<FirewallView>("firewall_list") : mock.firewallList();
 }
+/** Every installed program (read-only); changes go through runAction ({ kind: "program" }). */
+export async function programsList(): Promise<InstalledProgram[]> {
+  return inApp ? call<InstalledProgram[]>("programs_list") : mock.programsList();
+}
+/** Signatures of programs' files by path (slow; checked in batches and cached by Rust for the session). */
+export async function programSignatures(paths: string[]): Promise<Record<string, StartupSignature>> {
+  return inApp ? call<Record<string, StartupSignature>>("program_signatures", { paths }) : mock.programSignatures(paths);
+}
+export async function reliability(days: number): Promise<Reliability> {
+  return inApp ? call<Reliability>("reliability_read", { days }) : mock.reliability(days);
+}
+/** Microsoft Defender's state and the last scan Vigil started (read-only); changes go through runAction ({ kind: "defender" }). */
+export async function protectionState(): Promise<Protection> {
+  return inApp ? call<Protection>("protection_state") : mock.protectionState();
+}
+/** Progress of a scan Vigil started: once a second while it runs, then once more with what was found. */
+export const onDefenderScan = (handler: (event: DefenderScanEvent) => void) =>
+  onEvent<DefenderScanEvent>("defender-scan", handler);
 export async function quarantine(): Promise<QuarantineEntry[]> {
   return inApp ? call<QuarantineEntry[]>("quarantine_list") : [];
 }
