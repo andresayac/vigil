@@ -1,0 +1,45 @@
+[package]
+name = "vigil-core"
+description = "Vigil's service layer: shared state, request checks, native confirmation and the action path"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+vigil-i18n = { path = "../vigil-i18n" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+vigil-sys = { path = "../vigil-sys" }
+vigil-actions = { path = "../vigil-actions" }
+vigil-maint = { path = "../vigil-maint" }
+vigil-scan = { path = "../vigil-scan" }
+sha2 = "0.10"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+
+[dependencies.windows]
+version = "0.62"
+features = [
+    "Data_Xml_Dom",
+    "Foundation",
+    "UI_Notifications",
+    "Wdk_Foundation",
+    "Wdk_Storage_FileSystem",
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Credentials",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_IO",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Power",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_System_WinRT",
+    "Win32_UI_Controls",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+]

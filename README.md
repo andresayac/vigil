@@ -12,8 +12,8 @@ French, Portuguese and Chinese.
 
 ## Install and run
 
-Requirements: Windows 10 or 11 (64-bit) with the Microsoft Edge WebView2 runtime (included in Windows 11 and in
-up-to-date Windows 10).
+Requirements: Windows 10 or 11 (64-bit) with a DirectX 11 graphics adapter (every PC that runs them has one).
+Nothing else to install: Vigil is one executable.
 
 1. Download the latest release from the repository's **Releases** page: `Vigil_x.y.z_x64-setup.exe` installs it for
    every user with Start menu shortcuts; `Vigil-x.y.z-portable.exe` is a single executable you can run from anywhere.
@@ -138,8 +138,8 @@ A server on this computer (`localhost`) keeps everything here: nothing leaves th
 
 | Page | What it shows | What you can do |
 |---|---|---|
-| **Overview** | The verdict on the whole computer, one sliver per finding, what to do first, the security state (Defender, firewall, UAC, Remote Desktop, updates) and coverage notes. | Start a scan, jump to findings. |
-| **Findings** | Every item with its verdict (Remove, Disable, Review, No signals, Safe, Trusted), local score, type and presence. The side panel explains what it is, why it was flagged, the signals, where it appears, file and signature details, command lines and network activity. | The actions that make sense for that item, ignore it, copy its details. |
+| **Overview** | Live CPU, memory, graphics and system drive, the verdict on the whole computer, one sliver per finding, what to do first, what changed since the last scan, the background watch, the security state (Defender, firewall, UAC, Remote Desktop, updates) and coverage notes. | Start a scan, jump to findings, pause the watch. |
+| **Findings** | Every item with its verdict (Remove, Disable, Review, No signals, Safe, Trusted), local score, type and presence. The side panel explains what it is, why it was flagged, the signals, where it appears, file and signature details, command lines and network activity. | The actions that make sense for that item, ignore it, copy its details, investigate it with the AI agent. |
 | **Alerts** | What the background watch noticed (below): new startup entries, new or changed services, new scheduled tasks, security settings turned off and remote-access ports opened to the network, with how much each one matters. | Open the page where the item lives, mark alerts as read, clear them. |
 | **Protection** | Microsoft Defender, read live: whether it protects the computer (or another antivirus does, with Defender in passive mode), its switches (real-time, behavior monitoring, tamper protection, cloud protection, sample submission, potentially unwanted app blocking, network protection, controlled folder access), security intelligence and scan dates, the threat history and the exclusions, with the risky ones marked (a whole drive, a folder any program can write to, a program file type, a process excluded by name). | Quick or full scan in the background with its progress and Stop, the Microsoft Defender Offline scan, update security intelligence, turn a switch on (never off), remove an exclusion, remove the active threats, open Windows Security. |
 | **Security posture** | The Windows settings that protect the computer as a whole, read live and explained, with a score ("N of M recommended settings are in place", weighted 1 to 3 by how much each matters; partly in place counts half; settings that do not apply or could not be read are left out): Secure Boot, TPM, Memory integrity, Credential Guard, LSA protection, the vulnerable driver blocklist, BitLocker per drive, User Account Control, Remote Desktop and Network Level Authentication, Remote Registry, SMBv1, the firewall profiles, SmartScreen, Windows PowerShell 2.0, AutoRun, the antivirus, its security intelligence and the last Windows update. | Raise a setting that is below the recommendation (see Actions), or open where Windows changes it (Windows Security, Settings, BitLocker, the Firewall rules and Protection pages). Nothing here lowers security. |
@@ -243,8 +243,8 @@ are never "optimizations").
 ### Safety model
 
 - **The scan never changes anything.** A change happens only when you confirm it in a Windows dialog shown by the
-  Rust core (not by the web page); the confirmation lists every step and its target.
-- **The page only asks.** The UI sends a small request; the core rebuilds the action from its own data (the loaded
+  Rust core, owned by the window; the confirmation lists every step and its target.
+- **The window only asks.** It sends a typed request; the core rebuilds the action from its own data (the loaded
   report, the live process list, what it measured), validates every value and refuses anything else.
 - **Live state, not scan data.** Each action re-reads the current state first; a reused process ID is never ended.
 - **Guards** refuse, whatever is asked: critical Windows processes, Vigil itself, essential Windows services,
@@ -370,24 +370,25 @@ it too.
 
 - The installer puts Vigil in Program Files, where only administrators can write. If you use the portable
   executable, keep it in a folder only administrators can write to.
-- The window is a local web view with a strict content security policy: it loads nothing from the internet, and text
-  from the inspected computer is always shown as text.
+- The window loads nothing from the internet, and text from the inspected computer is always drawn as plain text:
+  nothing in it is interpreted as markup or a link.
 
 ## Build from source
 
-You need [Rust](https://rustup.rs/) (stable, 1.90 or later) and [Node.js](https://nodejs.org/) 22.
+You need [Rust](https://rustup.rs/) (stable, 1.90 or later) and the Windows SDK (its `fxc.exe` compiles the window's
+shaders in release builds; Visual Studio's C++ workload installs it). The installer needs
+[NSIS](https://nsis.sourceforge.io/) 3.
 
 ```bat
-npm ci
-npm run build              :: the UI, into ui/dist
-cargo run -p vigil-app     :: the app, debug build (starts without asking for elevation)
-npx tauri build            :: release executable and installer, in target/release
+cargo run -p vigil-app                    :: the app, debug build (starts without asking for elevation)
+cargo run -p vigil-app -- --demo          :: every page with fictitious data; reads and changes nothing
+cargo build --release -p vigil-app        :: target\release\vigil.exe (also the portable executable)
+powershell -File installer\build-setup.ps1 -Out dist   :: the setup, from target\release\vigil.exe
 ```
 
-`npm run dev` serves the UI alone in a browser with fictitious data. Checks:
+Checks:
 
 ```bat
-npm run check
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
