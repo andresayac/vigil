@@ -330,7 +330,10 @@ fn run() {
             None,
         ) {
             Ok(hwnd) => hwnd,
-            Err(_) => return,
+            Err(error) => {
+                eprintln!("could not create the tray window: {error}");
+                return;
+            }
         }
     };
     TRAY_HWND.store(hwnd.0 as isize, Ordering::Release);
