@@ -306,7 +306,8 @@ impl ProcTable {
             "gpu" => SortValue::Num(values.gpu),
             "vram" => SortValue::Num(values.vram),
             "user" => SortValue::Text(r.user.to_lowercase()),
-            "started" => SortValue::Num(-(r.created_ms as f64)),
+            // A date: descending (its first order) puts the newest process first.
+            "started" => SortValue::Num(r.created_ms as f64),
             _ => SortValue::Text(r.exe.to_lowercase()),
         }
     }
@@ -1867,6 +1868,28 @@ mod tests {
         table.rebuild();
         let pids: Vec<u32> = table.items.iter().map(|i| table.pid_of(i)).collect();
         assert_eq!(pids, [11, 12, 10]);
+    }
+
+    #[test]
+    fn sorting_by_start_time_puts_the_newest_first() {
+        let rows = vec![
+            row(10, 0, "a.exe", r"C:\Program Files\Contoso\a.exe", false, 0.0),
+            row(12, 0, "c.exe", r"C:\Program Files\Contoso\c.exe", false, 0.0),
+            row(11, 0, "b.exe", r"C:\Program Files\Contoso\b.exe", false, 0.0),
+        ];
+        let mut table = table_with(rows, View::List);
+        let started = COLS
+            .iter()
+            .position(|c| c.key == "started")
+            .expect("the Started column");
+        assert!(sort_kind(&COLS[started]).descending_first());
+        table.set_sort(grid::next_sort(None, started, true));
+        let pids: Vec<u32> = table.items.iter().map(|i| table.pid_of(i)).collect();
+        assert_eq!(
+            pids,
+            [12, 11, 10],
+            "row() starts each process at its pid, so a higher pid is newer"
+        );
     }
 
     #[test]

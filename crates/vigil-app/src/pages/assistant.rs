@@ -125,7 +125,7 @@ impl AssistantPage {
         cx.notify();
         let (tx, mut rx) = mpsc::unbounded::<String>();
         let done = match self.ctx.core.clone() {
-            Some(core) => crate::actions::ask(
+            Some(core) => crate::actions::ask_assistant(
                 core,
                 question,
                 history,

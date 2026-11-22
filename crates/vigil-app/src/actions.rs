@@ -92,7 +92,7 @@ pub fn investigate(
 
 /// Asks the Assistant on a worker thread: the consent dialog (destination, anonymization,
 /// read-only tools) is native and owned by the main window. `Ok(None)`: declined.
-pub fn ask(
+pub fn ask_assistant(
     state: Arc<AppState>,
     question: String,
     history: Vec<vigil_core::assistant::Turn>,
