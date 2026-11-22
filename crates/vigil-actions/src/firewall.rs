@@ -89,6 +89,7 @@ $s = $r | Get-NetFirewallServiceFilter
 $p = $r | Get-NetFirewallPortFilter
 $ad = $r | Get-NetFirewallAddressFilter
 $it = $r | Get-NetFirewallInterfaceTypeFilter
+$if = $r | Get-NetFirewallInterfaceFilter
 $sec = $r | Get-NetFirewallSecurityFilter
 function Vals($v) { @(@($v) | Where-Object { $null -ne $_ } | ForEach-Object { "$_" }) }
 $def = [ordered]@{
@@ -112,6 +113,12 @@ $def = [ordered]@{
     LocalAddress = @(Vals $ad.LocalAddress)
     RemoteAddress = @(Vals $ad.RemoteAddress)
     InterfaceType = "$($it.InterfaceType)"
+    InterfaceAlias = @(Vals $if.InterfaceAlias)
+    LocalOnlyMapping = "$($r.LocalOnlyMapping)"
+    LooseSourceMapping = "$($r.LooseSourceMapping)"
+    Platform = @(Vals $r.Platform)
+    RemoteDynamicKeywordAddresses = @(Vals $ad.RemoteDynamicKeywordAddresses)
+    DynamicTarget = "$($p.DynamicTarget)"
     Authentication = "$($sec.Authentication)"
     Encryption = "$($sec.Encryption)"
     OverrideBlockRules = "$($sec.OverrideBlockRules)"
@@ -136,21 +143,29 @@ Answer @{ status = 'ok' }
 "#;
 
 /// Recreates a deleted rule from its saved definition. Values "Any" and empty ones are left to
-/// the cmdlet's defaults (which are "any").
-const RECREATE: &str = r#"
-if ($r.Count -gt 0) { Answer @{ status = 'exists' }; return }
+/// the cmdlet's defaults (which are "any"). Fields an older Vigil did not save (the interface
+/// filter, the mappings, the platform, dynamic keywords, the dynamic target) are simply absent.
+const RECREATE_PARAMS: &str = r#"
 $d = $env:PC_RULE | ConvertFrom-Json
-$lists = 'LocalPort', 'RemotePort', 'IcmpType', 'LocalAddress', 'RemoteAddress'
+$lists = 'LocalPort', 'RemotePort', 'IcmpType', 'LocalAddress', 'RemoteAddress', 'InterfaceAlias', 'Platform',
+    'RemoteDynamicKeywordAddresses'
 $params = @{}
 foreach ($k in 'Name', 'DisplayName', 'Description', 'Group', 'Direction', 'Action', 'Enabled', 'Profile',
         'EdgeTraversalPolicy', 'Owner', 'Program', 'Package', 'Service', 'Protocol', 'LocalPort', 'RemotePort',
-        'IcmpType', 'LocalAddress', 'RemoteAddress', 'InterfaceType', 'Authentication', 'Encryption', 'LocalUser',
+        'IcmpType', 'LocalAddress', 'RemoteAddress', 'InterfaceType', 'InterfaceAlias', 'Platform',
+        'RemoteDynamicKeywordAddresses', 'DynamicTarget', 'Authentication', 'Encryption', 'LocalUser',
         'RemoteUser', 'RemoteMachine') {
     $vals = @(@($d.$k) | Where-Object { $null -ne $_ } | ForEach-Object { "$_" } | Where-Object { $_ -ne '' -and $_ -ne 'Any' })
     if ($vals.Count -eq 0) { continue }
     if ($lists -contains $k) { $params[$k] = [string[]]$vals } else { $params[$k] = $vals[0] }
 }
-if ("$($d.OverrideBlockRules)" -eq 'True') { $params['OverrideBlockRules'] = $true }
+foreach ($k in 'OverrideBlockRules', 'LocalOnlyMapping', 'LooseSourceMapping') {
+    if ("$($d.$k)" -eq 'True') { $params[$k] = $true }
+}
+"#;
+
+const RECREATE: &str = r#"
+if ($r.Count -gt 0) { Answer @{ status = 'exists' }; return }
 New-NetFirewallRule @params | Out-Null
 Answer @{ status = 'ok' }
 "#;
@@ -316,7 +331,7 @@ fn undo_rule_delete(u: Params<'_>, _store: &Store) -> Result<String> {
     let label = label_of(&u);
     let values = [("id", id), ("rule", rule.to_string())];
     let result = answer(
-        &format!("{BY_ID}{RECREATE}"),
+        &format!("{BY_ID}{RECREATE_PARAMS}{RECREATE}"),
         &tr!("recreating the firewall rule"),
         &values,
     )?;
@@ -395,6 +410,58 @@ mod tests {
         assert_eq!(got["proto"], json!(["6", "17", "58", "256", "47"]));
     }
 
+    /// The saved definition becomes the cmdlet's parameters: the interface, mapping, platform and
+    /// dynamic fields go back too, and a definition saved by an older Vigil (without them) still
+    /// works. Only the parameter table is built; no rule is created.
+    #[test]
+    fn saved_definitions_become_the_same_parameters() {
+        crate::testing::reset();
+        let script = format!("{NORMALIZE}{RECREATE_PARAMS}Answer $params");
+        let full = json!({
+            "Name": "{9C1D-02}",
+            "DisplayName": "Contoso Sync",
+            "Direction": "Inbound",
+            "Action": "Allow",
+            "Protocol": "TCP",
+            "LocalPort": ["8080"],
+            "RemoteAddress": ["Any"],
+            "InterfaceType": "Any",
+            "InterfaceAlias": ["vEthernet (WSL)"],
+            "LocalOnlyMapping": "True",
+            "LooseSourceMapping": "False",
+            "Platform": [],
+            "RemoteDynamicKeywordAddresses": ["{3817fa89-3f21-49ca-a4a4-80541ddf7465}"],
+            "DynamicTarget": "Any",
+            "OverrideBlockRules": "False",
+        });
+        let out = ps_ok(&script, "parameters", 120, &[("rule", &full.to_string())]).expect("powershell");
+        let got: Value = serde_json::from_str(out.lines().last().unwrap_or("")).expect("answer");
+        assert_eq!(got["InterfaceAlias"], json!(["vEthernet (WSL)"]));
+        assert_eq!(got["LocalOnlyMapping"], json!(true));
+        assert_eq!(
+            got["RemoteDynamicKeywordAddresses"],
+            json!(["{3817fa89-3f21-49ca-a4a4-80541ddf7465}"])
+        );
+        assert_eq!(got["LocalPort"], json!(["8080"]));
+        for absent in [
+            "LooseSourceMapping",
+            "Platform",
+            "DynamicTarget",
+            "RemoteAddress",
+            "InterfaceType",
+            "OverrideBlockRules",
+        ] {
+            assert!(got.get(absent).is_none(), "{absent}: {got}");
+        }
+        // Saved by 1.3.0 or 1.4.0: none of the new fields.
+        let old =
+            json!({ "Name": "{9C1D-02}", "DisplayName": "Contoso Sync", "Direction": "Inbound", "Protocol": "TCP" });
+        let out = ps_ok(&script, "parameters", 120, &[("rule", &old.to_string())]).expect("powershell");
+        let got: Value = serde_json::from_str(out.lines().last().unwrap_or("")).expect("answer");
+        assert_eq!(got["Name"], json!("{9C1D-02}"));
+        assert!(got.get("InterfaceAlias").is_none() && got.get("LocalOnlyMapping").is_none());
+    }
+
     /// Every script the actions run is valid PowerShell (only parsed, never run).
     #[test]
     fn the_scripts_parse() {
@@ -403,7 +470,7 @@ mod tests {
             format!("{NORMALIZE}{FIND}{SET_STATE}"),
             format!("{NORMALIZE}{FIND}{DELETE}"),
             format!("{NORMALIZE}{BY_ID}{RESTORE_STATE}"),
-            format!("{NORMALIZE}{BY_ID}{RECREATE}"),
+            format!("{NORMALIZE}{BY_ID}{RECREATE_PARAMS}{RECREATE}"),
         ];
         let check = "$errors = $null; \
              [void][System.Management.Automation.Language.Parser]::ParseInput($env:PC_SCRIPT, [ref]$null, [ref]$errors); \

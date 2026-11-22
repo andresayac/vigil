@@ -11,15 +11,18 @@
   import { setLanguage, t } from "./lib/i18n/index.svelte";
   import { act, finishScan, isIgnored, loadReport, report, startScan } from "./lib/report.svelte";
   import { followWatch, stateLine, watch } from "./lib/watch.svelte";
+  import Accounts from "./pages/Accounts.svelte";
   import Alerts from "./pages/Alerts.svelte";
   import type { AppInfo, Settings } from "./lib/types";
   import Findings from "./pages/Findings.svelte";
+  import Extensions from "./pages/Extensions.svelte";
   import Firewall from "./pages/Firewall.svelte";
   import History from "./pages/History.svelte";
   import Network from "./pages/Network.svelte";
   import Optimize from "./pages/Optimize.svelte";
   import Overview from "./pages/Overview.svelte";
   import Protection from "./pages/Protection.svelte";
+  import Posture from "./pages/Posture.svelte";
   import Performance from "./pages/Performance.svelte";
   import Processes from "./pages/Processes.svelte";
   import Programs from "./pages/Programs.svelte";
@@ -85,7 +88,10 @@
     { key: "findings", title: t("page.findings"), icon: "", section: t("nav.security"), count: String(urgent || review || ""), alert: urgent > 0 },
     { key: "alerts", title: t("page.alerts"), icon: "\uEA8F", section: t("nav.security"), count: unreadAlerts ? String(unreadAlerts) : "" },
     { key: "protection", title: t("page.protection"), icon: "\uF760", section: t("nav.security") },
+    { key: "posture", title: t("page.posture"), icon: "\uE9D5", section: t("nav.security") },
     { key: "firewall", title: t("page.firewall"), icon: "", section: t("nav.security") },
+    { key: "accounts", title: t("page.accounts"), icon: "", section: t("nav.security") },
+    { key: "extensions", title: t("page.extensions"), icon: "", section: t("nav.security") },
     { key: "quarantine", title: t("page.quarantine"), icon: "", section: t("nav.security") },
     { key: "history", title: t("page.history"), icon: "", section: t("nav.security") },
     { key: "performance", title: t("page.performance"), icon: "", section: t("nav.live") },
@@ -158,6 +164,10 @@
         <Findings focus={findingsFocus} {elevated} />
       {:else if page === "firewall"}
         <Firewall {elevated} />
+      {:else if page === "accounts"}
+        <Accounts {elevated} />
+      {:else if page === "extensions"}
+        <Extensions {elevated} />
       {:else if page === "quarantine"}
         <Quarantine {elevated} />
       {:else if page === "history"}
@@ -166,6 +176,8 @@
         <Alerts onpage={go} />
       {:else if page === "protection"}
         <Protection {elevated} />
+      {:else if page === "posture"}
+        <Posture {elevated} onpage={go} />
       {:else if page === "performance"}
         <Performance cpuName={info?.cpuName ?? ""} initial={resource} {elevated} onshowprocess={(pid) => { focusPid = pid; page = "processes"; }} />
       {:else if page === "processes"}

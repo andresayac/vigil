@@ -6,12 +6,15 @@
 //! own state (`requests`), confirms it in a native Windows dialog (`confirm`) and runs it through
 //! `vigil_actions::execute()`, which journals it. Nothing here depends on a UI toolkit.
 
+pub mod accounts;
 pub mod autostart;
 pub mod cli;
 pub mod confirm;
+pub mod extensions;
 pub mod firewall;
 pub mod inspect;
 pub mod planner;
+pub mod posture;
 pub mod programs;
 pub mod protection;
 pub mod reliability;

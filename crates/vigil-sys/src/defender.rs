@@ -739,7 +739,8 @@ fn read_wmi() -> Protection {
     out
 }
 
-fn connect(namespace: &str) -> Result<IWbemServices, SysError> {
+/// Connects to a WMI namespace as the current user (COM must be initialized on this thread).
+pub(crate) fn connect(namespace: &str) -> Result<IWbemServices, SysError> {
     // SAFETY: creates the in-process WMI locator; released when dropped.
     let locator: IWbemLocator = unsafe { CoCreateInstance(&WbemLocator, None, CLSCTX_INPROC_SERVER) }
         .map_err(|e| SysError::from_windows("WMI is not available", &e))?;
@@ -774,7 +775,8 @@ fn connect(namespace: &str) -> Result<IWbemServices, SysError> {
     Ok(services)
 }
 
-fn query(services: &IWbemServices, class: &str, props: &[&str], max: usize) -> Result<Vec<Row>, SysError> {
+/// `SELECT props FROM class` (`class` may end with a `WHERE` clause), at most `max` rows.
+pub(crate) fn query(services: &IWbemServices, class: &str, props: &[&str], max: usize) -> Result<Vec<Row>, SysError> {
     let wql = format!("SELECT {} FROM {class}", props.join(", "));
     // SAFETY: plain call on a valid interface; the BSTRs outlive it.
     let rows: IEnumWbemClassObject = unsafe {
@@ -848,6 +850,8 @@ unsafe fn convert(value: &VARIANT, cim_type: i32) -> Val {
             VT_I8 => Val::Int(data.llVal),
             VT_UI8 => Val::Int(i64::try_from(data.ullVal).unwrap_or(i64::MAX)),
             vt if vt.0 == (VT_ARRAY.0 | VT_BSTR.0) => Val::List(strings(data.parray)),
+            // Arrays of integers (Win32_DeviceGuard's service lists) as their decimal text.
+            vt if vt.0 == (VT_ARRAY.0 | VT_I4.0) || vt.0 == (VT_ARRAY.0 | VT_UI4.0) => Val::List(integers(data.parray)),
             _ => Val::Null,
         }
     }
@@ -868,6 +872,28 @@ fn strings(array: *mut SAFEARRAY) -> Vec<String> {
     for index in low..=high.min(low.saturating_add(4096)) {
         let mut item = BSTR::new();
         // SAFETY: the index is within the bounds; the element is copied into `item`, which frees it.
+        if unsafe { SafeArrayGetElement(array, &index, (&raw mut item).cast()) }.is_ok() {
+            out.push(item.to_string());
+        }
+    }
+    out
+}
+
+/// The values of a one-dimensional SAFEARRAY of 32-bit integers, as decimal text.
+fn integers(array: *mut SAFEARRAY) -> Vec<String> {
+    if array.is_null() {
+        return Vec::new();
+    }
+    // SAFETY: a valid one-dimensional array owned by the VARIANT being read.
+    let (Ok(low), Ok(high)) = (unsafe { SafeArrayGetLBound(array, 1) }, unsafe {
+        SafeArrayGetUBound(array, 1)
+    }) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for index in low..=high.min(low.saturating_add(4096)) {
+        let mut item = 0i32;
+        // SAFETY: the index is within the bounds; the 4-byte element is copied into `item`.
         if unsafe { SafeArrayGetElement(array, &index, (&raw mut item).cast()) }.is_ok() {
             out.push(item.to_string());
         }

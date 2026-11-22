@@ -239,14 +239,14 @@ export interface StartupEntry {
   executable: string;
   /** The registry key (HKCU\…\Run) or the Startup folder. */
   location: string;
-  /** "run", "run_once" or "folder". */
+  /** "run", "run_once", "policy" (a Run key set by policy: no on/off switch) or "folder". */
   kind: string;
   /** "user" (this account) or "machine" (every user). */
   scope: string;
   enabled: boolean;
   /** When it was turned off, if Windows recorded it. */
   disabledAtMs: number | null;
-  /** RunOnce entries have no on/off switch. */
+  /** RunOnce entries and Run keys set by policy have no on/off switch. */
   canToggle: boolean;
   approvedKey: string;
   value: string;
@@ -505,6 +505,43 @@ export interface Protection {
   scan: DefenderScan | null;
 }
 
+// ---------------------------------------------------------------- security posture (read-only)
+
+/** What Vigil can do to raise a setting (Rust checks it against a fresh read). */
+export type PostureOp =
+  | "uac-default" | "rdp-nla" | "rdp-off" | "smb1-off" | "ps2-off" | "autorun-off" | "driver-blocklist-on" | "lsa-on"
+  | "remote-registry-off";
+export type PostureCheckId =
+  | "secure_boot" | "tpm" | "memory_integrity" | "credential_guard" | "lsa" | "driver_blocklist" | "bitlocker" | "uac" | "rdp"
+  | "remote_registry" | "smb1" | "firewall" | "smartscreen" | "powershell2" | "autorun" | "defender" | "defender_updates"
+  | "windows_update";
+export interface PostureCheck {
+  id: PostureCheckId;
+  group: "device" | "data" | "signin" | "network" | "apps" | "protection";
+  /** on = as recommended; na = does not apply to this computer. */
+  state: "on" | "partial" | "off" | "unknown" | "na";
+  /** How much it counts in the score (1-3). */
+  weight: number;
+  /** What exactly was found ("legacy_bios", "pending_restart"...); "" for the plain case. */
+  detail: string;
+  facts: Record<string, string>;
+  /** It could not be read without administrator rights. */
+  needsAdmin: boolean;
+  fixes: PostureOp[];
+  /** A Windows Security or Settings link, "tool:<name>", "page:<key>" or "". */
+  open: string;
+}
+export interface PostureVolume {
+  letter: string; kind: "os" | "fixed" | "removable"; protection: "on" | "off" | "unknown";
+  encryption: "decrypted" | "encrypted" | "encrypting" | "decrypting" | "paused" | "unknown";
+}
+export interface Posture {
+  checks: PostureCheck[];
+  score: { on: number; partial: number; off: number; counted: number; percent: number };
+  volumes: PostureVolume[];
+  elevated: boolean; edition: string; build: number;
+}
+
 /** One logical processor (a Windows CPU Set). `index` is what affinity requests use. */
 export interface LogicalProcessor {
   index: number; id: number; group: number; number: number;
@@ -535,10 +572,18 @@ export type ActionRequest =
   | { kind: "recycle"; paths: string[] }
   | { kind: "shell"; op: string; path?: string; url?: string; name?: string }
   | { kind: "service"; op: ServiceOp; name: string; startType?: string }
-  | { kind: "startup"; op: "enable" | "disable"; id: string }
+  | { kind: "startup"; op: "enable" | "disable" | "delete"; id: string }
   | { kind: "task"; op: "enable" | "disable" | "run" | "delete"; path: string }
   | { kind: "program"; op: "uninstall" | "remove_entry" | "folder"; id: string }
+  /** Browser extensions page: the browser's extensions page (of an extension, by key, or of a browser by name) or an extension's folder. */
+  | { kind: "extension"; op: "page" | "folder"; key?: string; browser?: string }
+  /** Browser extensions page: remove a browser policy, read again by Rust. */
+  | { kind: "browser-policy"; op: "remove"; id: string }
+  /** Accounts page: Rust reads the accounts again and applies the action engine's guards. */
+  | { kind: "account"; op: "disable" | "remove_member" | "logoff"; sid?: string; group?: AccountGroupKey; session?: number }
   | { kind: "firewall-rule"; op: "enable" | "disable" | "delete"; key: string }
+  /** Security posture page: raise one setting (only what a fresh read offers). */
+  | { kind: "posture"; op: PostureOp }
   | {
       kind: "defender";
       op: "quick-scan" | "full-scan" | "cancel-scan" | "offline-scan" | "update" | "turn-on" | "remove-exclusion" | "remove-threats";
@@ -549,6 +594,80 @@ export type ActionRequest =
     };
 
 export interface ActionOutcome { cancelled: boolean; records: JournalRecord[]; message: string; error?: boolean }
+
+// ---------------------------------------------------------------- browser extensions
+
+export type ExtensionSource = "store" | "outside_store" | "external" | "policy" | "unpacked" | "component" | "unknown";
+export type ExtensionFlag =
+  | "all_sites" | "history" | "tabs" | "cookies" | "web_request" | "native" | "debugger" | "proxy" | "management"
+  | "policy" | "outside_store" | "external" | "unpacked" | "mv2" | "not_signed" | "store_flagged" | "delisted";
+export type ExtensionDisableReason =
+  | "user" | "permissions" | "not_verified" | "flagged" | "corrupted" | "sideload" | "external" | "policy"
+  | "unsupported_manifest" | "incompatible" | "other";
+
+/** One extension of one browser profile. */
+export interface BrowserExtension {
+  /** browser|account|profile folder|id: names it in requests. */
+  key: string;
+  browser: string;
+  /** The profile's name as the browser shows it. */
+  profile: string;
+  profileDir: string;
+  /** Empty for this account; another account's name otherwise. */
+  account: string;
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  enabled: boolean;
+  disableReasons: ExtensionDisableReason[];
+  /** Unix ms; 0 when unknown. */
+  installedMs: number;
+  source: ExtensionSource;
+  updateUrl: string;
+  manifestVersion: number;
+  permissions: string[];
+  hosts: string[];
+  flags: ExtensionFlag[];
+  path: string;
+  pathExists: boolean;
+  /** Path of a PNG icon in its folder (loaded through extensionIcons). */
+  icon: string;
+  /** Part of the browser itself. */
+  component: boolean;
+}
+
+export type BrowserPolicyKind =
+  | "force_install" | "extension_settings" | "install_sources" | "allow" | "block" | "search" | "homepage" | "startup"
+  | "new_tab" | "proxy" | "devtools" | "safe_browsing" | "other";
+
+/** One browser policy value (registry) or entry of Firefox's policies.json. */
+export interface BrowserPolicy {
+  id: string;
+  key: string;
+  value: string;
+  browser: string;
+  scope: "machine" | "user" | "file";
+  name: string;
+  data: string;
+  kind: BrowserPolicyKind;
+  /** What adware and malware set. */
+  flagged: boolean;
+  extensionIds: string[];
+  store: boolean;
+  /** Vigil can remove it (and put it back from History). */
+  removable: boolean;
+}
+
+export interface BrowserInfo { name: string; profiles: number; extensions: number }
+
+export interface BrowserExtensions {
+  extensions: BrowserExtension[];
+  policies: BrowserPolicy[];
+  browsers: BrowserInfo[];
+  /** Other accounts' profiles were read too (elevated). */
+  otherAccounts: boolean;
+}
 
 // ---------------------------------------------------------------- maintenance
 
@@ -640,7 +759,8 @@ export interface WatchSettings {
   trayNoticeShown: boolean;
 }
 
-export type AlertKind = "startup" | "service" | "task" | "security" | "port";
+/** "watch": about the background watch itself (its saved state was damaged and reset). */
+export type AlertKind = "startup" | "service" | "task" | "security" | "port" | "watch";
 
 /** One change the background watch noticed. Title and detail are plain text from Rust. */
 export interface WatchAlert {
@@ -760,4 +880,91 @@ export interface Reliability {
   /** Logs that could not be read (the boot performance log needs administrator rights). */
   unreadLogs: string[];
   truncated: boolean;
+}
+
+// ---------------------------------------------------------------- accounts and sign-ins (read-only)
+
+export type AccountGroupKey = "administrators" | "remote_desktop_users";
+
+export interface LocalAccount {
+  sid: string; rid: number; name: string; fullName: string; comment: string;
+  enabled: boolean; locked: boolean;
+  /** False when the account may have an empty password (PASSWD_NOTREQD). */
+  passwordRequired: boolean;
+  /** False when the password never expires. */
+  passwordExpires: boolean;
+  passwordSet: string; lastLogon: string; lastLogonMs: number; logons: number; badPasswords: number;
+  admin: boolean; remoteDesktop: boolean;
+  /** "administrator" (RID 500), "guest" (501), "default" (503), "wdag" (504) or "". */
+  builtin: string;
+  onlineProvider: string; onlineName: string;
+  /** The account running Vigil. */
+  current: boolean;
+}
+
+export interface GroupMember {
+  sid: string;
+  /** "DOMAIN\name", "" when the SID no longer resolves. */
+  name: string;
+  kind: "user" | "group" | "alias" | "well_known" | "deleted" | "unknown" | "other";
+  local: boolean; enabled: boolean | null; current: boolean;
+}
+
+export interface LocalGroup { sid: string; name: string; members: GroupMember[]; error: string }
+
+export interface UserSession {
+  id: number; station: string;
+  state: "active" | "connected" | "disconnected" | "idle" | "other";
+  user: string; protocol: "console" | "rdp" | "other" | "";
+  clientAddress: string; clientName: string; logonTime: string; disconnectTime: string; current: boolean;
+}
+
+export type SigninKind =
+  | "success" | "failure" | "lockout" | "created" | "deleted" | "member_added" | "member_removed" | "log_cleared"
+  | "remote_auth" | "remote_logon" | "remote_reconnect" | "session_logon";
+
+export interface SigninEvent {
+  id: string; time: string; timeMs: number; kind: SigninKind; eventId: number; log: string;
+  account: string; sid: string; logonType: number;
+  logon: "interactive" | "network" | "unlock" | "remote" | "cached" | "batch" | "service" | "other" | "";
+  address: string; public: boolean; workstation: string; process: string;
+  reason: string; status: string; group: string; groupSid: string; member: string; memberSid: string; by: string;
+}
+
+export interface SigninSource {
+  address: string; public: boolean; count: number; accounts: string[]; accountCount: number; first: string; last: string;
+}
+
+export interface RemoteSignin {
+  time: string; timeMs: number; account: string; address: string; public: boolean;
+  how: "remote_desktop" | "network"; events: string[];
+}
+
+export interface Signins {
+  days: number; readMs: number; events: SigninEvent[];
+  daily: { date: string; success: number; failure: number }[];
+  success: number; failure: number; sources: SigninSource[];
+  failedAccounts: { account: string; count: number; sources: number; last: string }[];
+  remote: RemoteSignin[];
+  /** The Security log could be read (it needs administrator rights). */
+  securityReadable: boolean; unreadLogs: string[]; truncated: boolean;
+}
+
+export type AccountWarningCode =
+  | "guessing_address" | "guessing_names" | "internet_signin" | "log_cleared" | "admin_added" | "account_created"
+  | "lockouts" | "no_password_required" | "guest_enabled" | "builtin_admin_enabled" | "unknown_admin";
+
+export interface AccountWarning {
+  code: AccountWarningCode; severity: "bad" | "warn" | "info"; subject: string; detail: string; count: number; events: string[];
+}
+
+/** A change Vigil made that is still in place; History can undo it (journal record id). */
+export interface VigilAccountChange { recordId: string; time: string; sid: string; name: string; groupSid: string; groupName: string }
+
+export interface AccountsView {
+  machineSid: string; currentSids: string[]; accounts: LocalAccount[];
+  administrators: LocalGroup; remoteDesktopUsers: LocalGroup; sessions: UserSession[];
+  domainJoined: boolean; lusrmgr: boolean; errors: string[];
+  signins: Signins | null; signinsError: string; warnings: AccountWarning[];
+  disabledByVigil: VigilAccountChange[]; removedByVigil: VigilAccountChange[];
 }

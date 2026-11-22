@@ -28,10 +28,22 @@ struct Seams {
     settings: Vec<(String, String)>,
     no_sleep: bool,
     uninstall_root: Option<String>,
+    policy_root: Option<String>,
+    account_backend: Option<Rc<dyn crate::accounts::AccountBackend>>,
 }
 
 thread_local! {
     static SEAMS: RefCell<Seams> = RefCell::new(Seams::default());
+}
+
+/// Replaces the accounts the account operations read and change (a fake that records the calls).
+/// `None` uses Windows again.
+pub fn set_account_backend(backend: Option<Rc<dyn crate::accounts::AccountBackend>>) {
+    SEAMS.with(|s| s.borrow_mut().account_backend = backend);
+}
+
+pub(crate) fn account_backend() -> Option<Rc<dyn crate::accounts::AccountBackend>> {
+    SEAMS.with(|s| s.borrow().account_backend.clone())
 }
 
 /// Pretends the app is (or is not) elevated. `None` asks Windows again.
@@ -84,6 +96,19 @@ pub fn set_uninstall_root(key: Option<&str>) {
 
 pub(crate) fn uninstall_root() -> Option<String> {
     SEAMS.with(|s| s.borrow().uninstall_root.clone())
+}
+
+/// Makes `browser.policy_remove` treat this key as `HKCU\SOFTWARE\Policies` (and accept no other
+/// root). Only keys under `HKCU\Software\VigilTests` are accepted.
+pub fn set_policy_root(key: Option<&str>) {
+    let key = key
+        .filter(|k| k.to_lowercase().starts_with("hkcu\\software\\vigiltests\\"))
+        .map(str::to_string);
+    SEAMS.with(|s| s.borrow_mut().policy_root = key);
+}
+
+pub(crate) fn policy_root() -> Option<String> {
+    SEAMS.with(|s| s.borrow().policy_root.clone())
 }
 
 /// Clears every seam of this thread.

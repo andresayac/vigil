@@ -6,8 +6,8 @@
 //! which journals it. The state they share is `vigil_core::state::AppState`.
 
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -522,6 +522,7 @@ pub fn settings_get(state: State<'_, AppState>) -> View {
 #[tauri::command]
 pub fn settings_set(
     state: State<'_, AppState>,
+    watcher: State<'_, Arc<crate::watch::Watcher>>,
     settings: View,
     secrets: Option<std::collections::HashMap<String, Option<String>>>,
 ) -> CmdResult<View> {
@@ -535,7 +536,10 @@ pub fn settings_set(
     let mut inner = state.lock();
     inner.settings.apply(&settings)?;
     inner.settings.save(&state.root.join("settings.json"))?;
-    vigil_i18n::set_language(&inner.settings.language);
+    let language = vigil_i18n::set_language(&inner.settings.language);
+    // The copy of Vigil that watches from the tray (its own settings file when it runs without
+    // administrator rights) writes its alerts and notifications in the language chosen here.
+    watcher.set_language(language);
     let stored = secrets::stored(&*state.secrets);
     Ok(inner.settings.view(stored))
 }

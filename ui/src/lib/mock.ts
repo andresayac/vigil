@@ -125,8 +125,11 @@ export function connections(): Connection[] {
   ];
 }
 
+export * from "./mock-accounts";
+export * from "./mock-extensions";
 export * from "./mock-firewall";
 export * from "./mock-pages";
+export * from "./mock-posture";
 export * from "./mock-protection";
 export * from "./mock-programs";
 export * from "./mock-reliability";

@@ -27,7 +27,8 @@ pub struct Service {
     pub description: String,
     /// "running", "stopped", "start_pending", "stop_pending", "continue_pending", "pause_pending", "paused".
     pub state: String,
-    /// "auto", "delayed-auto", "demand", "disabled", "boot" or "system".
+    /// "auto", "delayed-auto", "demand", "disabled", "boot" or "system"; "" when its configuration
+    /// could not be read (standard users cannot query every service).
     pub start_type: String,
     /// The hosting process while it runs, 0 otherwise.
     pub pid: u32,
@@ -144,7 +145,8 @@ pub fn svchost_group(path: &str) -> String {
 }
 
 /// Reads one service's configuration: (start type, delayed, path, account, own/share), description.
-fn config(manager: SC_HANDLE, name: &str) -> Option<(u32, bool, String, String, u32, String)> {
+/// `full` false skips the delayed-start flag and the description (two more queries per service).
+fn config(manager: SC_HANDLE, name: &str, full: bool) -> Option<(u32, bool, String, String, u32, String)> {
     let wide = HSTRING::from(name);
     // SAFETY: valid manager handle; `wide` outlives the call; the handle is owned by `Handle`.
     let service = Handle(unsafe { OpenServiceW(manager, &wide, SERVICE_QUERY_CONFIG) }.ok()?);
@@ -169,6 +171,9 @@ fn config(manager: SC_HANDLE, name: &str) -> Option<(u32, bool, String, String, 
             c.dwServiceType.0,
         )
     };
+    if !full {
+        return Some((start, false, expand(&path), account, service_type, String::new()));
+    }
     let delayed = optional_config(service.0, SERVICE_CONFIG_DELAYED_AUTO_START_INFO.0, |bytes| {
         // SAFETY: the buffer holds a SERVICE_DELAYED_AUTO_START_INFO on success.
         unsafe {
@@ -217,17 +222,22 @@ fn optional_config<T>(service: SC_HANDLE, level: u32, read: impl FnOnce(*const c
     Some(read(storage.as_ptr().cast::<c_void>()))
 }
 
-/// Every Win32 service (drivers are not listed), sorted by display name.
-pub fn list() -> Result<Vec<Service>, SysError> {
+/// One enumerated service: (name, display name, state, process id, service type bits).
+type Enumerated = (String, String, u32, u32, u32);
+
+fn open_manager() -> Result<Handle, SysError> {
     // SAFETY: plain call; the handle is owned by `Handle`.
-    let manager = Handle(
-        unsafe { OpenSCManagerW(PCWSTR::null(), PCWSTR::null(), SC_MANAGER_ENUMERATE_SERVICE) }.map_err(|e| {
-            SysError::new(
-                format!("the service list could not be read ({})", e.message()),
-                e.code().0,
-            )
-        })?,
-    );
+    let manager = unsafe { OpenSCManagerW(PCWSTR::null(), PCWSTR::null(), SC_MANAGER_ENUMERATE_SERVICE) };
+    manager.map(Handle).map_err(|e| {
+        SysError::new(
+            format!("the service list could not be read ({})", e.message()),
+            e.code().0,
+        )
+    })
+}
+
+/// Every Win32 service the Service Control Manager lists, with its state.
+fn enumerate(manager: &Handle) -> Result<Vec<Enumerated>, SysError> {
     let mut needed = 0u32;
     let mut count = 0u32;
     let mut buffer: Vec<u64> = vec![0; 256 * 1024 / 8];
@@ -267,23 +277,42 @@ pub fn list() -> Result<Vec<Service>, SysError> {
     // SAFETY: on success the buffer starts with `count` entries whose strings point inside it.
     let entries =
         unsafe { std::slice::from_raw_parts(buffer.as_ptr().cast::<ENUM_SERVICE_STATUS_PROCESSW>(), count as usize) };
-    let mut out = Vec::with_capacity(entries.len());
-    for entry in entries {
-        // SAFETY: NUL-terminated strings inside the buffer (or null).
-        let name = unsafe { wide_text(entry.lpServiceName) };
-        // SAFETY: as above.
-        let display_name = unsafe { wide_text(entry.lpDisplayName) };
-        let status = &entry.ServiceStatusProcess;
-        let (start, delayed, path, account, kind, description) = config(manager.0, &name).unwrap_or((
-            3,
-            false,
-            String::new(),
-            String::new(),
-            status.dwServiceType.0,
-            String::new(),
-        ));
-        // SERVICE_WIN32_SHARE_PROCESS = 0x20 (possibly combined with the user-service flags).
-        let service_type = if kind & 0x20 != 0 { "share" } else { "own" };
+    Ok(entries
+        .iter()
+        .map(|entry| {
+            let status = &entry.ServiceStatusProcess;
+            (
+                // SAFETY: NUL-terminated strings inside the buffer (or null).
+                unsafe { wide_text(entry.lpServiceName) },
+                // SAFETY: as above.
+                unsafe { wide_text(entry.lpDisplayName) },
+                status.dwCurrentState.0,
+                status.dwProcessId,
+                status.dwServiceType.0,
+            )
+        })
+        .collect())
+}
+
+/// SERVICE_WIN32_SHARE_PROCESS (possibly combined with the user-service flags).
+const SHARE_PROCESS: u32 = 0x20;
+/// SERVICE_USERSERVICE_INSTANCE: the copy of a per-user service made for one sign-in session
+/// (`CDPUserSvc_4a5b2`); its name changes at every sign-in.
+pub const USER_SERVICE_INSTANCE: u32 = 0x80;
+
+/// Every Win32 service (drivers are not listed), sorted by display name.
+pub fn list() -> Result<Vec<Service>, SysError> {
+    let manager = open_manager()?;
+    let mut out = Vec::new();
+    for (name, display_name, state, pid, listed_type) in enumerate(&manager)? {
+        let (start_type, path, account, kind, description) = match config(manager.0, &name, true) {
+            Some((start, delayed, path, account, kind, description)) => {
+                (start_name(start, delayed), path, account, kind, description)
+            }
+            // Not readable with these rights: nothing is claimed about how it starts.
+            None => ("", String::new(), String::new(), listed_type, String::new()),
+        };
+        let service_type = if kind & SHARE_PROCESS != 0 { "share" } else { "own" };
         let dll = if service_type == "share" {
             service_dll(&name)
         } else {
@@ -296,15 +325,57 @@ pub fn list() -> Result<Vec<Service>, SysError> {
             name,
             display_name,
             description,
-            state: state_name(status.dwCurrentState.0).to_string(),
-            start_type: start_name(start, delayed).to_string(),
-            pid: status.dwProcessId,
+            state: state_name(state).to_string(),
+            start_type: start_type.to_string(),
+            pid,
             service_type: service_type.to_string(),
             path,
             account,
         });
     }
     out.sort_by_key(|s| s.display_name.to_lowercase());
+    Ok(out)
+}
+
+/// What the background watch compares about a service, read cheaply: one configuration query per
+/// service (no description, no delayed-start flag: both "auto" kinds count as automatic).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServiceConfig {
+    pub name: String,
+    pub display_name: String,
+    /// "auto", "demand", "disabled", "boot" or "system"; "" when it could not be read.
+    pub start_type: String,
+    /// "" when it could not be read.
+    pub path: String,
+    /// The DLL svchost loads for it ("" for other services).
+    pub dll: String,
+    /// A per-sign-in copy of a per-user service (its name changes at every sign-in).
+    pub user_instance: bool,
+}
+
+/// Every Win32 service with its start type, program and svchost DLL, for the background watch.
+pub fn list_light() -> Result<Vec<ServiceConfig>, SysError> {
+    let manager = open_manager()?;
+    let mut out = Vec::new();
+    for (name, display_name, _, _, listed_type) in enumerate(&manager)? {
+        let (start_type, path, kind) = match config(manager.0, &name, false) {
+            Some((start, _, path, _, kind, _)) => (start_name(start, false), path, kind),
+            None => ("", String::new(), listed_type),
+        };
+        let dll = if kind & SHARE_PROCESS != 0 {
+            service_dll(&name)
+        } else {
+            String::new()
+        };
+        out.push(ServiceConfig {
+            user_instance: (kind | listed_type) & USER_SERVICE_INSTANCE != 0,
+            name,
+            display_name,
+            start_type: start_type.to_string(),
+            path,
+            dll,
+        });
+    }
     Ok(out)
 }
 
@@ -338,6 +409,26 @@ mod tests {
         assert!(services.iter().all(|s| !s.name.is_empty()));
         assert!(services.iter().any(|s| s.state == "stopped"));
         assert!(services.iter().any(|s| s.start_type == "demand"));
+    }
+
+    #[test]
+    fn the_light_list_agrees_with_the_full_one() {
+        let full = list().expect("services");
+        let light = list_light().expect("services");
+        assert_eq!(full.len(), light.len());
+        let rpc = light
+            .iter()
+            .find(|s| s.name.eq_ignore_ascii_case("RpcSs"))
+            .expect("RpcSs");
+        assert!(rpc.path.to_ascii_lowercase().contains("svchost.exe"), "{}", rpc.path);
+        assert!(rpc.dll.to_ascii_lowercase().ends_with(".dll"), "{}", rpc.dll);
+        assert!(!rpc.user_instance);
+        // Per-user service instances carry the session's suffix (`CDPUserSvc_4a5b2`).
+        for instance in light.iter().filter(|s| s.user_instance) {
+            assert!(instance.name.contains('_'), "{}", instance.name);
+        }
+        // The delayed flag is not read: those services count as plain automatic.
+        assert!(light.iter().all(|s| s.start_type != "delayed-auto"));
     }
 
     #[test]

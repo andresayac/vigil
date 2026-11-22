@@ -8,8 +8,11 @@ import type {
 } from "./types";
 import type { WatchAlert, WatchSettings, WatchStatus } from "./types";
 import type { DefenderScanEvent, Protection } from "./types";
+import type { Posture } from "./types";
 import type { InstalledProgram } from "./types";
+import type { BrowserExtensions } from "./types";
 import type { Reliability } from "./types";
+import type { AccountsView } from "./types";
 
 export const inApp = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -81,6 +84,22 @@ export async function onEvent<T>(name: string, handler: (payload: T) => void): P
   if (!inApp) return () => {};
   const { listen } = await import("@tauri-apps/api/event");
   return listen<T>(name, (event) => handler(event.payload));
+}
+
+/** Keeps a subscription for as long as a page lives. The returned cleanup also works when the page
+ *  closes before the subscription is ready: the listener is then removed as soon as it exists. */
+export function subscribe(start: Promise<() => void>): () => void {
+  let stopped = false;
+  let stop: (() => void) | null = null;
+  void start.then((off) => {
+    if (stopped) off();
+    else stop = off;
+  });
+  return () => {
+    stopped = true;
+    stop?.();
+    stop = null;
+  };
 }
 
 export const onScanProgress = (handler: (p: ScanProgress) => void) => onEvent<ScanProgress>("scan", handler);
@@ -162,12 +181,28 @@ export async function programsList(): Promise<InstalledProgram[]> {
 export async function programSignatures(paths: string[]): Promise<Record<string, StartupSignature>> {
   return inApp ? call<Record<string, StartupSignature>>("program_signatures", { paths }) : mock.programSignatures(paths);
 }
+/** Every browser extension and browser policy (read-only); changes go through runAction ({ kind: "extension" | "browser-policy" }). */
+export async function extensionsList(): Promise<BrowserExtensions> {
+  return inApp ? call<BrowserExtensions>("extensions_list") : mock.extensionsList();
+}
+/** Extension icons (PNG data URLs) by key, for the list read last; keys without an icon are left out. */
+export async function extensionIcons(keys: string[]): Promise<Record<string, string>> {
+  return inApp ? call<Record<string, string>>("extension_icons", { keys }) : mock.extensionIcons(keys);
+}
 export async function reliability(days: number): Promise<Reliability> {
   return inApp ? call<Reliability>("reliability_read", { days }) : mock.reliability(days);
+}
+/** Local accounts, groups, sessions and the sign-in history (read-only); changes go through runAction ({ kind: "account" }). */
+export async function accounts(days: number): Promise<AccountsView> {
+  return inApp ? call<AccountsView>("accounts_read", { days }) : mock.accounts(days);
 }
 /** Microsoft Defender's state and the last scan Vigil started (read-only); changes go through runAction ({ kind: "defender" }). */
 export async function protectionState(): Promise<Protection> {
   return inApp ? call<Protection>("protection_state") : mock.protectionState();
+}
+/** The Windows settings that protect the computer as a whole (read-only); changes go through runAction ({ kind: "posture" }). */
+export async function postureState(): Promise<Posture> {
+  return inApp ? call<Posture>("posture_state") : mock.postureState();
 }
 /** Progress of a scan Vigil started: once a second while it runs, then once more with what was found. */
 export const onDefenderScan = (handler: (event: DefenderScanEvent) => void) =>

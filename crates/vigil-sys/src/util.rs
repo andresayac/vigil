@@ -90,6 +90,14 @@ pub(crate) fn hklm_dword(subkey: &str, value: &str) -> Option<u32> {
         .map(|_| u32::from_le_bytes(data))
 }
 
+/// A REG_DWORD value under HKEY_CURRENT_USER.
+pub(crate) fn hkcu_dword(subkey: &str, value: &str) -> Option<u32> {
+    let mut data = [0u8; 4];
+    reg_get(HKEY_CURRENT_USER, subkey, value, RRF_RT_REG_DWORD, &mut data)
+        .filter(|&size| size == 4)
+        .map(|_| u32::from_le_bytes(data))
+}
+
 /// Number of logical processors in every processor group.
 pub(crate) fn logical_processors() -> u32 {
     const ALL_PROCESSOR_GROUPS: u16 = 0xFFFF;

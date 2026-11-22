@@ -200,7 +200,10 @@
         <section class="panel">
           <h2>{t("overview.security")}</h2>
           <Readouts rows={readouts(a.posture ?? {})} nameWidth={200} />
-          <div><button class="link" onclick={() => onpage("protection")}>{t("overview.openProtection")}</button></div>
+          <div class="links">
+            <button class="link" onclick={() => onpage("protection")}>{t("overview.openProtection")}</button>
+            <button class="link" onclick={() => onpage("posture")}>{t("overview.openPosture")}</button>
+          </div>
         </section>
         {#if a.notes?.length}
           <section class="panel">
@@ -238,6 +241,7 @@
   ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
   .link { border: 0; background: transparent; padding: 0; color: var(--accent); text-align: left; }
   .link:hover:not(:disabled) { background: transparent; text-decoration: underline; }
+  .links { display: flex; flex-wrap: wrap; gap: 4px 20px; }
   .empty { display: flex; flex-direction: column; gap: 10px; max-width: 900px; padding-top: 30px; }
   .empty p { margin: 0; }
   .watch-alone { max-width: 560px; }

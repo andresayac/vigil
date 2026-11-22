@@ -138,6 +138,15 @@ fn build_plan(st: &AppState, request: &Request) -> Result<Plan, String> {
         let live = vigil_sys::defender::read();
         return crate::protection::plan(op, setting, list, value, &live);
     }
+    if let Request::Posture { op } = request {
+        let live = crate::posture::read();
+        return crate::posture::plan(op, &live);
+    }
+    match request {
+        Request::Extension { op, key, browser } => return crate::extensions::plan_extension(op, key, browser),
+        Request::BrowserPolicy { op, id } => return crate::extensions::plan_policy(op, id),
+        _ => {}
+    }
     let processes = match request {
         Request::Process { .. } => vigil_sys::process::ProcessSampler::new()
             .and_then(|mut s| s.snapshot())

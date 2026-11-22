@@ -96,6 +96,44 @@ pub fn connections() -> Result<Vec<Connection>, SysError> {
     Ok(endpoints.into_iter().map(|e| e.into_connection(&names)).collect())
 }
 
+/// The listening TCP sockets (IPv4 and IPv6) with the name of the process that owns each one,
+/// read cheaply for the background watch: one kernel call for the names, no image paths.
+pub fn listening_tcp() -> Result<Vec<Connection>, SysError> {
+    let mut endpoints = Vec::new();
+    for row in table::<MIB_TCPROW_OWNER_PID>(Kind::Tcp, AF_INET.0 as u32)? {
+        endpoints.push(Endpoint::tcp(
+            row.dwOwningPid,
+            row.dwState,
+            IpAddr::V4(ipv4(row.dwLocalAddr)),
+            port(row.dwLocalPort),
+            IpAddr::V4(ipv4(row.dwRemoteAddr)),
+            port(row.dwRemotePort),
+        ));
+    }
+    for row in table::<MIB_TCP6ROW_OWNER_PID>(Kind::Tcp, AF_INET6.0 as u32)? {
+        endpoints.push(Endpoint::tcp(
+            row.dwOwningPid,
+            row.dwState,
+            IpAddr::V6(Ipv6Addr::from(row.ucLocalAddr)),
+            port(row.dwLocalPort),
+            IpAddr::V6(Ipv6Addr::from(row.ucRemoteAddr)),
+            port(row.dwRemotePort),
+        ));
+    }
+    endpoints.retain(|e| e.state == "LISTEN");
+    let owners: HashSet<u32> = endpoints.iter().map(|e| e.pid).collect();
+    let names: HashMap<u32, (String, String)> = SystemProcesses::new()
+        .sample()
+        .map(|list| {
+            list.into_iter()
+                .filter(|p| owners.contains(&p.pid))
+                .map(|p| (p.pid, (p.name, String::new())))
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(endpoints.into_iter().map(|e| e.into_connection(&names)).collect())
+}
+
 struct Endpoint {
     pid: u32,
     protocol: &'static str,
@@ -310,6 +348,28 @@ mod tests {
         assert_eq!(port(u32::from(u16::to_be(443))), 443);
         assert_eq!(ipv4(u32::from_ne_bytes([127, 0, 0, 1])), Ipv4Addr::LOCALHOST);
         assert_eq!(endpoint_text(IpAddr::V6(Ipv6Addr::LOCALHOST), 80), "[::1]:80");
+    }
+
+    #[test]
+    fn the_light_listing_has_only_listening_tcp_sockets() {
+        let listening = listening_tcp().expect("tcp table");
+        assert!(
+            listening
+                .iter()
+                .all(|c| c.state == "LISTEN" && c.protocol.starts_with("TCP") && c.exe.is_empty())
+        );
+        let full: Vec<_> = connections()
+            .expect("tables")
+            .into_iter()
+            .filter(|c| c.state == "LISTEN" && c.protocol.starts_with("TCP"))
+            .collect();
+        // Sockets come and go between the two reads; the counts stay close.
+        assert!(
+            full.len().abs_diff(listening.len()) <= 5,
+            "{} vs {}",
+            full.len(),
+            listening.len()
+        );
     }
 
     #[test]

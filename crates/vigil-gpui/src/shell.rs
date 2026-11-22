@@ -20,12 +20,15 @@ use crate::pages::processes::ProcessesPage;
 use crate::theme::{self, Choice, FONT_BODY, FONT_DISPLAY, RADIUS, Tokens, tokens};
 
 /// (key, section) of every page, in the order of the web UI's navigation pane.
-pub const PAGES: [(&str, &str); 18] = [
+pub const PAGES: [(&str, &str); 21] = [
     ("overview", "nav.security"),
     ("findings", "nav.security"),
     ("alerts", "nav.security"),
     ("protection", "nav.security"),
+    ("posture", "nav.security"),
     ("firewall", "nav.security"),
+    ("accounts", "nav.security"),
+    ("extensions", "nav.security"),
     ("quarantine", "nav.security"),
     ("history", "nav.security"),
     ("performance", "nav.live"),
@@ -418,12 +421,15 @@ impl Shell {
 }
 
 /// Element ids of the navigation items (GPUI ids are static strings or numbers).
-const NAV_IDS: [&str; 18] = [
+const NAV_IDS: [&str; 21] = [
     "nav-overview",
     "nav-findings",
     "nav-alerts",
     "nav-protection",
+    "nav-posture",
     "nav-firewall",
+    "nav-accounts",
+    "nav-extensions",
     "nav-quarantine",
     "nav-history",
     "nav-performance",

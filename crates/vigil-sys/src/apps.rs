@@ -608,7 +608,7 @@ fn package_of(path: &str) -> Option<Package> {
 }
 
 /// A logo file as a data URL (PNG only, small files only: these are 24-48 px images).
-fn logo_data_url(path: &Path) -> Option<String> {
+pub fn logo_data_url(path: &Path) -> Option<String> {
     let is_png = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("png"));
     let bytes = std::fs::read(path).ok()?;
     if !is_png || bytes.len() > 64 * 1024 || !bytes.starts_with(&[0x89, b'P', b'N', b'G']) {

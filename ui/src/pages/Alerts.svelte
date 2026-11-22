@@ -25,9 +25,7 @@
 
   onMount(() => {
     void load();
-    let stop: (() => void) | null = null;
-    void api.onWatch(() => void load()).then((off) => (stop = off));
-    return () => stop?.();
+    return api.subscribe(api.onWatch(() => void load()));
   });
 
   const KINDS: AlertKind[] = ["startup", "service", "task", "security", "port"];

@@ -1,7 +1,8 @@
 //! The programs Windows starts when the user signs in, read live (what Task Manager calls
 //! "Startup apps"): the Run and RunOnce keys of the user and of the machine (64- and 32-bit views),
-//! the user's and the common Startup folders, and whether each one is turned on or off in the
-//! StartupApproved keys — the same switch Task Manager flips. Read-only.
+//! the Run keys set by policy (`Policies\Explorer\Run`, which have no on/off switch), the user's
+//! and the common Startup folders, and whether each one is turned on or off in the StartupApproved
+//! keys — the same switch Task Manager flips. Read-only.
 
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -9,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex, PoisonError};
 
 use serde::Serialize;
-use windows::Win32::Foundation::{ERROR_NO_MORE_ITEMS, ERROR_SUCCESS};
+use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS};
 use windows::Win32::Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW};
 use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx, CoUninitialize, IPersistFile,
@@ -30,6 +31,8 @@ const RUN_ONCE: &str = r"Software\Microsoft\Windows\CurrentVersion\RunOnce";
 const RUN_32: &str = r"Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Run";
 const RUN_ONCE_32: &str = r"Software\WOW6432Node\Microsoft\Windows\CurrentVersion\RunOnce";
 const APPROVED: &str = r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved";
+/// Run keys set by policy: Windows runs them at sign-in; Task Manager has no switch for them.
+const POLICY_RUN: &str = r"Software\Microsoft\Windows\CurrentVersion\Policies\Explorer\Run";
 
 /// One program Windows starts at sign-in.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -45,7 +48,7 @@ pub struct StartupEntry {
     pub executable: String,
     /// The registry key (`HKCU\...\Run`) or the Startup folder.
     pub location: String,
-    /// "run", "run_once" or "folder".
+    /// "run", "run_once", "policy" (a Run key set by policy: no on/off switch) or "folder".
     pub kind: String,
     /// "user" (this account) or "machine" (every user).
     pub scope: String,
@@ -53,7 +56,8 @@ pub struct StartupEntry {
     pub enabled: bool,
     /// When it was turned off, if Windows recorded it (ms since 1970).
     pub disabled_at_ms: Option<i64>,
-    /// It has an on/off switch (RunOnce entries do not: Windows deletes them after one run).
+    /// It has an on/off switch (RunOnce entries do not: Windows deletes them after one run;
+    /// policy Run entries do not either).
     pub can_toggle: bool,
     /// The registry key holding the switch, `HKCU\...\StartupApproved\Run`; empty without one.
     pub approved_key: String,
@@ -177,6 +181,8 @@ pub fn default_sources() -> (Vec<RegistrySource>, Vec<FolderSource>) {
         run(Hive::LocalMachine, RUN_32, Some("Run32"), "run"),
         run(Hive::LocalMachine, RUN_ONCE, None, "run_once"),
         run(Hive::LocalMachine, RUN_ONCE_32, None, "run_once"),
+        run(Hive::CurrentUser, POLICY_RUN, None, "policy"),
+        run(Hive::LocalMachine, POLICY_RUN, None, "policy"),
     ];
     let mut folders = Vec::new();
     let startup = |base: &str, leaf: &str| {
@@ -209,16 +215,42 @@ pub fn list() -> Vec<StartupEntry> {
     list_from(&registry, &folders)
 }
 
+/// Every startup entry, and whether every place could be read (`false`: a key or folder that
+/// exists could not be read, so missing entries may only be unreadable).
+///
+/// `light` leaves out what the background watch does not compare: the program's publisher and
+/// description (version resources) and whether its file exists.
+pub fn list_checked(light: bool) -> (Vec<StartupEntry>, bool) {
+    let (registry, folders) = default_sources();
+    read_from(&registry, &folders, light)
+}
+
 /// The entries of the given places (tests point them at a scratch key and a temporary folder).
 pub fn list_from(registry: &[RegistrySource], folders: &[FolderSource]) -> Vec<StartupEntry> {
+    read_from(registry, folders, false).0
+}
+
+/// The entries of the given places, and whether every place could be read.
+pub fn read_from(registry: &[RegistrySource], folders: &[FolderSource], light: bool) -> (Vec<StartupEntry>, bool) {
     let mut out = Vec::new();
+    let mut complete = true;
+    let finish = |entry: StartupEntry| if light { finish_light(entry) } else { finish(entry) };
     for source in registry {
-        let approved = source
-            .approved
-            .as_ref()
-            .map(|key| approved_values(source.hive, key))
-            .unwrap_or_default();
-        for (name, kind, data) in read_values(source.hive, &source.key) {
+        let approved = match &source.approved {
+            Some(key) => match approved_values(source.hive, key) {
+                Some(values) => values,
+                None => {
+                    complete = false;
+                    HashMap::new()
+                }
+            },
+            None => HashMap::new(),
+        };
+        let Some(values) = read_values(source.hive, &source.key) else {
+            complete = false;
+            continue;
+        };
+        for (name, kind, data) in values {
             if name.is_empty() || (kind != REG_SZ && kind != REG_EXPAND_SZ) {
                 continue;
             }
@@ -228,7 +260,7 @@ pub fn list_from(registry: &[RegistrySource], folders: &[FolderSource]) -> Vec<S
             out.push(finish(StartupEntry {
                 id: format!(r"reg:{location}\{name}"),
                 name: name.clone(),
-                executable: executable_of(&command),
+                executable: if light { String::new() } else { executable_of(&command) },
                 command,
                 location,
                 kind: source.kind.to_string(),
@@ -251,12 +283,27 @@ pub fn list_from(registry: &[RegistrySource], folders: &[FolderSource]) -> Vec<S
         }
     }
     for source in folders {
-        let approved = approved_values(source.approved_hive, &source.approved);
-        let Ok(files) = std::fs::read_dir(&source.folder) else {
-            continue;
+        let approved = approved_values(source.approved_hive, &source.approved).unwrap_or_else(|| {
+            complete = false;
+            HashMap::new()
+        });
+        let files = match std::fs::read_dir(&source.folder) {
+            Ok(files) => files,
+            Err(error) => {
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    complete = false;
+                }
+                continue;
+            }
         };
         let mut files: Vec<PathBuf> = files
-            .filter_map(|f| f.ok())
+            .filter_map(|f| match f {
+                Ok(f) => Some(f),
+                Err(_) => {
+                    complete = false;
+                    None
+                }
+            })
             .filter(|f| f.file_type().is_ok_and(|t| t.is_file()))
             .map(|f| f.path())
             .collect();
@@ -290,7 +337,7 @@ pub fn list_from(registry: &[RegistrySource], folders: &[FolderSource]) -> Vec<S
             }));
         }
     }
-    out
+    (out, complete)
 }
 
 impl Default for StartupEntry {
@@ -316,6 +363,12 @@ impl Default for StartupEntry {
             own: false,
         }
     }
+}
+
+/// Only what needs no file access: whether it is Vigil's own entry.
+fn finish_light(mut entry: StartupEntry) -> StartupEntry {
+    entry.own = is_own(&entry);
+    entry
 }
 
 /// Fills what is known about the program file.
@@ -482,7 +535,8 @@ impl Drop for Key {
     }
 }
 
-fn open(hive: Hive, sub: &str) -> Option<Key> {
+/// The key; `Ok(None)` when it does not exist, `Err` when it exists but cannot be opened.
+fn open(hive: Hive, sub: &str) -> Result<Option<Key>, ()> {
     let sub = wide(sub);
     let mut key = HKEY::default();
     // SAFETY: `sub` is NUL-terminated; `key` receives the handle, owned by `Key`.
@@ -495,12 +549,15 @@ fn open(hive: Hive, sub: &str) -> Option<Key> {
             &mut key,
         )
     };
-    (status == ERROR_SUCCESS).then_some(Key(key))
+    match status {
+        ERROR_SUCCESS => Ok(Some(Key(key))),
+        ERROR_FILE_NOT_FOUND => Ok(None),
+        _ => Err(()),
+    }
 }
 
-/// Every value of a key: (name, type, raw data). Empty when the key does not exist.
-fn read_values(hive: Hive, sub: &str) -> Vec<(String, REG_VALUE_TYPE, Vec<u8>)> {
-    let Some(key) = open(hive, sub) else { return Vec::new() };
+/// The longest name and data of a key's values, as Windows reports them.
+fn value_sizes(key: &Key) -> Option<(u32, u32)> {
     let mut max_name = 0u32;
     let mut max_data = 0u32;
     // SAFETY: only the two out values are requested.
@@ -520,11 +577,20 @@ fn read_values(hive: Hive, sub: &str) -> Vec<(String, REG_VALUE_TYPE, Vec<u8>)> 
             None,
         )
     };
-    if status != ERROR_SUCCESS {
-        return Vec::new();
-    }
+    (status == ERROR_SUCCESS).then_some((max_name, max_data))
+}
+
+/// Every value of a key: (name, type, raw data). Empty when the key does not exist; `None` when it
+/// exists but cannot be read completely (a value that grows while it is read is read again with a
+/// bigger buffer, not skipped).
+fn read_values(hive: Hive, sub: &str) -> Option<Vec<(String, REG_VALUE_TYPE, Vec<u8>)>> {
+    let Some(key) = open(hive, sub).ok()? else {
+        return Some(Vec::new());
+    };
+    let (mut max_name, mut max_data) = value_sizes(&key)?;
     let mut out = Vec::new();
     let mut index = 0u32;
+    let mut retries = 0u32;
     loop {
         let mut name = vec![0u16; max_name as usize + 2];
         let mut name_len = name.len() as u32;
@@ -547,26 +613,37 @@ fn read_values(hive: Hive, sub: &str) -> Vec<(String, REG_VALUE_TYPE, Vec<u8>)> 
         if status == ERROR_NO_MORE_ITEMS {
             break;
         }
-        index += 1;
-        if status != ERROR_SUCCESS {
-            if index > 10_000 {
-                break;
-            }
+        if status == ERROR_MORE_DATA && retries < 8 {
+            // The value grew since the sizes were read: read them again and retry this index.
+            retries += 1;
+            let (name_now, data_now) = value_sizes(&key)?;
+            max_name = name_now.max(max_name.saturating_mul(2));
+            max_data = data_now.max(data_len).max(max_data.saturating_mul(2));
             continue;
         }
+        if status != ERROR_SUCCESS {
+            return None;
+        }
+        retries = 0;
+        index += 1;
         name.truncate(name_len as usize);
         data.truncate(data_len as usize);
         out.push((String::from_utf16_lossy(&name), REG_VALUE_TYPE(kind), data));
+        if index > 100_000 {
+            return None;
+        }
     }
-    out
+    Some(out)
 }
 
-/// The switches of a StartupApproved key, by lower-case value name.
-fn approved_values(hive: Hive, sub: &str) -> HashMap<String, Vec<u8>> {
-    read_values(hive, sub)
-        .into_iter()
-        .map(|(name, _, data)| (name.to_lowercase(), data))
-        .collect()
+/// The switches of a StartupApproved key, by lower-case value name (`None`: it could not be read).
+fn approved_values(hive: Hive, sub: &str) -> Option<HashMap<String, Vec<u8>>> {
+    Some(
+        read_values(hive, sub)?
+            .into_iter()
+            .map(|(name, _, data)| (name.to_lowercase(), data))
+            .collect(),
+    )
 }
 
 /// REG_SZ / REG_EXPAND_SZ data as text (an expandable value is expanded later, by the resolver).
@@ -900,6 +977,56 @@ mod tests {
         let cleanup = entries.iter().find(|e| e.name == "cleanup").expect("batch file");
         assert!(!cleanup.enabled);
         assert_eq!(cleanup.file, folder.join("cleanup.bat").display().to_string());
+    }
+
+    #[test]
+    fn unreadable_places_are_reported_and_policy_entries_have_no_switch() {
+        let scratch = Scratch::new("checked");
+        let dir = TempDir::new("checked");
+        scratch.set("Policy", "Agent", REG_SZ, &sz(r"C:\Tools\agent.exe /run"));
+        // A long value (bigger than any first guess) is read, not skipped.
+        let long = format!(r"C:\Tools\{}.exe", "x".repeat(3000));
+        scratch.set("Policy", "Long", REG_SZ, &sz(&long));
+        let policy = RegistrySource {
+            hive: Hive::CurrentUser,
+            key: format!(r"{}\Policy", scratch.0),
+            approved: None,
+            kind: "policy",
+        };
+        let missing_key = RegistrySource {
+            hive: Hive::CurrentUser,
+            key: format!(r"{}\Missing", scratch.0),
+            approved: Some(format!(r"{}\MissingApproved", scratch.0)),
+            kind: "run",
+        };
+        let missing_folder = FolderSource {
+            folder: dir.join("no such folder"),
+            approved_hive: Hive::CurrentUser,
+            approved: format!(r"{}\Approved", scratch.0),
+        };
+        let (entries, complete) = read_from(&[policy.clone(), missing_key], &[missing_folder], true);
+        // A key or folder that does not exist is simply empty.
+        assert!(complete);
+        assert_eq!(entries.len(), 2, "{entries:#?}");
+        let agent = entries.iter().find(|e| e.name == "Agent").expect("policy entry");
+        assert!(agent.kind == "policy" && !agent.can_toggle && agent.enabled && agent.approved_key.is_empty());
+        // Light: nothing about the file is read.
+        assert!(agent.executable.is_empty() && agent.publisher.is_empty() && !agent.exists);
+        let long_entry = entries.iter().find(|e| e.name == "Long").expect("long value");
+        assert_eq!(long_entry.command, long);
+        // A "folder" that is a file cannot be listed: the reading is incomplete.
+        let file = dir.join("not a folder");
+        std::fs::write(&file, b"x").ok();
+        let broken = FolderSource {
+            folder: file,
+            approved_hive: Hive::CurrentUser,
+            approved: format!(r"{}\Approved", scratch.0),
+        };
+        let (_, complete) = read_from(&[policy], &[broken], true);
+        assert!(!complete);
+        // The real places include the policy Run keys.
+        let (registry, _) = default_sources();
+        assert_eq!(registry.iter().filter(|s| s.kind == "policy").count(), 2);
     }
 
     #[test]

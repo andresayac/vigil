@@ -48,8 +48,8 @@
   }
 
   onMount(async () => {
-    unlisten.push(await api.onEvent<{ text: string }>("cleanup", (p) => (status = p.text)));
-    unlisten.push(await api.onEvent<{ text: string }>("space", (p) => (scanStatus = p.text)));
+    unlisten.push(api.subscribe(api.onEvent<{ text: string }>("cleanup", (p) => (status = p.text))));
+    unlisten.push(api.subscribe(api.onEvent<{ text: string }>("space", (p) => (scanStatus = p.text))));
     await loadDrives();
     await measure();
   });
