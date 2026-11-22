@@ -4,7 +4,7 @@
 //! same native confirmation, the same action engine and the same background watch. This window
 //! only displays data and asks.
 //!
-//! `vigil-gpui [--demo] [--page KEY] [--pid PID] [--theme system|light|dark] [--lang CODE] [--tray]`
+//! `vigil-gpui [--demo] [--page KEY] [--pid PID] [--item ID] [--size WxH] [--theme system|light|dark] [--lang CODE] [--tray]`
 //! - `--pid`: the process the Processes page selects, as "Show in Processes" does;
 //! - `--tray`: start hidden, watching from the tray (the start at sign-in);
 //! - `--demo`: fictitious data; reads nothing, changes nothing, no tray, no watch.
@@ -64,6 +64,7 @@ fn main() {
         .and_then(|p| shell::PAGES.iter().map(|(key, _)| *key).find(|key| *key == p))
         .unwrap_or("processes");
     let focus_pid = arg(&args, "--pid").and_then(|pid| pid.parse::<u32>().ok());
+    let focus_item = arg(&args, "--item").map(|s| s.to_string());
 
     // One native window per session: a second copy asks the first to show itself and quits.
     if !demo && !platform::claim_window() {
@@ -124,7 +125,14 @@ fn main() {
         gpui_kit::init(cx);
         pages::processes::bind_keys(cx);
         ui::grid::bind_keys(cx);
-        let bounds = Bounds::centered(None, size(px(1280.), px(820.)), cx);
+        let (width, height) = arg(&args, "--size")
+            .and_then(|s| {
+                s.split_once('x')
+                    .map(|(w, h)| (w.parse::<f32>().ok(), h.parse::<f32>().ok()))
+            })
+            .and_then(|(w, h)| Some((w?.max(860.), h?.max(560.))))
+            .unwrap_or((1280., 820.));
+        let bounds = Bounds::centered(None, size(px(width), px(height)), cx);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             // The native title bar: snap layouts, caption buttons, the system menu and their
@@ -148,6 +156,7 @@ fn main() {
         let start = shell::Options {
             page,
             focus_pid,
+            focus_item,
             demo,
             choice,
             mica,

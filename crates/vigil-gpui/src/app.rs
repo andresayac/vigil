@@ -39,6 +39,8 @@ pub struct Report {
     pub watch_tick: u64,
     /// What the Findings page should select when it opens.
     pub focus: Option<Focus>,
+    /// The last progress event of a Defender scan Vigil started.
+    pub defender_scan: Option<Value>,
 }
 
 impl Report {

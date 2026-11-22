@@ -102,6 +102,8 @@ pub struct Options {
     pub page: &'static str,
     /// `--pid`: the process the Processes page selects first.
     pub focus_pid: Option<u32>,
+    /// `--item`: the finding the Findings page selects first.
+    pub focus_item: Option<String>,
     pub demo: bool,
     pub choice: Choice,
     pub mica: bool,
@@ -143,16 +145,18 @@ impl Shell {
         let Options {
             page,
             focus_pid,
+            focus_item,
             demo,
             choice,
             mica,
             watcher,
         } = options;
         let live = Live::start(demo, cx);
-        // Windows changed its theme: GPUI has just painted the title bar in Windows' theme, so
-        // apply Vigil's again (it may be a fixed light or dark), with Windows' accent colour.
         let report = cx.new(|cx| {
-            let mut report = Report::default();
+            let mut report = Report {
+                focus: focus_item.map(crate::app::Focus::Item),
+                ..Report::default()
+            };
             if demo {
                 report.analysis = Some(crate::data::demo("analysis"));
                 report.loaded = true;
@@ -161,6 +165,26 @@ impl Shell {
             }
             report
         });
+        // Defender scans Vigil started report their progress (the Protection page shows it).
+        if core.is_some() {
+            let (tx, mut rx) = futures::channel::mpsc::unbounded::<serde_json::Value>();
+            vigil_core::protection::start_monitor(move |event| {
+                let _ = tx.unbounded_send(serde_json::to_value(event).unwrap_or_default());
+            });
+            let target = report.clone();
+            cx.spawn(async move |_, cx| {
+                use futures::StreamExt as _;
+                while let Some(event) = rx.next().await {
+                    target.update(cx, |r, cx| {
+                        r.defender_scan = Some(event);
+                        cx.notify();
+                    });
+                }
+            })
+            .detach();
+        }
+        // Windows changed its theme: GPUI has just painted the title bar in Windows' theme, so
+        // apply Vigil's again (it may be a fixed light or dark), with Windows' accent colour.
         let subscriptions = vec![
             cx.observe_window_appearance(window, |this, window, cx| {
                 this.apply_theme(window, cx);
@@ -271,6 +295,21 @@ impl Shell {
             "quarantine" => Some(cx.new(|cx| QuarantinePage::new(core, elevated, window, cx)).into()),
             "history" => Some(cx.new(|cx| HistoryPage::new(core, elevated, window, cx)).into()),
             "overview" => Some(cx.new(|cx| crate::pages::overview::OverviewPage::new(ctx, cx)).into()),
+            "findings" => Some(
+                cx.new(|cx| crate::pages::findings::FindingsPage::new(ctx, window, cx))
+                    .into(),
+            ),
+            "accounts" => Some(cx.new(|cx| crate::pages::accounts::AccountsPage::new(ctx, cx)).into()),
+            "firewall" => Some(
+                cx.new(|cx| crate::pages::firewall::FirewallPage::new(ctx, window, cx))
+                    .into(),
+            ),
+            "posture" => Some(cx.new(|cx| crate::pages::posture::PosturePage::new(ctx, cx)).into()),
+            "protection" => Some(
+                cx.new(|cx| crate::pages::protection::ProtectionPage::new(ctx, cx))
+                    .into(),
+            ),
+            "alerts" => Some(cx.new(|cx| crate::pages::alerts::AlertsPage::new(ctx, cx)).into()),
             _ => None,
         };
         let active = is_live(page);

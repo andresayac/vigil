@@ -456,6 +456,74 @@ pub fn frame(tk: &crate::theme::Tokens) -> Div {
         .overflow_hidden()
 }
 
+/// A new grid's state: no index selection (rows are selected by key), columns fixed in place.
+pub fn new_state<V: 'static>(
+    empty: String,
+    cols: Vec<GridCol>,
+    window: &mut Window,
+    cx: &mut Context<V>,
+) -> gpui_kit::Entity<TableState<Grid>> {
+    use gpui_kit::AppContext as _;
+    cx.new(|cx| {
+        TableState::new(Grid::new(empty, cols), window, cx)
+            .row_selectable(false)
+            .col_movable(false)
+    })
+}
+
+/// Replaces a grid's rows (the selection stays while its key is there).
+pub fn fill(table: &gpui_kit::Entity<TableState<Grid>>, rows: Vec<GridRow>, cx: &mut App) {
+    table.update(cx, |table, cx| {
+        table.delegate_mut().set_rows(rows);
+        table.refresh(cx);
+        cx.notify();
+    });
+}
+
+/// The key of the selected row.
+pub fn selected(table: &gpui_kit::Entity<TableState<Grid>>, cx: &App) -> Option<String> {
+    table.read(cx).delegate().selected_row().map(|r| r.key.clone())
+}
+
+/// Selects the row with `key` and scrolls it into view.
+pub fn select(table: &gpui_kit::Entity<TableState<Grid>>, key: Option<String>, cx: &mut App) {
+    table.update(cx, |table, cx| {
+        let some = key.is_some();
+        table.delegate_mut().selected = key;
+        if some && let Some(ix) = table.delegate_mut().step(0) {
+            table.scroll_to_row(ix, cx);
+        }
+        cx.notify();
+    });
+}
+
+/// A search box state that filters `table` as the person types.
+pub fn search<V: 'static>(
+    table: &gpui_kit::Entity<TableState<Grid>>,
+    placeholder: String,
+    window: &mut Window,
+    cx: &mut Context<V>,
+) -> (
+    gpui_kit::Entity<gpui_kit::component::input::InputState>,
+    gpui_kit::Subscription,
+) {
+    use gpui_kit::AppContext as _;
+    use gpui_kit::component::input::{InputEvent, InputState};
+    let input = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
+    let table = table.clone();
+    let subscription = cx.subscribe(&input, move |_, input, event: &InputEvent, cx| {
+        if matches!(event, InputEvent::Change) {
+            let text = input.read(cx).value().to_string();
+            table.update(cx, |table, cx| {
+                table.delegate_mut().set_filter(&text);
+                table.refresh(cx);
+                cx.notify();
+            });
+        }
+    });
+    (input, subscription)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

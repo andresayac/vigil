@@ -293,18 +293,19 @@ pub fn link(
     label: impl Into<SharedString>,
     on_click: impl Fn(&mut Window, &mut App) + 'static,
     tk: &Tokens,
-) -> BaseButton {
+) -> Div {
     let label = label.into();
     let accent = tk.accent;
-    BaseButton::new(id)
-        .role(Role::Link)
-        .self_start()
-        .accessibility_label(label.clone())
-        .text_size(px(13.))
-        .text_color(accent)
-        .hover(|s| s.underline())
-        .on_click(move |_, window, cx| on_click(window, cx))
-        .child(label)
+    div().flex().flex_none().child(
+        BaseButton::new(id)
+            .role(Role::Link)
+            .accessibility_label(label.clone())
+            .text_size(px(13.))
+            .text_color(accent)
+            .hover(|s| s.underline())
+            .on_click(move |_, window, cx| on_click(window, cx))
+            .child(label),
+    )
 }
 
 /// A small label in a border (a badge in a list row).

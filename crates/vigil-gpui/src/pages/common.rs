@@ -175,6 +175,24 @@ pub fn when(iso: &str) -> String {
     if time.is_empty() { day } else { format!("{day} {time}") }
 }
 
+/// A day ("2026-03-04") without its year, for chart labels ("3/4", "4/3", "04/03").
+pub fn day_short(date: &str) -> String {
+    let mut parts = date.get(..10).unwrap_or(date).split('-');
+    let (Some(_), Some(m), Some(d)) = (parts.next(), parts.next(), parts.next()) else {
+        return date.to_string();
+    };
+    match crate::i18n::language() {
+        "en" | "zh" => format!("{}/{}", m.trim_start_matches('0'), d.trim_start_matches('0')),
+        "es" => format!("{}/{}", d.trim_start_matches('0'), m.trim_start_matches('0')),
+        _ => format!("{d}/{m}"),
+    }
+}
+
+/// A moment in milliseconds as a local date and time.
+pub fn when_ms(ms: i64) -> String {
+    when(&crate::ui::kit::local_iso(ms))
+}
+
 #[cfg(test)]
 mod tests {
     use super::when;
