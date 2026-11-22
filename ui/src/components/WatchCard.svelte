@@ -2,13 +2,14 @@
   import * as api from "../lib/api";
   import { t } from "../lib/i18n/index.svelte";
   import type { WatchAlert } from "../lib/types";
-  import { clock, setStatus, severityLook, since, stateLine, watch } from "../lib/watch.svelte";
+  import { autoScanLine, clock, openAutoReport, setStatus, severityLook, since, stateLine, watch } from "../lib/watch.svelte";
 
   // Overview's "Background watch" card: whether Vigil is watching, when it last looked, and the newest alerts.
   let { onpage }: { onpage: (page: string) => void } = $props();
 
   const status = $derived(watch.status);
   const recent = $derived((status?.recent ?? []).slice(0, 4));
+  const autoLine = $derived(autoScanLine(status));
   let busy = $state(false);
 
   async function toggle(): Promise<void> {
@@ -27,7 +28,8 @@
 
   async function open(alert: WatchAlert): Promise<void> {
     if (!alert.read) setStatus(await api.watchMarkRead([alert.id]));
-    onpage(alert.target === "alerts" ? "alerts" : alert.target);
+    if (alert.kind === "scan") await openAutoReport(onpage);
+    else onpage(alert.target === "alerts" ? "alerts" : alert.target);
   }
 </script>
 
@@ -56,6 +58,10 @@
       </div>
     {:else}
       <p class="muted">{t("watch.nothingYet")}</p>
+    {/if}
+    {#if autoLine}
+      <p class="faint">{autoLine}{#if status.autoScan.partial && status.autoScan.status === "done"}{" " + t("watch.auto.partial")}{/if}
+        {#if status.autoScan.report}<button class="link" onclick={() => void openAutoReport(onpage)}>{t("watch.auto.open")}</button>{/if}</p>
     {/if}
     {#if !status.tasksWatched}<p class="faint">{t("watch.tasksNeedAdmin")}</p>{/if}
     {#if status.logsHidden?.length}<p class="faint">{t("watch.logsNeedAdmin", { logs: status.logsHidden.join(", ") })}</p>{/if}

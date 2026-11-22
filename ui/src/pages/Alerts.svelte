@@ -3,7 +3,7 @@
   import * as api from "../lib/api";
   import { t, type Key } from "../lib/i18n/index.svelte";
   import type { AlertKind, WatchAlert } from "../lib/types";
-  import { KIND_LABEL, TARGET_LABEL, clock, setStatus, severityLook, since, stateLine, watch } from "../lib/watch.svelte";
+  import { KIND_LABEL, TARGET_LABEL, autoScanLine, clock, openAutoReport, setStatus, severityLook, since, stateLine, watch } from "../lib/watch.svelte";
 
   // Every change the background watch noticed, newest first. Titles and details are plain text from Rust
   // (they quote names and command lines read from the computer).
@@ -28,7 +28,7 @@
     return api.subscribe(api.onWatch(() => void load()));
   });
 
-  const KINDS: AlertKind[] = ["startup", "service", "task", "security", "port", "hook", "driver", "hosts", "event"];
+  const KINDS: AlertKind[] = ["startup", "service", "task", "security", "port", "hook", "driver", "hosts", "event", "scan"];
   const SEVERITY: Record<WatchAlert["severity"], Key> = {
     info: "alerts.severity.info", warning: "alerts.severity.warning", critical: "alerts.severity.critical",
   };
@@ -52,7 +52,8 @@
       setStatus(await api.watchMarkRead([alert.id]));
       await load();
     }
-    if (TARGET_LABEL[alert.target]) onpage(alert.target);
+    if (alert.kind === "scan") await openAutoReport(onpage);
+    else if (TARGET_LABEL[alert.target]) onpage(alert.target);
   }
 
   async function notifications(pause: boolean): Promise<void> {
@@ -87,6 +88,11 @@
       {#if !status.tasksWatched}<span class="faint">{t("watch.tasksNeedAdmin")}</span>{/if}
     </div>
     {#if status.error}<p class="warn-text selectable">{status.error}</p>{/if}
+    {@const auto = autoScanLine(status)}
+    {#if auto}
+      <p class="faint auto">{auto}{#if status.autoScan.partial && status.autoScan.status === "done"}{" " + t("watch.auto.partial")}{/if}
+        {#if status.autoScan.report}<button class="link" onclick={() => void openAutoReport(onpage)}>{t("watch.auto.open")}</button>{/if}</p>
+    {/if}
   {/if}
 
   <div class="bar">
@@ -176,4 +182,6 @@
   .empty { padding: 30px; text-align: center; margin: 0; }
   .warn-text { color: var(--warn); margin: 0; font-size: 12px; }
   .danger { color: var(--bad); }
+  .auto { margin: 0; }
+  .link { border: 0; background: transparent; padding: 0 0 0 6px; color: var(--accent); min-height: 24px; }
 </style>

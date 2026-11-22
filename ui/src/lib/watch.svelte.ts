@@ -2,6 +2,7 @@
 // and Settings, kept current by the "watch" events Rust sends after every check.
 import * as api from "./api";
 import { locale, t, type Key } from "./i18n/index.svelte";
+import { report } from "./report.svelte";
 import type { AlertKind, WatchAlert, WatchStatus } from "./types";
 
 export const watch = $state<{ status: WatchStatus | null }>({ status: null });
@@ -34,6 +35,7 @@ export const KIND_LABEL: Record<AlertKind, Key> = {
   driver: "watch.kind.driver",
   hosts: "watch.kind.hosts",
   event: "watch.kind.event",
+  scan: "watch.kind.scan",
   watch: "watch.kind.watch",
 };
 
@@ -47,6 +49,7 @@ export const TARGET_LABEL: Record<string, Key> = {
   posture: "page.posture",
   firewall: "page.firewall",
   accounts: "page.accounts",
+  findings: "page.findings",
 };
 
 /** The glyph and state colour of a severity (info is plain ink). */
@@ -78,6 +81,38 @@ export function clock(ms: number): string {
   const date = new Date(ms);
   const today = new Date().toDateString() === date.toDateString();
   return new Intl.DateTimeFormat(locale(), today ? { timeStyle: "short" } : { dateStyle: "medium", timeStyle: "short" }).format(date);
+}
+
+/** Opens the report of the last automatic scan and shows its findings. */
+export async function openAutoReport(onpage: (page: string) => void): Promise<void> {
+  const opened = await api.watchOpenAutoReport();
+  if (opened) report.analysis = opened;
+  onpage("findings");
+}
+
+const WAIT_REASON: Record<string, Key> = {
+  battery: "watch.auto.reason.battery",
+  fullscreen: "watch.auto.reason.fullscreen",
+  busy: "watch.auto.reason.busy",
+  other: "watch.auto.reason.other",
+};
+
+/** One line about automatic scans (Overview card, Alerts page); "" when they are off and never ran. */
+export function autoScanLine(status: WatchStatus | null): string {
+  const auto = status?.autoScan;
+  if (!auto) return "";
+  if (auto.running || auto.status === "running") return t("watch.auto.running");
+  if (auto.status.startsWith("postponed:")) {
+    const reason = WAIT_REASON[auto.status.slice("postponed:".length)] ?? "watch.auto.reason.other";
+    return t("watch.auto.waiting", { reason: t(reason) });
+  }
+  const when = auto.lastRun ? since(auto.lastRun) : "";
+  if (auto.status === "failed") return t("watch.auto.failed", { when });
+  if (auto.status === "interrupted") return t("watch.auto.interrupted");
+  if (auto.status === "done") {
+    return auto.found ? t("watch.auto.found", { when, count: auto.found }) : t("watch.auto.clean", { when });
+  }
+  return auto.schedule !== "off" && auto.next ? t("watch.auto.next", { when: clock(auto.next) }) : "";
 }
 
 /** The one-line state of the watch (sidebar, Overview, Alerts page). */

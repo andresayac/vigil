@@ -301,6 +301,10 @@ export async function watchPauseNotifications(pause: boolean): Promise<WatchStat
 export async function watchConfigure(settings: WatchSettings): Promise<WatchStatus> {
   return inApp ? call<WatchStatus>("watch_configure", { settings }) : mock.watchConfigure(settings);
 }
+/** Opens the report of the last automatic scan as the current report (null: there is none). */
+export async function watchOpenAutoReport(): Promise<Analysis | null> {
+  return inApp ? call<Analysis | null>("watch_open_auto_report") : mock.analysis();
+}
 /** Start with Windows: confirmed natively and journaled by Rust (undo from History). */
 export async function setAutostart(on: boolean): Promise<ActionOutcome> {
   if (inApp) return runAction({ kind: "tuning", op: "vigil.autostart", params: { on } });

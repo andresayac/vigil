@@ -624,6 +624,7 @@ pub(crate) fn collect_autoruns() -> Vec<Value> {
     }
     entries.extend(crate::hooks::collect_autoruns());
     entries.extend(crate::persist::collect_autoruns());
+    entries.extend(crate::com::collect().0);
     entries
 }
 
@@ -1170,6 +1171,9 @@ pub(crate) fn collect_sysconfig() -> Value {
     cfg.insert("persistence".into(), crate::persist::collect_config());
     cfg.insert("firewall_rules".into(), crate::firewall::collect());
     cfg.insert(crate::svcsec::SECTION.into(), crate::svcsec::collect(is_admin()));
+    cfg.insert(crate::secrets::SECTION.into(), crate::secrets::collect(is_admin()));
+    cfg.insert("com_classes".into(), crate::com::collect().1);
+    cfg.insert("remote_agents".into(), crate::rmm::collect_config());
     Value::Object(cfg)
 }
 
@@ -1501,6 +1505,13 @@ pub(crate) fn collect_all(workdir: &Path, days: u32, progress: &dyn Fn(&str), ca
     }
     if let Some(config) = data.get("sysconfig") {
         notes.extend(list(config.at(crate::svcsec::SECTION).at("notes")).iter().cloned());
+        notes.extend(list(config.at(crate::secrets::SECTION).at("notes")).iter().cloned());
+        if truthy(config.at("com_classes").at("capped")) {
+            notes.push(json!({
+                "area": tr!("COM classes"),
+                "message": tr!("only the first {0} per-user COM classes were checked", crate::com::MAX_KEYS),
+            }));
+        }
     }
     let section = |name: &str, key: &str| -> Value {
         match data.get(name) {

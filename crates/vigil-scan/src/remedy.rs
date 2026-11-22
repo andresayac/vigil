@@ -200,6 +200,18 @@ fn role_steps(role: &Role) -> Vec<Step> {
                         .danger(),
                 ];
             }
+            if source == "com_hijack"
+                && let Some(key) = &key
+            {
+                return vec![
+                    Step::new(tr!("Remove the per-user registration"))
+                        .command(format!("Remove-Item -LiteralPath {} -Recurse", shown(&ps_quote(Some(key)))))
+                        .note(tr!(
+                            "Windows then uses the class it registers for the whole computer again. Export the key with regedit first if you are not sure."
+                        ))
+                        .danger(),
+                ];
+            }
             if source == "ifeo_debugger"
                 && let Some(key) = &key
             {
@@ -310,6 +322,37 @@ fn config_steps(topic: &str) -> Vec<Step> {
         "service_weak_permissions" => vec![Step::new(tr!("Update the program, or ask its maker for a fix")).note(tr!(
             "Until then, remove write access for Users, Authenticated Users and Everyone on what is listed here (Properties → Security), or put the service's path in quotes in its ImagePath value."
         ))],
+        "rmm_agent" => vec![
+            Step::new(tr!("If you did not install it, uninstall it")).note(tr!(
+                "Use Installed programs (or Settings → Apps), then change the passwords of the accounts used on this computer. If your IT provider installed it, ask them before removing it."
+            )),
+            Step::new(tr!("If you use it, keep unattended access off when you do not need it"))
+                .note(tr!("Or protect it with a long password and two-factor sign-in in the agent's own settings.")),
+        ],
+        "com_scriptlet" => vec![Step::new(tr!("Remove the per-user registration")).note(tr!(
+            "Delete the key shown here with regedit (export it first): Windows then uses the class it registers for the whole computer again."
+        ))],
+        "secret_shared" | "secret_registry" => vec![
+            Step::new(tr!("Change the password it holds")).note(tr!(
+                "Assume it is known: change that password (or the account's) first, then remove it from where it is kept."
+            )),
+            Step::new(tr!("Remove the stored password")).admin(true).note(tr!(
+                "Delete the setup or Group Policy file shown here, or clear the registry value; turn off automatic sign-in in Windows if it is on."
+            )),
+        ],
+        "secret_history" => vec![
+            Step::new(tr!("Change the passwords and keys that were typed")).note(tr!(
+                "Replace each password or key found at the lines shown here, since programs you run can read this file."
+            )),
+            Step::new(tr!("Delete those lines from the history")).note(tr!(
+                "Open the file shown here in Notepad and delete the lines, or delete the whole file; PowerShell starts a new one."
+            )),
+        ],
+        "secret_file" | "secret_private_key" | "secret_password_list" => vec![
+            Step::new(tr!("Move the secret to a safe place")).note(tr!(
+                "Keep passwords in a password manager or Windows Credential Manager, protect private keys with a passphrase, and replace any key or token that may have been copied."
+            )),
+        ],
         "task_hidden_from_scheduler" => vec![Step::new(tr!("Delete the hidden task with administrator rights"))
             .admin(true)
             .note(tr!(

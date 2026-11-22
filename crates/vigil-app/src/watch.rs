@@ -127,6 +127,12 @@ pub struct WatchSettings {
     pub notify_events: bool,
     /// The "Vigil keeps watching in the tray" notice was shown once.
     pub tray_notice_shown: bool,
+    /// Automatic scans (`crate::autoscan`): "off", "daily" or "weekly".
+    pub scan_schedule: String,
+    /// The day of a weekly scan: 1 = Monday … 7 = Sunday.
+    pub scan_day: u8,
+    /// The time of the scan, "HH:MM" in local time.
+    pub scan_time: String,
 }
 
 impl Default for WatchSettings {
@@ -142,6 +148,9 @@ impl Default for WatchSettings {
             notify_hooks: true,
             notify_events: true,
             tray_notice_shown: false,
+            scan_schedule: "off".into(),
+            scan_day: 1,
+            scan_time: "12:30".into(),
         }
     }
 }
@@ -171,21 +180,21 @@ pub struct Alert {
     pub id: u64,
     /// When it was noticed (ms since 1970).
     pub time: i64,
-    /// "startup", "service", "task", "security", "port", "hook", "driver", "hosts", "event", or
-    /// "watch" (about the watch itself).
+    /// "startup", "service", "task", "security", "port", "hook", "driver", "hosts", "event", "scan"
+    /// (an automatic scan found something), or "watch" (about the watch itself).
     pub kind: String,
     pub title: String,
     pub detail: String,
     /// "info", "warning" or "critical".
     pub severity: String,
     /// The page that shows it: "startup", "services", "tasks", "network", "protection", "posture",
-    /// "firewall", "accounts" or "alerts".
+    /// "firewall", "accounts", "findings" (the report of an automatic scan) or "alerts".
     pub target: String,
     #[serde(default)]
     pub read: bool,
 }
 
-fn alert(kind: &str, severity: &str, target: &str, title: String, detail: String) -> Alert {
+pub(crate) fn alert(kind: &str, severity: &str, target: &str, title: String, detail: String) -> Alert {
     Alert {
         id: 0,
         time: 0,
@@ -1562,6 +1571,8 @@ pub struct WatchFile {
     /// The language the user chose last, in any copy of Vigil ("es"); "" before one was chosen.
     /// Alerts, notifications and the tray menu use it.
     pub language: String,
+    /// Automatic scans: the schedule's arming time, the last run and its result.
+    pub auto_scan: crate::autoscan::AutoScanState,
 }
 
 /// Drops the oldest alerts beyond [`MAX_ALERTS`], never an unread critical one (up to [`MAX_KEPT`]).
@@ -1907,6 +1918,8 @@ pub struct Status {
     pub recent: Vec<Alert>,
     /// The last check failed to save its state (shown, never fatal).
     pub error: Option<String>,
+    /// Automatic scans: the schedule, the next and the last one.
+    pub auto_scan: crate::autoscan::AutoScanView,
 }
 
 pub struct Watcher {
@@ -1921,6 +1934,12 @@ pub struct Watcher {
     seen: Mutex<Option<(u64, i64)>>,
     /// Logs the last check could not read.
     logs_hidden: Mutex<Vec<String>>,
+    /// Where automatic scans save their reports (the data folder's `scans`); unset: no scans.
+    pub(crate) scans: OnceLock<PathBuf>,
+    /// An automatic scan runs in this copy.
+    pub(crate) scan_running: AtomicBool,
+    /// Battery, full screen and processor use, for automatic scans.
+    pub(crate) conditions: crate::autoscan::SystemConditions,
 }
 
 impl Watcher {
@@ -1935,7 +1954,15 @@ impl Watcher {
             limiter: Mutex::new(RateLimit::new(TOAST_GAP_MS)),
             seen: Mutex::new(None),
             logs_hidden: Mutex::new(Vec::new()),
+            scans: OnceLock::new(),
+            scan_running: AtomicBool::new(false),
+            conditions: crate::autoscan::SystemConditions::default(),
         }
+    }
+
+    /// Lets this copy run automatic scans, saving their reports in `dir`.
+    pub fn set_scans_dir(&self, dir: PathBuf) {
+        let _ = self.scans.set(dir);
     }
 
     pub fn owner(&self) -> bool {
@@ -1983,6 +2010,11 @@ impl Watcher {
             },
             autostart: crate::autostart::enabled(),
             recent: file.alerts.iter().take(5).cloned().collect(),
+            auto_scan: crate::autoscan::view(
+                &file.settings,
+                &file.auto_scan,
+                self.scan_running.load(Ordering::Acquire),
+            ),
             settings: file.settings,
             error: self.error.lock().unwrap_or_else(PoisonError::into_inner).clone(),
         }
@@ -2064,7 +2096,7 @@ impl Watcher {
         }
     }
 
-    fn run(&self, app: &AppHandle) {
+    fn run(self: &Arc<Self>, app: &AppHandle) {
         crate::notify::init_thread();
         let mut next_check = Instant::now();
         loop {
@@ -2085,6 +2117,8 @@ impl Watcher {
                             crate::notify::show(app, &title, &body, &target);
                         }
                     });
+                    // An automatic scan, when one is due (it runs on its own thread).
+                    crate::autoscan::tick(self, app);
                     self.state_changed();
                     let _ = app.emit("watch", self.status());
                     crate::tray::refresh(app);

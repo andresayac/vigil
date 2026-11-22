@@ -7,11 +7,15 @@ const minutes = (n: number) => now - n * 60_000;
 let settings: WatchSettings = {
   watching: true, closeToTray: true, notifyStartup: true, notifyServices: true, notifyTasks: true, notifySecurity: true,
   notifyPorts: true, notifyHooks: true, notifyEvents: true, trayNoticeShown: true,
+  scanSchedule: "daily", scanDay: 1, scanTime: "12:30",
 };
 let pausedUntil: number | null = null;
 let autostart = false;
 
 let alerts: WatchAlert[] = [
+  { id: 10, time: minutes(1), kind: "scan", severity: "critical", target: "findings", read: false,
+    title: "New since the last scan: winupd.exe",
+    detail: "It is not signed, lives in a user folder and starts at sign-in." },
   { id: 9, time: minutes(1), kind: "hook", severity: "critical", target: "alerts", read: false,
     title: "A program now starts instead of sethc.exe",
     detail: "Windows runs C:\\Windows\\System32\\cmd.exe whenever sethc.exe is started (in HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options)." },
@@ -40,6 +44,10 @@ export function watchStatus(): WatchStatus {
     owner: true, watching: settings.watching, lastCheck: now - 25_000, unread: alerts.filter((a) => !a.read).length,
     notifyPausedUntil: pausedUntil && pausedUntil > Date.now() ? pausedUntil : null, tasksWatched: false, logsHidden: ["Security"], settings: { ...settings },
     autostart, recent: alerts.slice(0, 5), error: null,
+    autoScan: {
+      schedule: settings.scanSchedule, next: now + 20 * 3_600_000, lastRun: minutes(2), status: "done", found: 1,
+      partial: true, report: true, running: false,
+    },
   };
 }
 

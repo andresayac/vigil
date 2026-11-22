@@ -188,6 +188,21 @@ pub async fn report_open(app: AppHandle) -> CmdResult<Option<Value>> {
     Ok(st.lock().analysis_json.clone())
 }
 
+/// This copy's scans folder (automatic scans save their reports there too).
+pub(crate) fn scans_folder(app: &AppHandle) -> PathBuf {
+    state(app).scans_dir()
+}
+
+/// Opens a report whose path Rust chose and checked itself (the last automatic scan) and makes it
+/// the current report.
+pub(crate) async fn open_report_file(app: &AppHandle, path: PathBuf) -> CmdResult<Option<Value>> {
+    let loaded = blocking(move || vigil_scan::pipeline::load_report(&path).map(|a| (a, path))).await?;
+    let (analysis, path) = loaded.map_err(|e| format!("Could not open the report: {e}"))?;
+    let st = state(app);
+    st.set_analysis(analysis, Some(path));
+    Ok(st.lock().analysis_json.clone())
+}
+
 #[tauri::command]
 pub async fn report_export_html(app: AppHandle) -> CmdResult<Option<String>> {
     let (html, started) = {

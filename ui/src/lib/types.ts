@@ -761,11 +761,35 @@ export interface WatchSettings {
   /** Events read from the Windows logs. */
   notifyEvents: boolean;
   trayNoticeShown: boolean;
+  /** Automatic scans (local rules only). */
+  scanSchedule: "off" | "daily" | "weekly";
+  /** The day of a weekly scan: 1 = Monday … 7 = Sunday. */
+  scanDay: number;
+  /** "HH:MM", local time. */
+  scanTime: string;
 }
 
-/** "watch": about the background watch itself (its saved state was damaged and reset). */
+/** Automatic scans, as the watch reports them. */
+export interface AutoScanStatus {
+  schedule: "off" | "daily" | "weekly";
+  /** The next scheduled time (ms since 1970). */
+  next: number | null;
+  lastRun: number | null;
+  /** "", "running", "done", "failed", "interrupted" or "postponed:battery|fullscreen|busy|other". */
+  status: string;
+  /** Findings of the last automatic scan that deserve a look (new or changed, Remove or Disable). */
+  found: number;
+  /** The last automatic scan ran without administrator rights. */
+  partial: boolean;
+  /** Its report can be opened. */
+  report: boolean;
+  running: boolean;
+}
+
+/** "watch": about the background watch itself (its saved state was damaged and reset); "scan": an
+ *  automatic scan found something. */
 export type AlertKind =
-  | "startup" | "service" | "task" | "security" | "port" | "hook" | "driver" | "hosts" | "event" | "watch";
+  | "startup" | "service" | "task" | "security" | "port" | "hook" | "driver" | "hosts" | "event" | "scan" | "watch";
 
 /** One change the background watch noticed. Title and detail are plain text from Rust. */
 export interface WatchAlert {
@@ -799,6 +823,7 @@ export interface WatchStatus {
   /** The newest alerts (at most five). */
   recent: WatchAlert[];
   error: string | null;
+  autoScan: AutoScanStatus;
 }
 
 // ---------------------------------------------------------------- reliability (event logs, read-only)

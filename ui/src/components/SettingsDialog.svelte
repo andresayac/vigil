@@ -1,7 +1,7 @@
 <script lang="ts">
   import * as api from "../lib/api";
   import { isLocalAddress, providerName, staysLocal } from "../lib/ai";
-  import { LANGUAGES, t, type Key } from "../lib/i18n/index.svelte";
+  import { LANGUAGES, locale, t, type Key } from "../lib/i18n/index.svelte";
   import type { AiProvider, Effort, SecretChanges, Settings, WatchSettings } from "../lib/types";
   import { refreshWatch, setStatus } from "../lib/watch.svelte";
   import Modal from "./Modal.svelte";
@@ -26,6 +26,14 @@
   let saving = $state(false);
   /** Background watch: saved with the other settings; Start with Windows runs at once (it changes Windows). */
   let watchDraft = $state<WatchSettings | null>(null);
+  /** Monday … Sunday in the UI language (1 = Monday, as Rust counts them). */
+  const weekdays = $derived(
+    [1, 2, 3, 4, 5, 6, 7].map((day) => ({
+      day,
+      // 2024-01-01 was a Monday.
+      name: new Intl.DateTimeFormat(locale(), { weekday: "long" }).format(new Date(2024, 0, day)),
+    })),
+  );
   let autostart = $state(false);
   let autostartBusy = $state(false);
   let autostartError = $state("");
@@ -325,6 +333,24 @@
               <label><input type="checkbox" bind:checked={watchDraft.notifyEvents} />{t("settings.watch.notifyEvents")}</label>
             </div>
           </div>
+          <div class="setting">
+            <div class="text"><span>{t("settings.watch.scan")}</span><span class="faint">{t("settings.watch.scanNote")}</span></div>
+            <div class="when">
+              <select bind:value={watchDraft.scanSchedule} aria-label={t("settings.watch.scan")}>
+                <option value="off">{t("settings.watch.scanOff")}</option>
+                <option value="daily">{t("settings.watch.scanDaily")}</option>
+                <option value="weekly">{t("settings.watch.scanWeekly")}</option>
+              </select>
+              {#if watchDraft.scanSchedule === "weekly"}
+                <select bind:value={watchDraft.scanDay} aria-label={t("settings.watch.scanDay")}>
+                  {#each weekdays as w (w.day)}<option value={w.day}>{w.name}</option>{/each}
+                </select>
+              {/if}
+              {#if watchDraft.scanSchedule !== "off"}
+                <input type="time" bind:value={watchDraft.scanTime} aria-label={t("settings.watch.scanTime")} />
+              {/if}
+            </div>
+          </div>
         </div>
       </section>
     {/if}
@@ -374,6 +400,8 @@
   .error { color: var(--bad); margin: 0; }
   .notify { align-items: flex-start; }
   .checks { display: flex; flex-direction: column; gap: 6px; flex: none; min-width: 220px; }
+  .when { display: flex; flex-direction: column; gap: 6px; flex: none; min-width: 220px; }
+  .when select, .when input { min-width: 220px; }
   .checks label { display: flex; align-items: center; gap: 8px; font-size: 13px; }
   p.faint { margin: 4px 0 0; font-size: 12px; }
 </style>

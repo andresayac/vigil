@@ -7,6 +7,7 @@
 
 mod accounts;
 mod alerts;
+mod autoscan;
 mod autostart;
 mod cli;
 mod commands;
@@ -138,6 +139,8 @@ pub fn run() {
     let watcher = std::sync::Arc::new(watch::Watcher::new(store, state.admin, owner));
     // A state saved before a language was ever chosen takes this copy's language.
     watcher.adopt_language(vigil_i18n::language());
+    // Automatic scans save their reports with this copy's other scans.
+    watcher.set_scans_dir(state.root.join("scans"));
     let result = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(state)
@@ -215,8 +218,17 @@ pub fn run() {
             alerts::watch_set_watching,
             alerts::watch_pause_notifications,
             alerts::watch_configure,
+            alerts::watch_open_auto_report,
         ])
-        .run(tauri::generate_context!());
+        .build(tauri::generate_context!())
+        .map(|app| {
+            app.run(|_, event| {
+                if let tauri::RunEvent::Exit = event {
+                    // A running automatic scan stops at its next step.
+                    autoscan::cancel();
+                }
+            });
+        });
     if let Err(error) = result {
         eprintln!("Vigil could not start: {error}");
         std::process::exit(1);

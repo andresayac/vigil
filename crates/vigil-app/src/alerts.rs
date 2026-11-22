@@ -64,6 +64,24 @@ pub fn watch_pause_notifications(app: AppHandle, pause: bool) -> Status {
     app.state::<Arc<Watcher>>().status()
 }
 
+/// Opens the report of the last automatic scan and makes it the current report (`None`: there is
+/// none). The path comes from the watch's own state and is checked first: the right name, directly
+/// in this copy's scans folder or the user's, a plain file in a plain folder.
+#[tauri::command]
+pub async fn watch_open_auto_report(app: AppHandle) -> CmdResult<Option<serde_json::Value>> {
+    let report = app.state::<Arc<Watcher>>().store.load().auto_scan.report;
+    if report.is_empty() {
+        return Ok(None);
+    }
+    let path = std::path::PathBuf::from(report);
+    let mut folders = vec![crate::commands::scans_folder(&app)];
+    if let Some(local) = std::env::var_os("LOCALAPPDATA").filter(|v| !v.is_empty()) {
+        folders.push(std::path::PathBuf::from(local).join("Vigil").join("scans"));
+    }
+    crate::autoscan::check_report_path(&path, &folders)?;
+    crate::commands::open_report_file(&app, path).await
+}
+
 /// Saves the Background watch settings.
 #[tauri::command]
 pub fn watch_configure(app: AppHandle, settings: WatchSettings) -> CmdResult<Status> {

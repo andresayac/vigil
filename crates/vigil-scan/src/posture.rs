@@ -1642,7 +1642,9 @@ pub(crate) fn config_items(raw: &Value, aux: &Aux) -> (Vec<Item>, Map<String, Va
     items.extend(hook_items(raw, other_av_active));
     items.extend(crate::svcsec::items(raw));
     items.extend(persistence_items(raw));
+    items.extend(crate::secrets::items(raw));
     items.extend(firewall_rule_items(raw));
+    items.extend(crate::rmm::items(raw));
 
     // --- pathless processes and findings from the registry
     let odd: BTreeSet<&String> = aux
