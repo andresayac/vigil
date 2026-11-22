@@ -27,7 +27,7 @@ jobs:
   # The runner is an administrator without a UAC prompt: the setup is really installed, checked,
   # upgraded over itself and over the last 1.x release, and uninstalled.
   installer:
-    if: github.event_name == 'push'
+    # Runs on pull requests too, so a setup that does not install never reaches main.
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
