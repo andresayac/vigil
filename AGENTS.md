@@ -32,7 +32,8 @@ automation: debug builds start without elevation unless `--elevate` is passed.
 crates/
   vigil-i18n/     translations of the core's texts: `tr!` with English templates, catalogs in locales/
   vigil-sys/      Windows access for live data: processes (NtQuerySystemInformation), PDH metrics, DXGI GPUs,
-                  connections, elevation, process inspector, services
+                  connections, elevation, process inspector, services, startup entries, scheduled tasks,
+                  firewall rules
   vigil-scan/     the read-only scan: PowerShell collectors (embedded ps1), rules, analysis, posture, report
                   (JSON + HTML), the AI agent (providers), anonymization, VirusTotal
   vigil-actions/  the action engine: every change to the system goes through execute() / undo(); guards,
@@ -40,7 +41,8 @@ crates/
   vigil-maint/    maintenance data and primitives: volumes, cleanup targets, space analysis, hardware,
                   tuning state, insights
   vigil-app/      the Tauri app: commands for the UI, live sampler, planner (actions per finding),
-                  requests (UI request -> trusted ActionSpec), native confirmation, settings, secrets
+                  requests (UI request -> trusted ActionSpec), native confirmation, settings, secrets,
+                  background watch (tray, notifications, alerts)
 ui/               Svelte 5 + TypeScript: pages, components, lib/api.ts (the only module that calls Rust)
 docs/             ARCHITECTURE.md (how it fits together), NATIVE-UI.md (the Windows 11 look)
 ```

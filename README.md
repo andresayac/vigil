@@ -97,6 +97,7 @@ A server on this computer (`localhost`) keeps everything here: nothing leaves th
 |---|---|---|
 | **Overview** | The verdict on the whole computer, one sliver per finding, what to do first, the security state (Defender, firewall, UAC, Remote Desktop, updates) and coverage notes. | Start a scan, jump to findings. |
 | **Findings** | Every item with its verdict (Remove, Disable, Review, No signals, Safe, Trusted), local score, type and presence. The side panel explains what it is, why it was flagged, the signals, where it appears, file and signature details, command lines and network activity. | The actions that make sense for that item, ignore it, copy its details. |
+| **Alerts** | What the background watch noticed (below): new startup entries, new or changed services, new scheduled tasks, security settings turned off and remote-access ports opened to the network, with how much each one matters. | Open the page where the item lives, mark alerts as read, clear them. |
 | **Firewall rules** | The domain, private and public profiles and every Windows Defender Firewall rule, read live, with the rules that deserve a look marked: open to any address on public networks for every program, opening a remote-access port (Remote Desktop, SSH, VNC, WinRM, Telnet), allowing a program in a folder any user can write to, or left over for a program that no longer exists. | Turn a rule on or off, delete it (its full definition is saved first; rules of the groups Windows defines can only be turned off), open the program's location or Windows Defender Firewall. |
 | **Quarantine** | Files moved to quarantine. | Restore to the original location, delete permanently. |
 | **History** | Every change made from the app, with what was saved to undo it. | Undo a step, or a whole "Remove completely". |
@@ -105,8 +106,26 @@ A server on this computer (`localhost`) keeps everything here: nothing leaves th
 | **Network** | Live TCP/UDP endpoints with the service behind each port, highlighting internet addresses and remote-access ports open to the network. | End the owning process, block its network access. |
 | **Services** | Every Windows service with its state, startup type, process ID, account and command line; for services that share a host (svchost), the DLL that really runs. Windows components and essential services carry a lock. | Start, stop, restart, change the startup type (undo it from History), open the file location or the Services console. |
 | **Optimize** | Apps that start with Windows and services that start at boot, power plans, memory, Game Mode and GPU scheduling, GPU per app, hibernation file, drives. | Turn startup entries off, start services only when needed, switch or add power plans, free standby memory, choose the GPU for an app, turn hibernation off, TRIM or defragment a drive. |
+| **Startup apps** | What starts at sign-in, read live: the Run and RunOnce keys of your account and of every user, and both Startup folders, with publisher, signature and status. Entries that run through rundll32, script hosts or PowerShell name the host that runs them. | Turn an entry on or off with the switch Windows uses (undo it from History), open its location. |
+| **Scheduled tasks** | Every task in Task Scheduler, read live, with its triggers in plain words, last and next run, last result, account and rights, and the program each action starts. Tasks that run a file with full rights from a folder any user can change are marked, as are tasks whose program no longer exists. Tasks under `\Microsoft\` can be hidden. | Enable, disable, delete (the task definition is saved first, so History can recreate it), run now, open Task Scheduler. Windows tasks under `\Microsoft\` are shown but never changed. |
 | **Storage** | Every drive's free space, junk files by place and a space analyzer (treemap, biggest folders, largest files). | Clean the selected places, clean up the component store, send large files to the Recycle Bin. |
 | **System** | Windows, processor, memory modules, graphics adapters and driver age, disks with health, temperature and wear, board, BIOS, page file, battery, and concrete findings such as memory running below its rated speed. | Copy a plain-text summary. |
+
+### Background watch
+
+Once a minute Vigil compares a small fingerprint of the computer with the last one: startup entries, services (new
+ones, a start type changed to automatic, a changed program path), scheduled tasks outside `\Microsoft\`, the security
+switches (Defender real-time protection, the three firewall profiles, UAC, Remote Desktop) and remote-access ports
+(SSH, Telnet, Remote Desktop, VNC, TeamViewer, WinRM) listening on every network interface. Each difference becomes an
+alert on the **Alerts** page and, if you want, a Windows notification. The fingerprint is saved, so changes made while
+Vigil was closed are reported at the next start. The watch only reads; it tells you about a change, it does not block
+it.
+
+In **Settings → Background watch** you choose what shows a notification, whether closing the window keeps Vigil
+watching from its icon in the notification area, and whether Vigil starts in the tray when you sign in (an entry in
+your account's startup apps, without administrator rights; you confirm it and History can undo it). From the tray icon
+you can open Vigil, start a scan, pause notifications for an hour or pause the watch. Only one copy of Vigil watches
+at a time.
 
 ### Actions
 
@@ -117,7 +136,8 @@ What is offered depends on how the item is present on the system:
   subscriptions removed) and moves its file to quarantine. Every step except ending processes can be undone.
 - Processes: end. Services: stop, disable, delete (the registry key is exported first); from the Services page also
   start, restart and change the startup type. Drivers: disable.
-- Scheduled tasks: disable, delete (the task definition is saved first).
+- Scheduled tasks: disable, delete (the task definition is saved first); from the Scheduled tasks page also
+  enable and run now.
 - Startup entries: switch off with the same switch Task Manager uses, or delete (the value is saved first). Also
   debugger hooks (Image File Execution Options), Winlogon values, AppInit DLLs, logon scripts.
 - Files: quarantine, block network access with Windows Firewall rules, scan with Microsoft Defender.
@@ -181,6 +201,8 @@ it too.
 - Without administrator rights the security log, Defender exclusions and the command lines of system processes are
   not visible.
 - It inspects what runs and starts; it does not scan every file on disk (use Defender's full scan for that).
+- The background watch notices changes about a minute after they happen and cannot stop them. Without
+  administrator rights it cannot read scheduled tasks, so it watches them only while Vigil runs elevated.
 - Rootkits that hide from Windows itself can hide from Vigil too.
 
 ## Security notes
