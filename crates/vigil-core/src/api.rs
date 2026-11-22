@@ -81,7 +81,7 @@ pub fn scan_collect(
         Err(problem) => (None, Some(problem)),
     };
     let meta = |key: &str| analysis.meta.get(key).and_then(Value::as_str).unwrap_or("").to_string();
-    let redactor = vigil_scan::privacy::Redactor::new(&meta("user"), &meta("computer"), redact);
+    let redactor = vigil_scan::privacy::Redactor::for_this_computer(&meta("user"), &meta("computer"), redact);
     let pending_items: Vec<_> = analysis.items.iter().filter(|i| !i.trusted).collect();
     let preview: Vec<Value> = pending_items
         .iter()
@@ -169,7 +169,7 @@ pub fn scan_cancel(st: &AppState) {
 /// The page sends `Request::Finding { item_id, index }`; Rust plans them again before anything runs.
 pub fn plan_actions(st: &AppState, item_id: &str) -> Vec<Value> {
     let inner = st.lock();
-    let analysis = inner.analysis_json.as_ref();
+    let analysis = inner.actionable();
     requests::find_item(analysis, item_id)
         .map(|item| planner::plan_actions(item, requests::scan_started(analysis)))
         .unwrap_or_default()
@@ -444,11 +444,26 @@ pub fn open_auto_report(st: &AppState, watcher: &crate::watch::Watcher) -> Resul
         return Ok(None);
     }
     let path = PathBuf::from(report);
-    let mut folders = vec![st.scans_dir()];
+    let own = st.scans_dir();
+    let mut folders = vec![own.clone()];
     if let Some(local) = std::env::var_os("LOCALAPPDATA").filter(|v| !v.is_empty()) {
         folders.push(PathBuf::from(local).join("Vigil").join("scans"));
     }
     crate::autoscan::check_report_path(&path, &folders)?;
-    st.open_report(&path)?;
-    Ok(st.lock().analysis_json.clone())
+    // An elevated copy reads a report the standard-user tray copy wrote in a folder any program of
+    // this user can write to: it may look, but nothing is planned from it (a planted report could
+    // mark a security product "remove"). Its own folder (Administrators only) is trusted.
+    let trusted = !st.admin || crate::autoscan::inside(&path, &own);
+    let analysis = vigil_scan::pipeline::load_report(&path).map_err(|e| format!("Could not open the report: {e}"))?;
+    if trusted {
+        st.set_analysis(analysis, Some(path));
+    } else {
+        st.set_analysis_untrusted(analysis, path);
+    }
+    let mut json = st.lock().analysis_json.clone();
+    // The page says why this report offers no actions.
+    if let (false, Some(Value::Object(map))) = (trusted, json.as_mut()) {
+        map.insert("viewOnly".into(), Value::Bool(true));
+    }
+    Ok(json)
 }

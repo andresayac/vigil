@@ -1014,6 +1014,8 @@ impl Render for FindingsPage {
         let tk = *tokens(cx);
         let report = self.ctx.report.read(cx);
         let has_report = report.analysis.is_some();
+        // A report the tray copy saved where any program can change it: shown to read only.
+        let view_only = report.analysis.as_ref().is_some_and(|a| a.b("viewOnly"));
         let all: Vec<Value> = report
             .analysis
             .as_ref()
@@ -1210,6 +1212,15 @@ impl Render for FindingsPage {
                     .child(div().flex_1())
                     .child(div().w(px(320.)).child(ui::search_box(&self.search, &tk))),
             )
+            .when(view_only, |this| {
+                this.child(ui::info_bar(
+                    "fi-view-only",
+                    ui::Severity::Warning,
+                    t("findings.viewOnly"),
+                    None,
+                    &tk,
+                ))
+            })
             .child(chips)
             .child(body)
     }

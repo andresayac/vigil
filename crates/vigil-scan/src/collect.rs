@@ -163,7 +163,88 @@ pub(crate) enum ChildError {
     Cancelled,
 }
 
-/// Runs a command with an optional stdin text, a timeout and cancellation (the child is killed).
+/// How long the pipe readers may take to finish once the child has exited or been killed. A
+/// grandchild that kept the pipes open (and escaped the job) cannot hold the caller forever.
+const READER_GRACE: Duration = Duration::from_secs(10);
+
+/// A Windows job object holding a child and everything it starts. Ending it (or dropping it, as
+/// the job kills its processes when its last handle closes) ends the whole tree: a `.cmd` shim
+/// that starts `node`, which starts the real agent, is stopped as one.
+struct ProcessTree {
+    #[cfg(windows)]
+    job: Option<windows::Win32::Foundation::HANDLE>,
+}
+
+impl ProcessTree {
+    #[cfg(windows)]
+    fn adopt(child: &std::process::Child) -> Self {
+        use std::os::windows::io::AsRawHandle;
+        use windows::Win32::Foundation::{CloseHandle, HANDLE};
+        use windows::Win32::System::JobObjects::{
+            AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation, SetInformationJobObject,
+        };
+        // SAFETY: an unnamed job with default security; the handle is owned by the returned value.
+        let Ok(job) = (unsafe { CreateJobObjectW(None, None) }) else {
+            return Self { job: None };
+        };
+        let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        // SAFETY: `limits` is a valid JOBOBJECT_EXTENDED_LIMIT_INFORMATION of the size passed.
+        let set = unsafe {
+            SetInformationJobObject(
+                job,
+                JobObjectExtendedLimitInformation,
+                std::ptr::from_ref(&limits).cast(),
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            )
+        };
+        // SAFETY: the child's process handle stays valid while `child` is alive (it is borrowed).
+        let assigned = set.is_ok() && unsafe { AssignProcessToJobObject(job, HANDLE(child.as_raw_handle())) }.is_ok();
+        if !assigned {
+            // SAFETY: `job` came from CreateJobObjectW above and is closed once.
+            unsafe {
+                let _ = CloseHandle(job);
+            }
+            return Self { job: None };
+        }
+        Self { job: Some(job) }
+    }
+
+    #[cfg(not(windows))]
+    fn adopt(_: &std::process::Child) -> Self {
+        Self {}
+    }
+
+    /// Ends every process in the tree.
+    fn kill(&self) {
+        #[cfg(windows)]
+        if let Some(job) = self.job {
+            // SAFETY: `job` is the open job handle this value owns.
+            unsafe {
+                let _ = windows::Win32::System::JobObjects::TerminateJobObject(job, 1);
+            }
+        }
+    }
+}
+
+impl Drop for ProcessTree {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        if let Some(job) = self.job.take() {
+            // SAFETY: closes the job handle this value owns, once; KILL_ON_JOB_CLOSE ends any process
+            // of the tree that is still running.
+            unsafe {
+                let _ = windows::Win32::Foundation::CloseHandle(job);
+            }
+        }
+    }
+}
+
+/// Runs a command with an optional stdin text, a timeout and cancellation. The child and every
+/// process it starts run in one job: on timeout or cancellation the whole tree is ended, and once
+/// the child exits anything it left running is ended too. Reading its output never waits more
+/// than [`READER_GRACE`] after that.
 pub(crate) fn run_child(
     mut command: Command,
     input: Option<&str>,
@@ -176,6 +257,7 @@ pub(crate) fn run_child(
         .stderr(Stdio::piped());
     hide_window(&mut command);
     let mut child = command.spawn().map_err(ChildError::Spawn)?;
+    let tree = ProcessTree::adopt(&child);
     let writer = input.zip(child.stdin.take()).map(|(text, mut stdin)| {
         let text = text.to_string();
         std::thread::spawn(move || {
@@ -184,13 +266,15 @@ pub(crate) fn run_child(
         })
     });
     let read_all = |pipe: Option<Box<dyn Read + Send>>| {
+        let (send, receive) = mpsc::channel();
         std::thread::spawn(move || {
             let mut out = Vec::new();
             if let Some(mut pipe) = pipe {
                 let _ = pipe.read_to_end(&mut out);
             }
-            out
-        })
+            let _ = send.send(out);
+        });
+        receive
     };
     let stdout = read_all(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
     let stderr = read_all(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
@@ -210,14 +294,19 @@ pub(crate) fn run_child(
         std::thread::sleep(Duration::from_millis(50));
     };
     if status.is_err() {
+        tree.kill();
         let _ = child.kill();
         let _ = child.wait();
     }
+    // Whatever the child left running (it exited, or was ended above) goes with the job, so the
+    // pipes close and the readers finish.
+    tree.kill();
+    drop(tree);
     if let Some(writer) = writer {
         let _ = writer.join();
     }
-    let stdout = stdout.join().unwrap_or_default();
-    let stderr = stderr.join().unwrap_or_default();
+    let stdout = stdout.recv_timeout(READER_GRACE).unwrap_or_default();
+    let stderr = stderr.recv_timeout(READER_GRACE).unwrap_or_default();
     let status = status?;
     Ok(Finished {
         code: status.code(),
@@ -624,6 +713,7 @@ pub(crate) fn collect_autoruns() -> Vec<Value> {
     }
     entries.extend(crate::hooks::collect_autoruns());
     entries.extend(crate::persist::collect_autoruns());
+    entries.extend(crate::amsi::collect_autoruns());
     entries.extend(crate::com::collect().0);
     entries
 }
@@ -1172,8 +1262,11 @@ pub(crate) fn collect_sysconfig() -> Value {
     cfg.insert("firewall_rules".into(), crate::firewall::collect());
     cfg.insert(crate::svcsec::SECTION.into(), crate::svcsec::collect(is_admin()));
     cfg.insert(crate::secrets::SECTION.into(), crate::secrets::collect(is_admin()));
+    cfg.insert(crate::netcfg::SECTION.into(), crate::netcfg::collect());
     cfg.insert("com_classes".into(), crate::com::collect().1);
     cfg.insert("remote_agents".into(), crate::rmm::collect_config());
+    cfg.insert(crate::certs::SECTION.into(), crate::certs::collect());
+    cfg.insert(crate::amsi::SECTION.into(), crate::amsi::collect_config());
     Value::Object(cfg)
 }
 
@@ -1506,6 +1599,7 @@ pub(crate) fn collect_all(workdir: &Path, days: u32, progress: &dyn Fn(&str), ca
     if let Some(config) = data.get("sysconfig") {
         notes.extend(list(config.at(crate::svcsec::SECTION).at("notes")).iter().cloned());
         notes.extend(list(config.at(crate::secrets::SECTION).at("notes")).iter().cloned());
+        notes.extend(list(config.at(crate::certs::SECTION).at("notes")).iter().cloned());
         if truthy(config.at("com_classes").at("capped")) {
             notes.push(json!({
                 "area": tr!("COM classes"),
@@ -1567,6 +1661,62 @@ pub(crate) fn collect_all(workdir: &Path, days: u32, progress: &dyn Fn(&str), ca
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `cmd /c "start /b ping -n 47 … & …"`: cmd starts a grandchild that inherits the output
+    /// pipes and outlives it. Without the job, reading the output would wait ~47 s.
+    #[cfg(windows)]
+    fn shim_with_grandchild(tail: &str) -> Command {
+        let system =
+            PathBuf::from(std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into())).join("System32");
+        let mut command = Command::new(system.join("cmd.exe"));
+        command.args([
+            "/d",
+            "/c",
+            &format!(
+                "start /b {} -n 47 127.0.0.1 >nul & {tail}",
+                system.join("PING.EXE").display()
+            ),
+        ]);
+        command
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn cancelling_ends_the_whole_process_tree() {
+        let cancel = std::sync::Arc::new(AtomicBool::new(false));
+        let flag = std::sync::Arc::clone(&cancel);
+        let stopper = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(800));
+            flag.store(true, Ordering::Relaxed);
+        });
+        let started = Instant::now();
+        let ping = shim_with_grandchild("ping -n 47 127.0.0.1 >nul");
+        let result = run_child(ping, None, Duration::from_secs(120), &cancel);
+        let _ = stopper.join();
+        assert!(matches!(result, Err(ChildError::Cancelled)));
+        assert!(started.elapsed() < Duration::from_secs(8), "{:?}", started.elapsed());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_grandchild_left_running_does_not_hold_the_output() {
+        let started = Instant::now();
+        let shim = shim_with_grandchild("echo finished");
+        let finished = run_child(shim, None, Duration::from_secs(120), &AtomicBool::new(false));
+        assert!(started.elapsed() < Duration::from_secs(8), "{:?}", started.elapsed());
+        let finished = finished.ok().expect("ran");
+        assert!(String::from_utf8_lossy(&finished.stdout).contains("finished"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_timeout_ends_the_whole_process_tree() {
+        let started = Instant::now();
+        let shim = shim_with_grandchild("ping -n 47 127.0.0.1 >nul");
+        let result = run_child(shim, None, Duration::from_millis(800), &AtomicBool::new(false));
+        assert!(matches!(result, Err(ChildError::Timeout)));
+        assert!(started.elapsed() < Duration::from_secs(8), "{:?}", started.elapsed());
+    }
     use crate::lenient::{is_false, obj};
 
     #[test]

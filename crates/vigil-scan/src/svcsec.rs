@@ -27,8 +27,14 @@ use crate::rules::{in_windows_dir, is_microsoft_signed, is_user_writable};
 /// Where collection stores its results in the inventory.
 pub(crate) const SECTION: &str = "service_security";
 
+/// Whether a signer name belongs to a security vendor in [`SECURITY_VENDORS`].
+pub(crate) fn is_security_vendor(signer: &str) -> bool {
+    let signer = signer.to_lowercase();
+    SECURITY_VENDORS.iter().any(|v| signer.contains(v))
+}
+
 /// Publishers whose programs hide their own services or tasks on purpose (tamper protection).
-const SECURITY_VENDORS: &[&str] = &[
+pub(crate) const SECURITY_VENDORS: &[&str] = &[
     "avast",
     "avg technologies",
     "bitdefender",

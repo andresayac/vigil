@@ -40,6 +40,9 @@ const MAX_SCAN_ALERTS: usize = 8;
 pub const BUSY_PERCENT: u64 = 60;
 /// A processor sample older than this is not used (the next check takes a fresh one).
 const SAMPLE_AGE: std::time::Duration = std::time::Duration::from_secs(180);
+/// Two processor readings closer together than this say nothing (the counters move in clock
+/// ticks): a reading taken sooner after the previous one keeps the older one as the baseline.
+const MIN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
 /// A last run further than this in the future (the clock was set back a long way) is ignored.
 const FUTURE_SLACK_HOURS: i64 = 26;
 /// Temporary files of a scan that was stopped are deleted after this long.
@@ -272,8 +275,14 @@ pub fn cpu_percent(before: (u64, u64), after: (u64, u64)) -> Option<u64> {
 /// The real conditions of this computer.
 #[derive(Default)]
 pub struct SystemConditions {
-    /// The last processor sample and when it was taken.
-    sample: Mutex<Option<(Instant, (u64, u64))>>,
+    cpu: Mutex<CpuState>,
+}
+
+/// The last processor reading, and the use measured over the interval that ended with it.
+#[derive(Default)]
+struct CpuState {
+    last: Option<(Instant, (u64, u64))>,
+    recent: Option<u64>,
 }
 
 fn filetime(time: windows::Win32::Foundation::FILETIME) -> u64 {
@@ -291,21 +300,40 @@ fn system_times() -> Option<(u64, u64)> {
 }
 
 impl SystemConditions {
-    /// Takes a processor sample (each watch check, so a due scan has a recent one to compare with).
+    /// Takes a processor reading. Each watch check calls this once, so the use is measured over
+    /// about a minute (since the previous check), not over the moment of the check.
     pub fn sample(&self) {
-        let _ = self.measure();
+        if let Some(times) = system_times() {
+            self.record(Instant::now(), times);
+        }
     }
 
-    /// The use since the previous sample, and keeps the new one.
-    fn measure(&self) -> Option<u64> {
-        let now = system_times()?;
-        let mut sample = self.sample.lock().unwrap_or_else(PoisonError::into_inner);
-        let previous = sample.replace((Instant::now(), now));
-        let (taken, before) = previous?;
-        if taken.elapsed() > SAMPLE_AGE {
+    /// Keeps a reading taken at `at`. The use over the interval since the previous reading (at
+    /// least [`MIN_INTERVAL`] and at most [`SAMPLE_AGE`] earlier) becomes the recent use.
+    fn record(&self, at: Instant, times: (u64, u64)) {
+        let mut cpu = self.cpu.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some((taken, before)) = cpu.last {
+            let gap = at.saturating_duration_since(taken);
+            if gap < MIN_INTERVAL {
+                return;
+            }
+            cpu.recent = if gap <= SAMPLE_AGE {
+                cpu_percent(before, times)
+            } else {
+                None
+            };
+        }
+        cpu.last = Some((at, times));
+    }
+
+    /// The use measured by the latest readings, while they are recent (as of `now`).
+    fn recent_use(&self, now: Instant) -> Option<u64> {
+        let cpu = self.cpu.lock().unwrap_or_else(PoisonError::into_inner);
+        let (taken, _) = cpu.last?;
+        if now.saturating_duration_since(taken) > SAMPLE_AGE {
             return None;
         }
-        cpu_percent(before, now)
+        cpu.recent
     }
 }
 
@@ -333,8 +361,9 @@ impl Conditions for SystemConditions {
     }
 
     fn busy(&self) -> bool {
-        // No recent sample yet: wait for the next check, which will have one.
-        self.measure().is_none_or(|percent| percent >= BUSY_PERCENT)
+        // No measurement yet (the first check): wait for the next check, which will have one.
+        self.recent_use(Instant::now())
+            .is_none_or(|percent| percent >= BUSY_PERCENT)
     }
 }
 
@@ -422,6 +451,13 @@ pub fn prune(dir: &Path, keep: usize) -> usize {
 /// The report of an automatic scan may be opened from `path`: the right name, directly in one of
 /// `folders`, a plain file in a plain folder. The path comes from Vigil's own saved state, which
 /// lives in the user's folder, so it is checked before an elevated window reads it.
+/// Whether `path` sits directly in `folder` (compared without case, as Windows does).
+pub fn inside(path: &Path, folder: &Path) -> bool {
+    let parent = path.parent().unwrap_or(Path::new(""));
+    parent.to_string_lossy().to_lowercase().trim_end_matches('\\')
+        == folder.to_string_lossy().to_lowercase().trim_end_matches('\\')
+}
+
 pub fn check_report_path(path: &Path, folders: &[PathBuf]) -> Result<(), String> {
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     let parent = path.parent().unwrap_or(Path::new(""));
@@ -1024,6 +1060,51 @@ mod tests {
         // A first measurement has nothing to compare with: busy, wait for the next check.
         let conditions = SystemConditions::default();
         assert!(conditions.busy());
+    }
+
+    #[test]
+    fn processor_use_is_measured_between_checks() {
+        let start = Instant::now();
+        let minute = std::time::Duration::from_secs(60);
+        let conditions = SystemConditions::default();
+        conditions.record(start, (0, 0));
+        assert_eq!(conditions.recent_use(start), None, "one reading measures nothing");
+        // A minute later: 6000 ticks, 1500 idle: 75 % used.
+        conditions.record(start + minute, (1500, 6000));
+        assert_eq!(conditions.recent_use(start + minute), Some(75));
+        // A reading moments later (the old bug: the tick and the check milliseconds apart) keeps
+        // the minute-long measurement instead of comparing two nearly equal readings.
+        conditions.record(start + minute + std::time::Duration::from_millis(5), (1500, 6000));
+        assert_eq!(conditions.recent_use(start + minute), Some(75));
+        // The next minute is quiet: 6000 ticks, 5400 idle: 10 %.
+        conditions.record(start + minute * 2, (6900, 12000));
+        assert_eq!(conditions.recent_use(start + minute * 2), Some(10));
+        // An old measurement no longer counts (the watch stopped for a while).
+        assert_eq!(conditions.recent_use(start + minute * 6), None);
+        // A reading after a long gap measures nothing.
+        conditions.record(start + minute * 10, (9000, 20000));
+        assert_eq!(conditions.recent_use(start + minute * 10), None);
+    }
+
+    #[test]
+    fn only_a_report_directly_in_the_folder_is_inside_it() {
+        let own = Path::new(r"C:\ProgramData\Vigil\scans");
+        assert!(inside(
+            Path::new(r"C:\ProgramData\Vigil\scans\scan-20261120-123000-auto-report.json"),
+            own
+        ));
+        assert!(inside(
+            Path::new(r"c:\programdata\vigil\SCANS\scan-20261120-123000-auto-report.json"),
+            own
+        ));
+        assert!(!inside(
+            Path::new(r"C:\Users\jdoe\AppData\Local\Vigil\scans\scan-20261120-123000-auto-report.json"),
+            own
+        ));
+        assert!(!inside(
+            Path::new(r"C:\ProgramData\Vigil\scans\x\scan-20261120-123000-auto-report.json"),
+            own
+        ));
     }
 
     #[test]

@@ -13,6 +13,7 @@ mod xml;
 
 pub mod accounts;
 pub mod apps;
+pub mod certs;
 pub mod cpusets;
 pub mod defender;
 pub mod elevation;
@@ -21,6 +22,7 @@ pub mod hooks;
 pub mod inspect;
 pub mod metrics;
 pub mod net;
+pub mod netcfg;
 pub mod posture;
 pub mod process;
 pub mod programs;

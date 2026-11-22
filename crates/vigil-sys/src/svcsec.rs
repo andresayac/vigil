@@ -1094,9 +1094,7 @@ pub fn hidden_tasks() -> HiddenTasks {
             ..HiddenTask::default()
         };
         // The definition file first (it has the account too), then the cache's Actions value.
-        if let Ok(bytes) = std::fs::read(format!("{tasks_dir}{path}"))
-            && bytes.len() < 1024 * 1024
-        {
+        if let Some(bytes) = read_at_most(&format!("{tasks_dir}{path}"), 1024 * 1024) {
             let parsed = crate::tasks::from_xml(&path, &crate::tasks::decode_task_file(&bytes));
             task.account = parsed.account.clone();
             if let Some(action) = parsed.actions.iter().find(|a| a.kind == "exec") {
@@ -1117,6 +1115,16 @@ pub fn hidden_tasks() -> HiddenTasks {
         out.tasks.push(task);
     }
     out
+}
+
+/// A file of at most `limit` bytes (`None` when it is larger or cannot be read), read without ever
+/// holding more than `limit + 1` bytes.
+fn read_at_most(path: &str, limit: u64) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let file = std::fs::File::open(path).ok()?;
+    let mut bytes = Vec::new();
+    file.take(limit + 1).read_to_end(&mut bytes).ok()?;
+    (bytes.len() as u64 <= limit).then_some(bytes)
 }
 
 #[cfg(test)]

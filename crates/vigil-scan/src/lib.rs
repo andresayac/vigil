@@ -25,7 +25,9 @@ pub mod report;
 pub mod rules;
 pub mod vt;
 
+mod amsi;
 mod analyze;
+mod certs;
 mod collect;
 mod com;
 mod engine;
@@ -34,6 +36,7 @@ mod firewall;
 mod hooks;
 mod ip;
 mod lenient;
+mod netcfg;
 mod ntpath;
 mod persist;
 mod posture;

@@ -51,6 +51,9 @@ pub enum Shape {
     AllValues,
     /// These values of every subkey, named `subkey\value`.
     Subkeys(Vec<&'static str>),
+    /// The names of the subkeys, each with an empty value (AMSI providers by CLSID, root
+    /// certificates by thumbprint: the names are what matters).
+    SubkeyNames,
 }
 
 /// One registry place the watch reads.
@@ -60,7 +63,7 @@ pub struct Source {
     pub id: String,
     /// What it is, for the alert ("ifeo", "silent_exit", "winlogon", "appinit", "appcert",
     /// "boot_execute", "lsa", "class", "profiler", "netsh", "print_monitor", "time_provider",
-    /// "exclusion").
+    /// "exclusion", "amsi", "amsi_enable", "root_cert").
     pub kind: &'static str,
     pub root: Root,
     pub path: String,
@@ -109,6 +112,33 @@ const PROFILER_NAMES: [&str; 6] = [
 const HIJACKED_CLASSES: [&str; 5] = ["ms-settings", "mscfile", "exefile", "Folder", "Launcher.SystemSettings"];
 const DEFENDER_EXCLUSIONS: &str = r"SOFTWARE\Microsoft\Windows Defender\Exclusions";
 const DEFENDER_POLICY_EXCLUSIONS: &str = r"SOFTWARE\Policies\Microsoft\Windows Defender\Exclusions";
+const AMSI_PROVIDERS: &str = r"SOFTWARE\Microsoft\AMSI\Providers";
+const AMSI_PROVIDERS_32: &str = r"SOFTWARE\WOW6432Node\Microsoft\AMSI\Providers";
+const SCRIPT_SETTINGS: &str = r"SOFTWARE\Microsoft\Windows Script\Settings";
+/// The root certificate stores (one registry key per certificate, named by its SHA-1 thumbprint):
+/// (source id, hive, key).
+pub const ROOT_STORES: [(&str, Root, &str); 4] = [
+    (
+        "root_machine",
+        Root::LocalMachine,
+        r"SOFTWARE\Microsoft\SystemCertificates\ROOT\Certificates",
+    ),
+    (
+        "root_user",
+        Root::CurrentUser,
+        r"Software\Microsoft\SystemCertificates\Root\Certificates",
+    ),
+    (
+        "root_policy",
+        Root::LocalMachine,
+        r"SOFTWARE\Policies\Microsoft\SystemCertificates\Root\Certificates",
+    ),
+    (
+        "root_enterprise",
+        Root::LocalMachine,
+        r"SOFTWARE\Microsoft\EnterpriseCertificates\Root\Certificates",
+    ),
+];
 
 /// The places the watch reads on this computer.
 pub fn default_sources() -> Vec<Source> {
@@ -226,6 +256,35 @@ pub fn default_sources() -> Vec<Source> {
             Shape::Subkeys(vec!["DllName"]),
         ),
     ];
+    // AMSI: the providers that see every script, and the switch that turns scanning off for
+    // Windows Script Host.
+    out.push(Source::new(
+        "amsi_providers",
+        "amsi",
+        Lm,
+        AMSI_PROVIDERS,
+        Shape::SubkeyNames,
+    ));
+    out.push(Source::new(
+        "amsi_providers32",
+        "amsi",
+        Lm,
+        AMSI_PROVIDERS_32,
+        Shape::SubkeyNames,
+    ));
+    for (id, root) in [("amsi_enable_user", Cu), ("amsi_enable_machine", Lm)] {
+        out.push(Source::new(
+            id,
+            "amsi_enable",
+            root,
+            SCRIPT_SETTINGS,
+            Shape::Values(vec!["AmsiEnable"]),
+        ));
+    }
+    // Root certificates: a new one lets whoever holds its key impersonate websites and programs.
+    for (id, root, path) in ROOT_STORES {
+        out.push(Source::new(id, "root_cert", root, path, Shape::SubkeyNames));
+    }
     // The 32-bit places are spelled out (WOW6432Node) and read through the 64-bit view.
     for class in HIJACKED_CLASSES {
         out.push(Source::new(
@@ -295,6 +354,11 @@ fn read_source(source: &Source) -> Option<BTreeMap<String, String>> {
                 out.insert(shown_name(&name), value);
             }
         }
+        Shape::SubkeyNames => {
+            for sub in key.subkeys()? {
+                out.insert(sub, String::new());
+            }
+        }
         Shape::Subkeys(names) => {
             for sub in key.subkeys()? {
                 let Ok(Some(child)) = Key::open(key.0, &sub, view) else {
@@ -319,6 +383,19 @@ fn shown_name(name: &str) -> String {
     } else {
         name.to_string()
     }
+}
+
+/// The DLL an AMSI provider registered under its CLSID (`HKLM\SOFTWARE\Classes\CLSID\{...}\
+/// InprocServer32`), quotes removed; "" when it cannot be read.
+pub fn amsi_provider_dll(clsid: &str) -> String {
+    let path = format!(r"SOFTWARE\Classes\CLSID\{clsid}\InprocServer32");
+    let Ok(Some(key)) = Key::open(HKEY_LOCAL_MACHINE, &path, KEY_WOW64_64KEY) else {
+        return String::new();
+    };
+    key.values()
+        .and_then(|values| values.into_iter().find(|(name, _)| name.is_empty()).map(|(_, v)| v))
+        .map(|v| v.trim().trim_matches('"').to_string())
+        .unwrap_or_default()
 }
 
 // --------------------------------------------------------------------------- drivers
@@ -391,12 +468,41 @@ fn drivers_under(root: HKEY, path: &str) -> Option<Vec<Driver>> {
 /// Whether a driver path is in the folders Windows installs drivers to (`System32\drivers`, the
 /// driver store); an empty path means the default `System32\drivers\<name>.sys`.
 pub fn standard_driver_path(path: &str) -> bool {
-    let lower = path.to_lowercase().replace('/', "\\");
-    lower.is_empty()
-        || lower.contains(r"\system32\drivers\")
-        || lower.starts_with(r"system32\drivers\")
-        || lower.contains(r"\system32\driverstore\")
-        || lower.starts_with(r"system32\driverstore\")
+    let windir = std::env::var("SystemRoot")
+        .or_else(|_| std::env::var("windir"))
+        .unwrap_or_else(|_| r"C:\Windows".into());
+    driver_path_in(path, &windir)
+}
+
+/// [`standard_driver_path`] against a given Windows folder. Only the Windows folder itself counts,
+/// written the ways ImagePath values write it (`\SystemRoot\`, relative `System32\...`,
+/// `%SystemRoot%\`, `\??\C:\Windows\`, `C:\Windows\`), followed by `System32\drivers\` or
+/// `System32\DriverStore\`. A path that merely contains those folder names somewhere else
+/// (`C:\ProgramData\x\System32\drivers\x.sys`) does not.
+fn driver_path_in(path: &str, windir: &str) -> bool {
+    let lower = path.trim().trim_matches('"').to_lowercase().replace('/', "\\");
+    if lower.is_empty() {
+        return true;
+    }
+    if lower.contains(r"\..\") || lower.contains(r"\.\") {
+        return false;
+    }
+    let windir = windir.trim_end_matches('\\').to_lowercase().replace('/', "\\");
+    let rest = if lower.starts_with(r"system32\") {
+        Some(lower.as_str())
+    } else {
+        [
+            r"\systemroot\".to_string(),
+            r"%systemroot%\".to_string(),
+            r"%windir%\".to_string(),
+            format!(r"\??\{windir}\"),
+            format!(r"\\?\{windir}\"),
+            format!(r"{windir}\"),
+        ]
+        .iter()
+        .find_map(|prefix| lower.strip_prefix(prefix.as_str()))
+    };
+    rest.is_some_and(|rest| rest.starts_with(r"system32\drivers\") || rest.starts_with(r"system32\driverstore\"))
 }
 
 // --------------------------------------------------------------------------- registry
@@ -447,6 +553,30 @@ impl Key {
             )
         };
         (status == ERROR_SUCCESS).then_some((subkey, name, data))
+    }
+
+    /// When the key was last written (Unix ms); `None` when Windows does not say.
+    pub(crate) fn last_write_ms(&self) -> Option<i64> {
+        let mut written = windows::Win32::Foundation::FILETIME::default();
+        // SAFETY: only the last-write time is requested, into a local FILETIME.
+        let status = unsafe {
+            RegQueryInfoKeyW(
+                self.0,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(&mut written),
+            )
+        };
+        let raw = (i64::from(written.dwHighDateTime) << 32) | i64::from(written.dwLowDateTime);
+        (status == ERROR_SUCCESS && raw > 0).then(|| crate::util::filetime_to_unix_ms(raw))
     }
 
     /// The names of the subkeys; `None` when they cannot be listed.
@@ -763,6 +893,38 @@ mod tests {
             r"\SystemRoot\System32\DriverStore\FileRepository\nv.inf_amd64_1\nvlddmkm.sys"
         ));
         assert!(!standard_driver_path(r"\??\C:\ProgramData\Contoso\cdrv.sys"));
+    }
+
+    #[test]
+    fn lookalike_driver_folders_are_not_standard() {
+        let windir = r"C:\Windows";
+        for good in [
+            "",
+            r"\SystemRoot\System32\drivers\ntfs.sys",
+            r"System32\drivers\x.sys",
+            r"system32\DRIVERS\x.sys",
+            r"%SystemRoot%\System32\drivers\x.sys",
+            r"%windir%\system32\drivers\x.sys",
+            r"\??\C:\Windows\System32\drivers\x.sys",
+            r"C:\Windows\System32\drivers\x.sys",
+            r"C:\WINDOWS\system32\DriverStore\FileRepository\a.inf_amd64_1\a.sys",
+            r#""\SystemRoot\System32\drivers\x.sys""#,
+        ] {
+            assert!(driver_path_in(good, windir), "{good}");
+        }
+        for bad in [
+            r"C:\ProgramData\evil\System32\drivers\x.sys",
+            r"\??\C:\ProgramData\evil\System32\drivers\x.sys",
+            r"\??\C:\Users\jdoe\System32\DriverStore\x.sys",
+            r"D:\Windows\System32\drivers\x.sys",
+            r"C:\Windows.old\System32\drivers\x.sys",
+            r"C:\Windows\Temp\System32\drivers\x.sys",
+            r"\SystemRoot\System32\drivers\..\..\Temp\x.sys",
+            r"\SystemRoot\Temp\x.sys",
+            r"\??\C:\ProgramData\Contoso\cdrv.sys",
+        ] {
+            assert!(!driver_path_in(bad, windir), "{bad}");
+        }
     }
 
     #[test]

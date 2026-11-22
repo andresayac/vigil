@@ -112,7 +112,11 @@ fn system_prompt() -> String {
     format!(
         "You are a Windows security analyst inside Vigil, a security app on the person's own computer. \
 Investigate the finding you are given: confirm or rule out that it is malicious or unwanted, using the tools \
-to check its file, signature, how it starts, what it runs, its network activity and anything related. Be \
+to check its file, signature, how it starts, what it runs, its network activity and anything related. A good \
+order: get_scan_summary for the whole picture, get_finding for this finding, get_related for what shares its \
+file, folder, signer, parent or network endpoint, then inspect_process or get_file_history (where the file came \
+from and since when it starts) and get_process_events (its crashes, detections, services, tasks and firewall \
+rules). Skip what you do not need. Be \
 precise and honest about uncertainty; say what you could not check. Write the conclusion, the evidence, the \
 suggested action and the open questions in {} (keep JSON keys and enumerated values in English).\n\n{}",
         vigil_i18n::language_name(vigil_i18n::language()),
@@ -124,7 +128,8 @@ fn user_prompt(item: &Item) -> String {
     let payload = vigil_scan::ai::item_payload(item);
     format!(
         "Investigate this finding of Vigil's latest scan (id {:?}). Its data, as the local rules saw it:\n{}\n\
-The local rules rated it \"{}\" (score {}). Use get_finding for every detail and the other tools to look further.",
+The local rules rated it \"{}\" (score {}). Use get_finding for every detail, get_related for what shares \
+something with it, and the other tools to look further.",
         item.id,
         serde_json::to_string(&payload).unwrap_or_default(),
         item.verdict,
@@ -255,9 +260,9 @@ fn run(st: &AppState, id: &str, ui: &(dyn Ui + Sync)) -> Result<Option<Investiga
         tr!("Data about this computer leaves it and is processed by this service.")
     };
     let names = if anonymize {
-        tr!("User and computer names are replaced before anything is sent.")
+        tr!("User, account, profile folder and computer names are replaced before anything is sent.")
     } else {
-        tr!("User and computer names are sent as they are.")
+        tr!("User, account and computer names are sent as they are.")
     };
     let prompt = Prompt {
         title: tr!("Investigate with AI"),
@@ -287,8 +292,10 @@ fn run(st: &AppState, id: &str, ui: &(dyn Ui + Sync)) -> Result<Option<Investiga
             .join("investigations")
             .join(format!("run-{}-{}", stamp(), std::process::id()));
         let launch = mcp_launch(&work, &report_path, anonymize);
+        // The run's configuration files go, whatever happens (an error, a cancel, a panic).
+        let _cleanup = RemoveOnDrop(work.clone());
         let progress = |call: &ToolCall| ui.progress(&format!("{} ({} B)", call.name, call.bytes));
-        let result = launch.as_ref().map_err(String::clone).and_then(|launch| {
+        launch.as_ref().map_err(String::clone).and_then(|launch| {
             std::fs::create_dir_all(&launch.work).map_err(|e| e.to_string())?;
             agent::investigate(
                 &provider,
@@ -302,10 +309,7 @@ fn run(st: &AppState, id: &str, ui: &(dyn Ui + Sync)) -> Result<Option<Investiga
                 &progress,
             )
             .map_err(|e| e.to_string())
-        });
-        // The run's configuration files go, whatever happened.
-        let _ = std::fs::remove_dir_all(&work);
-        result
+        })
     }?;
     let (verdict, confidence, conclusion, evidence, suggested_action, open_questions, guard_note) =
         validate(&item, &outcome.answer);
@@ -330,6 +334,22 @@ fn run(st: &AppState, id: &str, ui: &(dyn Ui + Sync)) -> Result<Option<Investiga
     Ok(Some(view))
 }
 
+/// Deletes a run's work folder when dropped. The agent's process tree has already been ended (it
+/// runs in a job), but its handles may close a moment later, so a few attempts are made.
+struct RemoveOnDrop(PathBuf);
+
+impl Drop for RemoveOnDrop {
+    fn drop(&mut self) {
+        for attempt in 0..5 {
+            match std::fs::remove_dir_all(&self.0) {
+                Ok(()) => return,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+                Err(_) => std::thread::sleep(std::time::Duration::from_millis(100 * (attempt + 1))),
+            }
+        }
+    }
+}
+
 /// How a local agent starts `vigil mcp` for this run: this executable, the loaded report, a call log
 /// and a work folder inside Vigil's data folder.
 fn mcp_launch(work: &Path, report: &Path, anonymize: bool) -> Result<McpLaunch, String> {
@@ -344,6 +364,16 @@ fn mcp_launch(work: &Path, report: &Path, anonymize: bool) -> Result<McpLaunch, 
     ];
     if !anonymize {
         args.push("--no-anonymize".into());
+    }
+    // The same budget the API loop has, enforced by the server the agent talks to.
+    let limits = Limits::default();
+    for (flag, value) in [
+        ("--max-calls", limits.max_calls),
+        ("--max-bytes", limits.max_total_bytes),
+        ("--max-result", limits.max_result_bytes),
+    ] {
+        args.push(flag.to_string());
+        args.push(value.to_string());
     }
     Ok(McpLaunch {
         exe,

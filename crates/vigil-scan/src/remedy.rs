@@ -288,6 +288,35 @@ fn config_steps(topic: &str) -> Vec<Step> {
         "proxy_auto_config" => {
             vec![Step::new(tr!("Remove the proxy script")).note(tr!("Settings → Network & internet → Proxy → turn off \"Use setup script\"."))]
         }
+        "dns_set_by_hand" => vec![Step::new(tr!("Let the network choose the DNS servers")).note(tr!(
+            "Settings → Network & internet → your connection → DNS server assignment → Edit → Automatic (DHCP). Keep the servers if you chose them yourself."
+        ))],
+        "dns_policy_rule" => vec![Step::new(tr!("Review the name resolution rules"))
+            .command("Get-DnsClientNrptRule")
+            .note(tr!(
+                "Remove a rule you do not recognize with Remove-DnsClientNrptRule; a company computer gets its rules from its IT department."
+            ))],
+        "doh_unknown" => vec![Step::new(tr!("Review the encrypted DNS settings")).note(tr!(
+            "Settings → Network & internet → your connection → DNS server assignment, and in the browser Settings → Privacy → Use secure DNS. A setting made by a policy shows as managed."
+        ))],
+        "winhttp_proxy" | "proxy_outside" | "proxy_local_program" => vec![
+            Step::new(tr!("Remove the proxy")).note(tr!("Settings → Network & internet → Proxy → turn off \"Use a proxy server\" and \"Use setup script\".")),
+            Step::new(tr!("Remove the proxy for Windows services"))
+                .command("netsh winhttp reset proxy")
+                .admin(true),
+        ],
+        "wpad_hosts" => vec![Step::new(tr!("Remove the wpad lines from the hosts file")).note(tr!(
+            "Open Notepad as administrator, edit C:\\Windows\\System32\\drivers\\etc\\hosts and delete the lines with wpad; turn off \"Automatically detect settings\" in Settings → Network & internet → Proxy if you do not need it."
+        ))],
+        "persistent_routes" => vec![Step::new(tr!("Review the permanent routes"))
+            .command("route print -4")
+            .note(tr!("Remove a route you do not recognize with route delete followed by its destination, as administrator."))],
+        "virtual_adapter_unknown" | "network_filter_unknown" => vec![Step::new(tr!("Find the program that installed it")).note(
+            tr!("Settings → Apps → Installed apps: uninstall it if you do not use it. Device Manager → Network adapters lists the adapter."),
+        )],
+        "name_broadcasts" => vec![Step::new(tr!("Turn off LLMNR and NetBIOS")).note(tr!(
+            "Group policy: Computer Configuration → Administrative Templates → Network → DNS Client → Turn off multicast name resolution; and in the adapter's IPv4 settings → Advanced → WINS → Disable NetBIOS over TCP/IP."
+        ))],
         "hosts" => vec![Step::new(tr!("Review the hosts file")).note(
             tr!("Open Notepad as administrator and edit C:\\Windows\\System32\\drivers\\etc\\hosts; delete the lines you do not recognize."),
         )],
@@ -353,6 +382,24 @@ fn config_steps(topic: &str) -> Vec<Step> {
                 "Keep passwords in a password manager or Windows Credential Manager, protect private keys with a passphrase, and replace any key or token that may have been copied."
             )),
         ],
+        "cert_root_known_bad" | "cert_root_imitation" | "cert_root_user" | "cert_root_unknown" | "cert_root_expired"
+        | "cert_interception" | "cert_development" => vec![Step::new(tr!("Remove the root certificate you do not need"))
+            .note(tr!(
+                "Open certmgr.msc (your account) or certlm.msc (the computer, as an administrator) → Trusted Root Certification Authorities → Certificates, compare the thumbprint shown here and delete it. A tool you still use may add it again."
+            ))],
+        "cert_publisher_self_signed" | "cert_publishers" => vec![Step::new(tr!("Remove publishers you do not recognize"))
+            .note(tr!(
+                "Open certlm.msc as an administrator (or certmgr.msc) → Trusted Publishers → Certificates and delete the ones you do not need; their programs then show the usual prompt again."
+            ))],
+        "amsi_disabled" => vec![Step::new(tr!("Turn script scanning back on"))
+            .note(tr!(
+                "Delete the AmsiEnable value shown here with regedit (or set it to 1), then run a full Microsoft Defender scan."
+            ))],
+        "powershell_policy_bypass" => vec![Step::new(tr!("Ask who set the policy, or remove it"))
+            .admin(true)
+            .note(tr!(
+                "It comes from Group Policy or a program that wrote the policy key shown here; without it, PowerShell's default execution policy applies again."
+            ))],
         "task_hidden_from_scheduler" => vec![Step::new(tr!("Delete the hidden task with administrator rights"))
             .admin(true)
             .note(tr!(

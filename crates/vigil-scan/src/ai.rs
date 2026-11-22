@@ -1422,7 +1422,7 @@ pub fn ai_analyze(
     progress: &dyn Fn(&str),
     sent_path: Option<&Path>,
 ) -> Result<(), ScanError> {
-    let redactor = Redactor::new(
+    let redactor = Redactor::for_this_computer(
         &text(analysis.meta.at("user")),
         &text(analysis.meta.at("computer")),
         redact,

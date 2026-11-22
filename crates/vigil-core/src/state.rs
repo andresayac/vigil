@@ -33,11 +33,26 @@ pub struct Inner {
     /// The report in the form the UI and the planner read (render_json).
     pub analysis_json: Option<Value>,
     pub report_path: Option<PathBuf>,
+    /// The loaded report came from a folder a standard user can write to while this copy runs
+    /// elevated (the tray copy's automatic scan): it is shown, but no action is planned or built
+    /// from it, since its findings could have been planted.
+    pub report_untrusted: bool,
     pub restore_point_done: bool,
     pub pending: Option<Pending>,
     pub cleanup: Vec<CleanupTarget>,
     pub space_files: Vec<(String, u64)>,
     pub hardware: Option<Hardware>,
+}
+
+impl Inner {
+    /// The loaded report, for planning or building actions: none when it is only to be looked at.
+    pub fn actionable(&self) -> Option<&Value> {
+        if self.report_untrusted {
+            None
+        } else {
+            self.analysis_json.as_ref()
+        }
+    }
 }
 
 pub struct AppState {
@@ -116,6 +131,13 @@ impl AppState {
         inner.analysis = Some(analysis);
         inner.analysis_json = Some(json);
         inner.report_path = path;
+        inner.report_untrusted = false;
+    }
+
+    /// Loads a report to look at only (see `Inner::report_untrusted`).
+    pub fn set_analysis_untrusted(&self, analysis: Analysis, path: PathBuf) {
+        self.set_analysis(analysis, Some(path));
+        self.lock().report_untrusted = true;
     }
 
     /// Saves the current report in place (after an action recorded on one of its findings).

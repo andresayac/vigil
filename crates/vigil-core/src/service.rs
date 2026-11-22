@@ -197,7 +197,7 @@ fn build_plan(st: &AppState, request: &Request) -> Result<Plan, String> {
         .filter_map(|t| serde_json::to_value(t).ok())
         .collect();
     let ctx = Context {
-        analysis: inner.analysis_json.as_ref(),
+        analysis: inner.actionable(),
         processes: &processes,
         cleanup: &cleanup,
         services: &services,

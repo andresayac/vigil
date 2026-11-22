@@ -43,6 +43,22 @@ impl Rx {
         self.0.as_ref()?.captures(text)
     }
 
+    /// Every match, with its position (none when the pattern did not compile).
+    pub(crate) fn matches<'t>(&self, text: &'t str) -> Vec<Match<'t>> {
+        match &self.0 {
+            Some(re) => re.find_iter(text).collect(),
+            None => Vec::new(),
+        }
+    }
+
+    /// Every match's capture groups (none when the pattern did not compile).
+    pub(crate) fn captures_all<'t>(&self, text: &'t str) -> Vec<Captures<'t>> {
+        match &self.0 {
+            Some(re) => re.captures_iter(text).collect(),
+            None => Vec::new(),
+        }
+    }
+
     pub(crate) fn find_all<'t>(&self, text: &'t str) -> Vec<&'t str> {
         match &self.0 {
             Some(re) => re.find_iter(text).map(|m| m.as_str()).collect(),
