@@ -837,18 +837,21 @@ mod tests {
         tree.junction(&link, &real);
         // The file through the junction resolves to its real path.
         let through = check_file(&link.join("f.bin")).unwrap();
+        // The temp folder may be written with short (8.3) names (CI runners: RUNNER~1); the real
+        // path is always the long form.
+        let long_file = long_path(&file);
         assert!(
-            through.real_path.eq_ignore_ascii_case(&file.to_string_lossy()),
+            through.real_path.eq_ignore_ascii_case(&long_file.to_string_lossy()),
             "{} vs {}",
             through.real_path,
-            file.display()
+            long_file.display()
         );
         assert!(
             resolved_path(&link)
                 .unwrap()
                 .to_string_lossy()
-                .eq_ignore_ascii_case(&real.to_string_lossy())
-                || resolved_path(&link).unwrap() == link,
+                .eq_ignore_ascii_case(&long_path(&real).to_string_lossy())
+                || resolved_path(&link).unwrap() == long_path(&link),
             "a junction opened without following it is the junction itself"
         );
         // A system folder reached by a short name is still refused.
