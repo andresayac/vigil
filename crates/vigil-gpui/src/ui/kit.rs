@@ -77,12 +77,6 @@ pub fn text(v: &Value) -> String {
     }
 }
 
-/// Every word of `query` (lowercase, split on spaces) is in `haystack`.
-pub fn matches(query: &str, haystack: &str) -> bool {
-    let hay = haystack.to_lowercase();
-    query.to_lowercase().split_whitespace().all(|word| hay.contains(word))
-}
-
 /// The file name of a Windows path.
 pub fn base_name(path: &str) -> &str {
     path.rsplit(['\\', '/']).next().unwrap_or(path)
@@ -783,7 +777,6 @@ mod tests {
         assert_eq!(chart_top(4.0), 6.0);
         assert_eq!(chart_top(12.0), 20.0);
         assert_eq!(day_labels(3, |i| i.to_string(), "T"), vec!["0", "1", "T"]);
-        assert!(matches("foo BAR", "the bar of foo"));
         assert_eq!(humanize("signature_age_days"), "Signature age days");
     }
 }

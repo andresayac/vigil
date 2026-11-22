@@ -4,7 +4,7 @@
 //! same native confirmation, the same action engine and the same background watch. This window
 //! only displays data and asks.
 //!
-//! `vigil-gpui [--demo] [--page KEY] [--pid PID] [--item ID] [--size WxH] [--theme system|light|dark] [--lang CODE] [--tray]`
+//! `vigil-gpui [--demo] [--page KEY] [--pid PID] [--item ID] [--size WxH] [--dialog settings|scan|run] [--theme system|light|dark] [--lang CODE] [--tray]`
 //! - `--pid`: the process the Processes page selects, as "Show in Processes" does;
 //! - `--tray`: start hidden, watching from the tray (the start at sign-in);
 //! - `--demo`: fictitious data; reads nothing, changes nothing, no tray, no watch.
@@ -13,7 +13,6 @@
 //! pane does, when the user picks it.
 
 // No console window in release builds.
-#![allow(dead_code)] // TEMPORARY: the pages still being written use the new shared pieces.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 // GPUI's derive macros name the crate `gpui`; the Kit stands in for it.
@@ -32,6 +31,7 @@ mod icons;
 mod live;
 mod pages;
 mod platform;
+mod settings_ui;
 mod shell;
 mod theme;
 mod ui;
@@ -65,6 +65,7 @@ fn main() {
         .unwrap_or("processes");
     let focus_pid = arg(&args, "--pid").and_then(|pid| pid.parse::<u32>().ok());
     let focus_item = arg(&args, "--item").map(|s| s.to_string());
+    let dialog = arg(&args, "--dialog").map(|s| s.to_string());
 
     // One native window per session: a second copy asks the first to show itself and quits.
     if !demo && !platform::claim_window() {
@@ -157,6 +158,7 @@ fn main() {
             page,
             focus_pid,
             focus_item,
+            dialog,
             demo,
             choice,
             mica,

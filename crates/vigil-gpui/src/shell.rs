@@ -6,7 +6,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
@@ -29,7 +28,7 @@ use crate::pages::quarantine::QuarantinePage;
 use crate::pages::services::ServicesPage;
 use crate::pages::startup::StartupPage;
 use crate::platform::Command;
-use crate::theme::{self, Choice, FONT_BODY, FONT_DISPLAY, Tokens, tokens};
+use crate::theme::{self, Choice, FONT_BODY, Tokens, tokens};
 use crate::ui::{self, FButton, Kind, Severity};
 use gpui_kit::base::Selectable as _;
 
@@ -104,6 +103,8 @@ pub struct Options {
     pub focus_pid: Option<u32>,
     /// `--item`: the finding the Findings page selects first.
     pub focus_item: Option<String>,
+    /// `--dialog`: a dialog to open at start (settings, scan, run), for previews.
+    pub dialog: Option<String>,
     pub demo: bool,
     pub choice: Choice,
     pub mica: bool,
@@ -146,6 +147,7 @@ impl Shell {
             page,
             focus_pid,
             focus_item,
+            dialog,
             demo,
             choice,
             mica,
@@ -217,6 +219,17 @@ impl Shell {
             .map(|w| (Severity::Warning, w));
         shell.apply_theme(window, cx);
         shell.open(page, window, cx);
+        if let Some(dialog) = dialog {
+            cx.defer_in(window, move |shell, window, cx| match dialog.as_str() {
+                "settings" => shell.open_settings(window, cx),
+                "scan" => shell.scan_dialog(window, cx),
+                "run" => {
+                    let ctx = shell.ctx(cx);
+                    crate::dialogs::run_task(ctx, window, cx);
+                }
+                _ => {}
+            });
+        }
         shell
     }
 
@@ -276,8 +289,12 @@ impl Shell {
             "processes" => {
                 let pid = self.focus_pid.take();
                 Some(
-                    cx.new(|cx| ProcessesPage::new(live, core, pid, elevated, window, cx))
-                        .into(),
+                    cx.new(|cx| {
+                        let mut page = ProcessesPage::new(live, core, pid, elevated, window, cx);
+                        page.ctx = Some(ctx);
+                        page
+                    })
+                    .into(),
                 )
             }
             "performance" => {
@@ -517,105 +534,17 @@ impl Shell {
     }
 
     fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let shell = cx.entity().downgrade();
-        let watcher = self.watcher.clone();
-        window.open_dialog(cx, move |dialog, _window, cx| {
-            let tk = *tokens(cx);
-            let current = shell.upgrade().map(|s| s.read(cx).choice).unwrap_or(Choice::System);
-            let on_theme = {
-                let shell = shell.clone();
-                move |choice: Choice, window: &mut Window, cx: &mut App| {
-                    let _ = shell.update(cx, |shell, cx| {
-                        shell.choice = choice;
-                        shell.apply_theme(window, cx);
-                    });
-                }
-            };
-            let languages = vec![
-                ("en", "English".to_string()),
-                ("es", "Español".to_string()),
-                ("fr", "Français".to_string()),
-                ("pt", "Português (Brasil)".to_string()),
-                ("zh", "简体中文".to_string()),
-            ];
-            let on_language = {
-                let shell = shell.clone();
-                move |code: &'static str, window: &mut Window, cx: &mut App| {
-                    vigil_i18n::set_language(code);
-                    let _ = shell.update(cx, |shell, cx| {
-                        let page = shell.page;
-                        shell.open(page, window, cx);
-                    });
-                    crate::platform::Tray::refresh();
-                    window.refresh();
-                }
-            };
-            let watch = watcher.as_ref().map(|w| w.settings());
-            dialog.title(t("nav.settings")).w(px(560.)).child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_3()
-                    .child(div().font_weight(FontWeight::SEMIBOLD).child(t("settings.theme")))
-                    .child(ui::segmented(
-                        "settings-theme",
-                        t("settings.theme"),
-                        vec![
-                            (Choice::System, t("settings.themeSystem")),
-                            (Choice::Light, t("settings.themeLight")),
-                            (Choice::Dark, t("settings.themeDark")),
-                        ],
-                        current,
-                        on_theme,
-                        &tk,
-                    ))
-                    .child(div().font_weight(FontWeight::SEMIBOLD).child(t("settings.language")))
-                    .child(ui::segmented(
-                        "settings-language",
-                        t("settings.language"),
-                        languages,
-                        vigil_i18n::language(),
-                        on_language,
-                        &tk,
-                    ))
-                    .when_some(watch.zip(watcher.clone()), |this, (settings, watcher)| {
-                        let watching = Arc::clone(&watcher);
-                        let tray = Arc::clone(&watcher);
-                        this.child(div().font_weight(FontWeight::SEMIBOLD).child(t("settings.watch.title")))
-                            .child(ui::toggle_switch(
-                                "settings-watching",
-                                settings.watching,
-                                !watcher.owner(),
-                                t("settings.watch.watching"),
-                                move |on, window, _| {
-                                    if watching.set_watching(Some(on)) {
-                                        watching.check_soon();
-                                    }
-                                    crate::platform::Tray::refresh();
-                                    window.refresh();
-                                },
-                                &tk,
-                            ))
-                            .child(ui::toggle_switch(
-                                "settings-tray",
-                                settings.close_to_tray,
-                                !watcher.owner(),
-                                t("settings.watch.closeTray"),
-                                move |on, window, _| {
-                                    let _ = tray.store.update(|file| file.settings.close_to_tray = on);
-                                    window.refresh();
-                                },
-                                &tk,
-                            ))
-                    })
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .text_color(tk.ink3)
-                            .child(t("gpui.settingsNote")),
-                    ),
-            )
-        });
+        let ctx = self.ctx(cx);
+        crate::settings_ui::open(ctx, window, cx);
+    }
+
+    /// Settings were saved: the theme and the language apply now (the page is drawn again in the
+    /// language).
+    pub fn apply_settings(&mut self, choice: Choice, window: &mut Window, cx: &mut Context<Self>) {
+        self.choice = choice;
+        self.apply_theme(window, cx);
+        let page = self.page;
+        self.open(page, window, cx);
     }
 
     fn more_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -863,25 +792,9 @@ impl Shell {
 impl Render for Shell {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let tk = *tokens(cx);
-        let page = self.page;
         let body = match &self.content {
             Some(view) => view.clone().into_any_element(),
-            None => div()
-                .size_full()
-                .flex()
-                .flex_col()
-                .gap_3()
-                .px(px(28.))
-                .py(px(20.))
-                .child(
-                    div()
-                        .font_family(FONT_DISPLAY)
-                        .text_size(px(28.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(t(&format!("page.{page}"))),
-                )
-                .child(div().text_color(tk.ink2).child(t("gpui.notPorted")))
-                .into_any_element(),
+            None => div().into_any_element(),
         };
         let notice = self.notice.clone().map(|(severity, text)| {
             div()

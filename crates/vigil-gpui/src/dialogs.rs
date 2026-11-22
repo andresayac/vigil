@@ -21,8 +21,8 @@ use crate::i18n::{t, tf, tn};
 use crate::icons;
 use crate::pages::common::{self, Acting, Acts};
 use crate::theme::{FONT_MONO, tokens};
+use crate::ui;
 use crate::ui::kit::{self, J as _};
-use crate::ui::{self, Severity};
 
 /// The name of a provider: "Automatic", "Off" or its own name.
 pub fn provider_name(provider: Option<&Value>, id: &str) -> String {
@@ -206,7 +206,8 @@ impl Render for ScanDialog {
 /// Opens the New scan dialog.
 pub fn scan(ctx: Ctx, window: &mut Window, cx: &mut gpui_kit::App) {
     let view = cx.new(|cx| ScanDialog::new(ctx, cx));
-    window.open_dialog(cx, move |dialog, _, _| {
+    window.open_dialog(cx, move |dialog, _, cx| {
+        let dialog = dialog.bg(crate::theme::tokens(cx).flyout);
         dialog.title(t("scan.title")).w(px(560.)).child(view.clone())
     });
 }
@@ -305,7 +306,8 @@ pub fn consent(ctx: Ctx, offer: Value, window: &mut Window, cx: &mut gpui_kit::A
     let local = offer.b("local");
     let view = cx.new(|_| Consent { offer, show: false });
     let answered = Rc::new(Cell::new(false));
-    window.open_dialog(cx, move |dialog, _, _| {
+    window.open_dialog(cx, move |dialog, _, cx| {
+        let dialog = dialog.bg(crate::theme::tokens(cx).flyout);
         let answer = |id: &'static str, send: bool, accent: bool| {
             let ctx = ctx.clone();
             let answered = Rc::clone(&answered);
@@ -483,7 +485,8 @@ pub fn run_task(ctx: Ctx, window: &mut Window, cx: &mut gpui_kit::App) {
         admin,
         acting: Acting::default(),
     });
-    window.open_dialog(cx, move |dialog, _, _| {
+    window.open_dialog(cx, move |dialog, _, cx| {
+        let dialog = dialog.bg(crate::theme::tokens(cx).flyout);
         dialog.title(t("run.title")).w(px(520.)).child(view.clone())
     });
 }
@@ -702,12 +705,8 @@ impl Render for AffinityDialog {
 /// Opens Processor affinity for a process.
 pub fn affinity(ctx: Ctx, pid: u32, created_ms: i64, name: String, window: &mut Window, cx: &mut gpui_kit::App) {
     let view = cx.new(|cx| AffinityDialog::new(ctx, pid, created_ms, name, cx));
-    window.open_dialog(cx, move |dialog, _, _| {
+    window.open_dialog(cx, move |dialog, _, cx| {
+        let dialog = dialog.bg(crate::theme::tokens(cx).flyout);
         dialog.title(t("affinity.title")).w(px(620.)).child(view.clone())
     });
-}
-
-/// An InfoBar for a page-level message.
-pub fn notice(id: &'static str, severity: Severity, text: String, tk: &crate::theme::Tokens) -> gpui_kit::AnyElement {
-    ui::info_bar(id, severity, text, None, tk).into_any_element()
 }

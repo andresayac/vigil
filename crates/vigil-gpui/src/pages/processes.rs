@@ -914,6 +914,8 @@ const PRIORITIES: [(&str, &str); 5] = [
 /// The Processes page.
 pub struct ProcessesPage {
     live: Entity<Live>,
+    /// The app, for the dialogs this page opens (Run new task, Processor affinity).
+    pub ctx: Option<crate::app::Ctx>,
     table: Entity<TableState<ProcTable>>,
     search: Entity<InputState>,
     core: Option<Arc<AppState>>,
@@ -985,6 +987,7 @@ impl ProcessesPage {
             }),
         ];
         let mut page = Self {
+            ctx: None,
             live,
             table,
             search,
@@ -1210,9 +1213,22 @@ impl ProcessesPage {
 
     /// Sends a process request through the action service (checked, confirmed natively, journaled).
     pub(crate) fn act(&mut self, op: &str, priority: Option<&str>, window: &mut Window, cx: &mut Context<Self>) {
+        if op == "run_task" {
+            if let Some(ctx) = self.ctx.clone() {
+                crate::dialogs::run_task(ctx, window, cx);
+            }
+            return;
+        }
         let Some((row, members, _)) = self.picked(cx) else {
             return;
         };
+        if op == "affinity" {
+            if let Some(ctx) = self.ctx.clone() {
+                let name = format!("{} (PID {})", row.name, row.pid);
+                crate::dialogs::affinity(ctx, row.pid, row.created_ms, name, window, cx);
+            }
+            return;
+        }
         let group = members.len() > 1 && matches!(op, "terminate" | "terminate_tree");
         let request = match op {
             "location" | "properties" | "verify" => Request::Shell {
@@ -1268,6 +1284,8 @@ impl ProcessesPage {
                     .collect();
                 items.push(PopupMenuItem::separator());
                 items.push(item(t("proc.background"), "background", None, can));
+                items.push(PopupMenuItem::separator());
+                items.push(item(t("proc.affinity"), "affinity", None, can));
                 items
             }
             "file" => vec![
@@ -1333,6 +1351,11 @@ impl ProcessesPage {
             .flex()
             .items_center()
             .gap_1()
+            .child(
+                ui::command("run-task", '\u{E7C4}', t("proc.runTask"))
+                    .disabled(busy)
+                    .on_click(cx.listener(|this, _, window, cx| this.act("run_task", None, window, cx))),
+            )
             .child(
                 ui::command("end-task", icons::END_TASK, t("proc.endTask"))
                     .disabled(!can_end)
