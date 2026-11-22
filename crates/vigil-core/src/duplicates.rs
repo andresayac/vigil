@@ -193,7 +193,9 @@ fn verified(path: &str, store: &Store) -> Result<storage::CheckedFile, ActionErr
     let file = storage::check_file(Path::new(path))
         .map_err(|e| ActionError::new(tr!("{0} changed since the search or cannot be read: {1}", path, e)))?;
     let real = normpath(&file.real_path);
-    if !real.eq_ignore_ascii_case(&normpath(path)) {
+    // Short (8.3) names are expanded first; a junction keeps its name, so a link still shows.
+    let expected = normpath(&storage::long_path(Path::new(path)).to_string_lossy());
+    if !real.eq_ignore_ascii_case(&expected) {
         return Err(ActionError::new(tr!(
             "{0} is now reached through a link ({1}); nothing was removed",
             path,

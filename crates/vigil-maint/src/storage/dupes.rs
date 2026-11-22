@@ -16,6 +16,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
+use std::os::windows::ffi::OsStrExt;
 use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -199,6 +200,33 @@ pub fn in_system_folder(path: &Path) -> bool {
 /// The real path of a file or folder: links in its folders resolved, short names (`PROGRA~1`)
 /// expanded, the case on disk. The last part is opened without following a link. `None` when it
 /// cannot be opened, or when it is on a network share.
+/// `path` with every short (8.3) name expanded to its long name, without resolving links: a
+/// folder that is a junction keeps its own name. Comparing this with the real path read through
+/// a handle tells a link on the way apart from a short name (`C:\Users\RUNNER~1\…`). Returns the
+/// path unchanged when it cannot be expanded (it no longer exists).
+pub fn long_path(path: &Path) -> PathBuf {
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+    let mut buffer = vec![0u16; 1024];
+    for _ in 0..2 {
+        // SAFETY: `wide` is NUL-terminated; `buffer` is writable for its whole length, which is
+        // passed as its size.
+        let length = unsafe {
+            windows::Win32::Storage::FileSystem::GetLongPathNameW(
+                windows::core::PCWSTR(wide.as_ptr()),
+                Some(buffer.as_mut_slice()),
+            )
+        } as usize;
+        if length == 0 {
+            return path.to_path_buf();
+        }
+        if length < buffer.len() {
+            return PathBuf::from(String::from_utf16_lossy(&buffer[..length]));
+        }
+        buffer.resize(length + 1, 0);
+    }
+    path.to_path_buf()
+}
+
 pub fn resolved_path(path: &Path) -> Option<PathBuf> {
     let handle = crate::win::open(path, READ_ATTRIBUTES, BACKUP_SEMANTICS | OPEN_REPARSE_POINT).ok()?;
     let real = crate::win::final_path_exact(handle.0)?;

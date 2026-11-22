@@ -141,7 +141,9 @@ fn recycle(params: &Value, store: &Store, _id: &str) -> Result<Outcome> {
         let real = storage::resolved_path(file)
             .map(|real| normpath(&real.to_string_lossy()))
             .ok_or_else(|| ActionError::new(tr!("{0} no longer exists", path)))?;
-        if !real.eq_ignore_ascii_case(path) {
+        // Short (8.3) names are expanded first; a junction keeps its name, so a link still shows.
+        let expected = normpath(&storage::long_path(file).to_string_lossy());
+        if !real.eq_ignore_ascii_case(&expected) {
             return Err(ActionError::new(tr!(
                 "{0} is now reached through a link ({1}); nothing was removed",
                 path,

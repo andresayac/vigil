@@ -30,7 +30,7 @@ use windows::core::PCWSTR;
 
 pub use dupes::{
     CheckedFile, DEFAULT_MIN_SIZE, DupFile, DupGroup, DupOptions, DupScan, check_file, file_sha256, find_duplicates,
-    in_other_profile, in_system_folder, resolved_path, system_folders,
+    in_other_profile, in_system_folder, long_path, resolved_path, system_folders,
 };
 pub use space::{LargeFile, Node, SpaceScan, scan_space};
 
