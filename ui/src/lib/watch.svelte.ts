@@ -30,6 +30,7 @@ export const KIND_LABEL: Record<AlertKind, Key> = {
   task: "watch.kind.task",
   security: "watch.kind.security",
   port: "watch.kind.port",
+  watch: "watch.kind.watch",
 };
 
 /** Pages an alert can open, with the name of the link. */

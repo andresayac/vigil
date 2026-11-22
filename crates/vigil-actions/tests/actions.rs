@@ -603,6 +603,20 @@ fn task_disable_delete_and_undo() {
     );
 }
 
+#[test]
+fn a_task_with_a_stored_password_is_deleted_without_undo() {
+    let fx = Fixture::new();
+    let xml = r#"<?xml version="1.0" encoding="UTF-16"?><Task><Principals><Principal id="Author"><UserId>PC-VICTIM\jdoe</UserId><LogonType>Password</LogonType></Principal></Principals><Settings><Enabled>true</Enabled></Settings></Task>"#;
+    let _runner = FakeRunner::install(&[(r"/Query", ToolResult::new(0, xml, ""))]);
+    let params = json!({"path": "\\Vendor\\", "name": "Nightly Backup"});
+    let deleted = execute(&spec("task.delete", params), &fx.store, None, "");
+    assert!(deleted.ok(), "{}", deleted.message());
+    assert!(!can_undo(&deleted), "the password is not in the definition");
+    assert!(deleted.message().contains("password"), "{}", deleted.message());
+    assert!(vigil_actions::task_stores_password(xml));
+    assert!(!vigil_actions::task_stores_password(ENABLED_TASK));
+}
+
 const DISABLED_TASK: &str =
     r#"<?xml version="1.0" encoding="UTF-16"?><Task><Settings><Enabled>false</Enabled></Settings></Task>"#;
 

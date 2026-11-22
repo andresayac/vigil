@@ -165,6 +165,12 @@ fn current() -> Option<Rc<dyn Runner>> {
     OVERRIDE.with(|slot| slot.borrow().clone())
 }
 
+/// A test replaced the runner on this thread: reads that would go to Windows directly (such as a
+/// task's definition through Task Scheduler) go through the tools instead, so the fake answers.
+pub(crate) fn faked() -> bool {
+    OVERRIDE.with(|slot| slot.borrow().is_some())
+}
+
 /// Runs a tool through the current runner (the fake one in tests).
 pub(crate) fn run(args: Vec<String>, timeout_secs: u64) -> Result<ToolResult> {
     run_with_env(&args, timeout_secs, None)

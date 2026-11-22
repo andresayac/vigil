@@ -101,7 +101,10 @@ A server on this computer (`localhost`) keeps everything here: nothing leaves th
 | **Findings** | Every item with its verdict (Remove, Disable, Review, No signals, Safe, Trusted), local score, type and presence. The side panel explains what it is, why it was flagged, the signals, where it appears, file and signature details, command lines and network activity. | The actions that make sense for that item, ignore it, copy its details. |
 | **Alerts** | What the background watch noticed (below): new startup entries, new or changed services, new scheduled tasks, security settings turned off and remote-access ports opened to the network, with how much each one matters. | Open the page where the item lives, mark alerts as read, clear them. |
 | **Protection** | Microsoft Defender, read live: whether it protects the computer (or another antivirus does, with Defender in passive mode), its switches (real-time, behavior monitoring, tamper protection, cloud protection, sample submission, potentially unwanted app blocking, network protection, controlled folder access), security intelligence and scan dates, the threat history and the exclusions, with the risky ones marked (a whole drive, a folder any program can write to, a program file type, a process excluded by name). | Quick or full scan in the background with its progress and Stop, the Microsoft Defender Offline scan, update security intelligence, turn a switch on (never off), remove an exclusion, remove the active threats, open Windows Security. |
+| **Security posture** | The Windows settings that protect the computer as a whole, read live and explained, with a score ("N of M recommended settings are in place", weighted 1 to 3 by how much each matters; partly in place counts half; settings that do not apply or could not be read are left out): Secure Boot, TPM, Memory integrity, Credential Guard, LSA protection, the vulnerable driver blocklist, BitLocker per drive, User Account Control, Remote Desktop and Network Level Authentication, Remote Registry, SMBv1, the firewall profiles, SmartScreen, Windows PowerShell 2.0, AutoRun, the antivirus, its security intelligence and the last Windows update. | Raise a setting that is below the recommendation (see Actions), or open where Windows changes it (Windows Security, Settings, BitLocker, the Firewall rules and Protection pages). Nothing here lowers security. |
 | **Firewall rules** | The domain, private and public profiles and every Windows Defender Firewall rule, read live, with the rules that deserve a look marked: open to any address on public networks for every program, opening a remote-access port (Remote Desktop, SSH, VNC, WinRM, Telnet), allowing a program in a folder any user can write to, or left over for a program that no longer exists. | Turn a rule on or off, delete it (its full definition is saved first; rules of the groups Windows defines can only be turned off), open the program's location or Windows Defender Firewall. |
+| **Accounts and sign-ins** | Local accounts (enabled, last sign-in, password that may be empty or never expires, built-in Administrator and Guest), the members of Administrators and Remote Desktop Users, the sessions signed in now, and the sign-ins of the last 7 or 30 days from the event logs: successful and failed sign-ins per day, the addresses failures came from, sign-ins from other computers, accounts created, new administrators and a cleared security log. Password guessing and sign-ins from the internet are marked. The Security log needs administrator rights; the Remote Desktop logs do not. | Disable an account (enable it again from History or the page), remove a member from Administrators or Remote Desktop Users (History adds it back), sign out another person's disconnected or Remote Desktop session, open Other users or Local Users and Groups. |
+| **Browser extensions** | Every extension of every profile of Chrome, Edge, Brave, Vivaldi, Opera, Opera GX and Firefox, read live (other accounts' profiles too when elevated), with where it came from (store, a program, a policy, developer mode), whether it is on and why the browser turned it off, and what its permissions allow in plain words. Marked: access to every site, history, cookies or site traffic, talking to a program on the computer, installed outside the store or by a policy, Manifest V2, and extensions the browser itself marked as harmful. The browser policies of the machine and the user (and Firefox's policies.json) are listed too, with those adware sets marked: forced extensions, search, home page, startup pages or new tab redirected, a proxy, Safe Browsing, SmartScreen or the developer tools turned off. | Open the browser's extensions page or the extension's folder (browsers put deleted extensions back, so they are removed in the browser); remove a policy that forces or redirects something (the value is saved first, so History can put it back; policies that keep protection on and Firefox's policies.json are never changed). |
 | **Quarantine** | Files moved to quarantine. | Restore to the original location, delete permanently. |
 | **History** | Every change made from the app, with what was saved to undo it. | Undo a step, or a whole "Remove completely". |
 | **Performance** | Task Manager style: CPU (per core and clock), memory (in use, modified, standby, free, committed), each GPU (engines, VRAM), each disk and network adapter, with five minutes of history, a cursor shared by every chart, marks where Vigil changed something, and the processes using each resource most. | End a process, efficiency mode, priority, low disk and memory priority, trim its memory, show it in Processes. |
@@ -118,13 +121,15 @@ A server on this computer (`localhost`) keeps everything here: nothing leaves th
 
 ### Background watch
 
-Once a minute Vigil compares a small fingerprint of the computer with the last one: startup entries, services (new
-ones, a start type changed to automatic, a changed program path), scheduled tasks outside `\Microsoft\`, the security
-switches (Defender real-time protection, the three firewall profiles, UAC, Remote Desktop) and remote-access ports
-(SSH, Telnet, Remote Desktop, VNC, TeamViewer, WinRM) listening on every network interface. Each difference becomes an
-alert on the **Alerts** page and, if you want, a Windows notification. The fingerprint is saved, so changes made while
-Vigil was closed are reported at the next start. The watch only reads; it tells you about a change, it does not block
-it.
+Once a minute Vigil compares a small fingerprint of the computer with the last one: startup entries (Run keys,
+including those set by policy, and Startup folders), services (new ones, a start type changed to automatic, a changed
+program or svchost DLL), scheduled tasks (new ones outside `\Microsoft\`, and changed actions; under `\Microsoft\` only
+a task that runs something outside the Windows folder), the security switches (Defender real-time protection, the
+three firewall profiles, UAC, Remote Desktop) and remote-access ports (SSH, Telnet, Remote Desktop, VNC, TeamViewer,
+WinRM) listening on every network interface, with the program that listens. Each difference becomes an alert on the
+**Alerts** page and, if you want, a Windows notification, most important first. The fingerprint is saved, so changes
+made while Vigil was closed are reported at the next start. A part that could not be read is skipped, never taken as
+"everything was removed". The watch only reads; it tells you about a change, it does not block it.
 
 In **Settings → Background watch** you choose what shows a notification, whether closing the window keeps Vigil
 watching from its icon in the notification area, and whether Vigil starts in the tray when you sign in (an entry in
@@ -147,16 +152,27 @@ What is offered depends on how the item is present on the system:
   debugger hooks (Image File Execution Options), Winlogon values, AppInit DLLs, logon scripts.
 - Files: quarantine, block network access with Windows Firewall rules, scan with Microsoft Defender.
 - Firewall rules: turn on or off, delete (the whole rule definition is saved first, so History can recreate it).
+- Accounts: disable a local account (History enables it again), remove a member from Administrators or Remote
+  Desktop Users (History adds it back), sign out another person's disconnected or Remote Desktop session (not
+  undoable: unsaved work in it is lost).
 - Microsoft Defender: quick or full scan (in the background; Stop asks Defender to end it), the Microsoft Defender
   Offline scan (restarts the computer at once), update security intelligence, turn real-time protection, cloud
   protection, sample submission or potentially unwanted app blocking on (History restores the previous value), remove
   an exclusion (History adds it back), remove the active threats. Nothing on the Protection page turns protection off.
 - Programs: start their own uninstaller. Browser extensions: open the browser's extensions page.
+- Browser policies: remove one that forces an extension, redirects search, the home page, the startup pages or the new
+  tab, sets a proxy, or turns Safe Browsing, SmartScreen or the developer tools off (the value is saved first).
 - Installed programs: remove a leftover entry whose uninstaller and files are gone (the Uninstall key is exported
   first, so History can import it back; entries published by Microsoft and products Windows Installer still knows
   are refused).
 - Settings: turn the firewall on, turn real-time protection on, update Defender, remove Defender exclusions, turn
   Remote Desktop or the proxy off, disable the Guest account or other local accounts.
+- Security posture: set User Account Control back to the Windows default, require Network Level Authentication for
+  Remote Desktop (or turn it off), turn off SMBv1 and Windows PowerShell 2.0 (Windows features, with DISM), turn
+  AutoRun off for every drive, turn on the vulnerable driver blocklist and LSA protection (Windows 11 2022 Update and
+  later), disable the Remote Registry service. Each one only raises security, changes only what is below the
+  recommendation, and History puts back the exact previous values. Memory integrity, BitLocker, SmartScreen and
+  Secure Boot are only opened in Windows Security, Settings or the firmware, where Windows checks what they need.
 
 Maintenance actions are honest about what they do: freeing standby memory or trimming working sets is temporary,
 disk cleanup never touches cookies, history, passwords, documents or Downloads, large files go to the Recycle Bin
@@ -172,7 +188,8 @@ are never "optimizations").
 - **Live state, not scan data.** Each action re-reads the current state first; a reused process ID is never ended.
 - **Guards** refuse, whatever is asked: critical Windows processes, Vigil itself, essential Windows services,
   Microsoft-signed services in the Windows folder, scheduled tasks under `\Microsoft\`, files in the Windows folder or
-  signed by Microsoft, and registry values outside the known startup locations.
+  signed by Microsoft, registry values outside the known startup locations, the account running Vigil and the last
+  enabled administrator account.
 - **Undo.** Before changing something, the previous value, the exported registry key, the task XML or the file itself
   is saved. Quarantined files are stored masked so they cannot run, and are checked against their SHA-256 when
   restored. Before the first destructive action of a session the app offers a System Restore point.

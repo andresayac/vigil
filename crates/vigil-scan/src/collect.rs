@@ -703,7 +703,7 @@ fn chromium_roots() -> Vec<(&'static str, String)> {
     ]
 }
 
-fn read_json(path: &str, max_bytes: u64) -> Option<Value> {
+pub(crate) fn read_json(path: &str, max_bytes: u64) -> Option<Value> {
     let metadata = fs::metadata(path).ok()?;
     if metadata.len() > max_bytes {
         return None;
@@ -715,7 +715,7 @@ rx!(MSG_RE, r"^__MSG_(.+)__$");
 rx!(CHROME_ID, r"^[a-p]{32}$");
 
 /// Resolves `__MSG_key__` names using the extension's `_locales` files.
-fn localized(manifest: &Map<String, Value>, ext_dir: &str, value: &str) -> String {
+pub(crate) fn localized(manifest: &Map<String, Value>, ext_dir: &str, value: &str) -> String {
     let Some(caps) = MSG_RE.captures(value) else {
         return value.to_string();
     };
@@ -1060,14 +1060,22 @@ pub(crate) fn collect_sysconfig() -> Value {
         }),
     );
 
+    // Group policy wins over the local setting (Remote Desktop can be turned on by policy alone).
+    let ts_policy = r"SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services";
     let ts = r"SYSTEM\CurrentControlSet\Control\Terminal Server";
     let rdp_tcp = format!(r"{ts}\WinStations\RDP-Tcp");
-    let deny = winreg::value(Hive::Hklm, ts, "fDenyTSConnections", View::V64).unwrap_or(RegData::Int(1));
+    let deny = winreg::value(Hive::Hklm, ts_policy, "fDenyTSConnections", View::V64)
+        .or_else(|| winreg::value(Hive::Hklm, ts, "fDenyTSConnections", View::V64))
+        .unwrap_or(RegData::Int(1));
+    let nla = match reg_json(Hive::Hklm, ts_policy, "UserAuthentication") {
+        Value::Null => reg_json(Hive::Hklm, &rdp_tcp, "UserAuthentication"),
+        set => set,
+    };
     cfg.insert(
         "rdp".into(),
         json!({
             "enabled": deny.eq_int(0),
-            "nla": reg_json(Hive::Hklm, &rdp_tcp, "UserAuthentication"),
+            "nla": nla,
             "port": reg_json(Hive::Hklm, &rdp_tcp, "PortNumber"),
         }),
     );

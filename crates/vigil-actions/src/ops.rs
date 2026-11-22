@@ -228,7 +228,7 @@ pub(crate) fn sc(args: &[&str], what: &str) -> Result<runner::ToolResult> {
 }
 
 /// Stops the service if it is running. True if it was running.
-fn stop_service(name: &str) -> Result<bool> {
+pub(crate) fn stop_service(name: &str) -> Result<bool> {
     if matches!(service_status(name).as_deref(), None | Some("stopped")) {
         return Ok(false);
     }
@@ -525,7 +525,19 @@ fn schtasks(args: &[&str]) -> Vec<String> {
         .collect()
 }
 
+/// The task's definition as Task Scheduler stores it. Read through its COM API: `schtasks /XML`
+/// prints through the console code page, which would turn characters outside it (in a path or a
+/// name) into `?` and make the saved copy recreate a different task.
 fn task_xml(full: &str) -> Result<String> {
+    if !crate::runner::faked() {
+        return vigil_sys::tasks::definition(full).map_err(|e| {
+            ActionError::new(tr!(
+                "the task \"{0}\" was not found (run a new scan): {1}",
+                full,
+                e.to_string()
+            ))
+        });
+    }
     let result = run(schtasks(&["/Query", "/TN", full, "/XML"]), 60)?;
     if result.code != 0 {
         return fail(tr!(
@@ -644,14 +656,30 @@ fn op_task_delete(p: Params<'_>, store: &Store, record_id: &str) -> Result<Outco
             crate::error::io_text(&e)
         ))
     })?;
+    // A task that stores a password cannot be recreated from its definition (the password is
+    // not in it): the copy is kept for reference, but the deletion is not offered as undoable.
+    let stores_password = task_stores_password(&xml);
     let result = run(schtasks(&["/Delete", "/TN", &full, "/F"]), 60)?;
     if result.code != 0 {
         return fail(tr!("could not delete the task: {0}", first_line(&result.text())));
+    }
+    if stores_password {
+        return Ok(Outcome::done(tr!(
+            "deleted the scheduled task \"{0}\"; it stored a password, so it cannot be recreated automatically (its definition was saved to {1})",
+            full,
+            backup.display()
+        )));
     }
     Ok(Outcome::new(
         tr!("deleted the scheduled task \"{0}\" (its definition was saved)", full),
         Some(json!({ "full": full, "backup": backup.to_string_lossy() })),
     ))
+}
+
+/// Whether a task definition runs with a stored password (logon type Password, or
+/// InteractiveTokenOrPassword).
+pub fn task_stores_password(xml: &str) -> bool {
+    vigil_sys::tasks::from_xml(r"\task", xml).logon_type == "password"
 }
 
 fn undo_task_delete(u: Params<'_>, _store: &Store) -> Result<String> {
@@ -1226,11 +1254,16 @@ fn op_account_disable(p: Params<'_>, _store: &Store, _id: &str) -> Result<Outcom
             Some(json!({ "sid_suffix": "-501", "name": out })),
         ));
     }
+    // The Accounts page names the account by its SID: read again, guarded, changed through NetApi32.
+    if !p.str_or_empty("sid").is_empty() {
+        return crate::accounts::disable_by_sid(&p);
+    }
     let name = p.req_str("name")?;
     let current = std::env::var("USERNAME").unwrap_or_default();
     if name.to_lowercase() == current.to_lowercase() {
         return fail(tr!("you cannot disable the account you are using"));
     }
+    crate::accounts::guard_disable_by_name(&name)?;
     ps_ok(
         "Disable-LocalUser -Name $env:PC_NAME",
         &tr!("disabling the account"),
@@ -1244,6 +1277,10 @@ fn op_account_disable(p: Params<'_>, _store: &Store, _id: &str) -> Result<Outcom
 }
 
 fn undo_account_disable(u: Params<'_>, _store: &Store) -> Result<String> {
+    // Recorded with its SID (the Accounts page): enabled again by SID, whatever its name is now.
+    if !u.str_or_empty("sid").is_empty() {
+        return crate::accounts::enable_by_sid(&u);
+    }
     let name = u.req_str("name")?;
     ps_ok(
         "Enable-LocalUser -Name $env:PC_NAME",

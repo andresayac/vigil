@@ -54,8 +54,18 @@ fn texts(app: &AppHandle) -> (String, String) {
     (watching, notifications)
 }
 
-/// Puts the menu texts in the current language and state.
+/// The language the user chose last (in any copy of Vigil; see `WatchFile::language`).
+fn language(app: &AppHandle) -> String {
+    watcher(app).map(|w| w.language()).unwrap_or_default()
+}
+
+/// Puts the menu texts in the chosen language and the current state.
 pub fn refresh(app: &AppHandle) {
+    let language = language(app);
+    watch::in_language(&language, || refresh_texts(app));
+}
+
+fn refresh_texts(app: &AppHandle) {
     let Some(menu) = app.try_state::<TrayMenu>() else {
         return;
     };
@@ -76,6 +86,14 @@ pub fn refresh(app: &AppHandle) {
 }
 
 fn create(app: &AppHandle) -> tauri::Result<()> {
+    let language = language(app);
+    watch::in_language(&language, || build(app))?;
+    READY.store(true, Ordering::Release);
+    refresh(app);
+    Ok(())
+}
+
+fn build(app: &AppHandle) -> tauri::Result<()> {
     let (watching, notifications) = texts(app);
     let open = MenuItem::with_id(app, "open", tr!("Open Vigil"), true, None::<&str>)?;
     let watching = MenuItem::with_id(app, "watching", watching, true, None::<&str>)?;
@@ -102,8 +120,6 @@ fn create(app: &AppHandle) -> tauri::Result<()> {
         scan,
         quit,
     });
-    READY.store(true, Ordering::Release);
-    refresh(app);
     Ok(())
 }
 
@@ -228,12 +244,15 @@ pub fn close_to_tray(app: &AppHandle) -> bool {
     }
     if !settings.tray_notice_shown {
         let _ = w.store.update(|file| file.settings.tray_notice_shown = true);
-        crate::notify::show(
-            app,
-            &tr!("Vigil keeps watching in the tray"),
-            &tr!("Open it or quit from its icon in the notification area. You can change this in Settings."),
-            "overview",
-        );
+        let language = w.language();
+        watch::in_language(&language, || {
+            crate::notify::show(
+                app,
+                &tr!("Vigil keeps watching in the tray"),
+                &tr!("Open it or quit from its icon in the notification area. You can change this in Settings."),
+                "overview",
+            );
+        });
     }
     true
 }

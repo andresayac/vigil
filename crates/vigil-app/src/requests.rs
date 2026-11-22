@@ -100,6 +100,18 @@ pub enum Request {
         op: String,
         id: String,
     },
+    /// From the Accounts page: disable a local account (`sid`), remove a member (`sid`) from
+    /// `group` ("administrators" or "remote_desktop_users"), or sign out a `session`. Everything is
+    /// read again and checked with the action engine's guards (see `accounts::plan`).
+    Account {
+        op: String,
+        #[serde(default)]
+        sid: String,
+        #[serde(default)]
+        group: String,
+        #[serde(default)]
+        session: u32,
+    },
     /// Microsoft Defender, from the Protection page: scans, update, turning a setting on
     /// (`setting`), removing an exclusion (`list` + `value`) or the active threats. Checked
     /// against a fresh read (see `protection::plan`).
@@ -111,6 +123,27 @@ pub enum Request {
         list: String,
         #[serde(default)]
         value: String,
+    },
+    /// Raise one setting of the Security posture page (`op`: "uac-default", "rdp-nla",
+    /// "smb1-off"...). Checked against a fresh read (see `posture::plan`).
+    Posture {
+        op: String,
+    },
+    /// A browser extension, from the Browser extensions page: open the browser's extensions page
+    /// (of the extension's browser, or of `browser` by name) or the extension's folder. `key` comes
+    /// from `extensions_list`; everything is read again (see `extensions::plan_extension`).
+    Extension {
+        op: String,
+        #[serde(default)]
+        key: String,
+        #[serde(default)]
+        browser: String,
+    },
+    /// Remove a browser policy (`id` from `extensions_list`), read again from the registry.
+    #[serde(rename = "browser-policy")]
+    BrowserPolicy {
+        op: String,
+        id: String,
     },
 }
 
@@ -318,8 +351,18 @@ pub fn build(request: &Request, ctx: &Context<'_>) -> Result<Plan, String> {
         Request::Task { op, path } => task_plan(op, path, ctx),
         Request::FirewallRule { op, key } => crate::firewall::plan(op, key, ctx),
         Request::Program { op, id } => crate::programs::plan(op, id),
+        Request::Account {
+            op,
+            sid,
+            group,
+            session,
+        } => crate::accounts::plan(op, sid, group, *session),
         // Planned in `commands::build_plan` from a fresh read of Defender (not part of `Context`).
         Request::Defender { op, .. } => Err(tr!("Unknown request: {0}", op)),
+        // Planned in `commands::build_plan` from a fresh read of the posture.
+        Request::Posture { op } => Err(tr!("Unknown request: {0}", op)),
+        // Planned in `commands::build_plan` from a fresh read of the browsers (see `extensions`).
+        Request::Extension { op, .. } | Request::BrowserPolicy { op, .. } => Err(tr!("Unknown request: {0}", op)),
     }
 }
 
@@ -396,6 +439,18 @@ fn task_plan(op: &str, path: &str, ctx: &Context<'_>) -> Result<Plan, String> {
                 built
             }
         }
+        // The password a task stores is not part of its definition: such a task cannot be recreated.
+        "delete" if task.logon_type == "password" => spec(
+            "task.delete",
+            tr!("Delete task {0}", quoted),
+            target,
+            tr!(
+                "Removes the task from Task Scheduler. It runs with a stored password, which its saved definition does not contain, so it cannot be recreated from History: you would have to create it again by hand. The program it starts is not deleted."
+            ),
+        )
+        .group("remove")
+        .destructive()
+        .irreversible(),
         "delete" => spec(
             "task.delete",
             tr!("Delete task {0}", quoted),
@@ -422,8 +477,15 @@ fn startup_plan(op: &str, id: &str, ctx: &Context<'_>) -> Result<Plan, String> {
         .iter()
         .find(|e| e.id == id)
         .ok_or(tr!("The startup app is no longer there. Refresh the list."))?;
-    if !entry.can_toggle {
-        return Err(tr!("This entry runs only once and has no on/off switch."));
+    if !entry.can_toggle && (op == "disable" || op == "enable") {
+        return Err(if entry.kind == "policy" {
+            tr!("A policy sets this entry; it has no on/off switch. You can delete it instead.")
+        } else {
+            tr!("This entry runs only once and has no on/off switch.")
+        });
+    }
+    if op == "delete" && entry.kind != "policy" {
+        return Err(tr!("Unknown request: {0}", op));
     }
     let (params, target) = if entry.kind == "folder" {
         (json!({ "file": entry.file }), entry.file.clone())
@@ -463,11 +525,27 @@ fn startup_plan(op: &str, id: &str, ctx: &Context<'_>) -> Result<Plan, String> {
                 built.warning(&tr!("The program this entry starts was not found, so Windows cannot start it."))
             }
         }
+        // A Run key set by policy has no switch: the value itself is removed (and saved first).
+        "delete" => spec(
+            "registry.delete",
+            tr!("Delete startup entry {0}", quoted),
+            target,
+            tr!(
+                "Removes this value from a Run key that is normally set by a policy. Windows will not start the program at the next sign-in. The value is saved first, so History can put it back. The program itself is not deleted, and a policy that still sets the value may write it again."
+            ),
+        )
+        .group("remove")
+        .destructive(),
         _ => return Err(tr!("Unknown request: {0}", op)),
     };
     let built = built.params(params);
     // The user's own entries live in their part of the registry: no administrator rights needed.
-    let built = if entry.scope == "user" { built.no_admin() } else { built };
+    // (Policy keys are protected even in the user's own part of the registry.)
+    let built = if entry.scope == "user" && op != "delete" {
+        built.no_admin()
+    } else {
+        built
+    };
     Ok(Plan::Run {
         spec: built,
         item: None,
@@ -1266,7 +1344,10 @@ fn shell_plan(op: &str, path: Option<&str>, url: Option<&str>, name: Option<&str
         }
         "console" => {
             let name = name.unwrap_or("");
-            if !matches!(name, "taskschd.msc" | "services.msc" | "eventvwr.msc" | "wf.msc") {
+            if !matches!(
+                name,
+                "taskschd.msc" | "services.msc" | "eventvwr.msc" | "wf.msc" | "lusrmgr.msc"
+            ) {
                 return Err(tr!("Unknown console."));
             }
             spec("shell.console", name, "", "").params(json!({"name": name}))
@@ -1651,11 +1732,15 @@ mod tests {
     fn startup_requests_are_checked_against_the_live_list() {
         let mut missing = startup_entry("reg:machine", "run", "machine");
         missing.exists = false;
+        let mut policy = startup_entry("reg:policy", "policy", "user");
+        policy.can_toggle = false;
+        policy.location = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer\Run".into();
         let entries = [
             startup_entry("reg:user", "run", "user"),
             startup_entry("file:user", "folder", "user"),
             startup_entry("reg:once", "run_once", "user"),
             missing,
+            policy,
         ];
         let ctx = Context {
             analysis: None,
@@ -1706,6 +1791,18 @@ mod tests {
         assert!(ask("disable", "reg:once").is_err(), "RunOnce has no switch");
         assert!(ask("disable", "reg:ghost").is_err(), "unknown ids are refused");
         assert!(ask("delete", "reg:user").is_err(), "only enable and disable");
+        // A Run key set by policy has no switch; its value can be deleted (and put back).
+        let refused = ask("disable", "reg:policy").err().unwrap_or_default();
+        assert!(refused.contains("policy"), "{refused}");
+        let Ok(Plan::Run { spec, .. }) = ask("delete", "reg:policy") else {
+            panic!("delete is offered for policy entries")
+        };
+        assert_eq!(spec.op, "registry.delete");
+        assert_eq!(
+            spec.params["key"],
+            r"HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer\Run"
+        );
+        assert!(spec.destructive && spec.reversible && spec.admin);
         let parsed: Request =
             serde_json::from_value(json!({"kind": "startup", "op": "enable", "id": "reg:user"})).expect("request");
         assert!(matches!(parsed, Request::Startup { ref op, .. } if op == "enable"));
@@ -1733,11 +1830,14 @@ mod tests {
         let mut risky = task(r"\Vendor\Helper", false);
         risky.elevated = true;
         risky.user_writable = true;
+        let mut password = task(r"\Vendor\Nightly Backup", true);
+        password.logon_type = "password".into();
         let tasks = [
             task(r"\Vendor\Updater Task", true),
             task(r"\Root task", false),
             task(r"\Microsoft\Windows\Defrag\ScheduledDefrag", true),
             risky,
+            password,
         ];
         let ctx = Context {
             analysis: None,
@@ -1771,6 +1871,12 @@ mod tests {
         let delete = spec_of(ask("delete", r"\Vendor\Updater Task"));
         assert!(delete.destructive && delete.reversible);
         assert!(delete.explain.contains("XML"), "{}", delete.explain);
+        let stored = spec_of(ask("delete", r"\Vendor\Nightly Backup"));
+        assert!(
+            stored.destructive && !stored.reversible,
+            "a stored password cannot be recreated"
+        );
+        assert!(stored.explain.contains("password"), "{}", stored.explain);
         let enable = spec_of(ask("enable", r"\Root task"));
         assert_eq!(enable.params, json!({"path": "\\", "name": "Root task"}));
         assert!(enable.warning.is_empty());

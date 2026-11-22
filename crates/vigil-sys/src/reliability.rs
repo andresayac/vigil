@@ -436,7 +436,7 @@ fn read_now(days: u32) -> Result<Reliability, SysError> {
 }
 
 /// `ERROR_EVT_CHANNEL_NOT_FOUND` as an HRESULT.
-const ERROR_EVT_CHANNEL_NOT_FOUND: i32 = 0x8007_3A9F_u32 as i32;
+pub(crate) const ERROR_EVT_CHANNEL_NOT_FOUND: i32 = 0x8007_3A9F_u32 as i32;
 
 /// An event log handle closed when dropped.
 struct Handle(EVT_HANDLE);
@@ -454,14 +454,19 @@ impl Drop for Handle {
 
 /// Publisher metadata, opened once per provider, to format messages.
 #[derive(Default)]
-struct LogReader {
+pub(crate) struct LogReader {
     publishers: HashMap<String, Option<Handle>>,
 }
 
 impl LogReader {
     /// Rendered XML and formatted message of each matching event, newest first, and whether the
     /// cap cut the list.
-    fn query(&mut self, log: &str, query: &str, messages: bool) -> Result<(Vec<(String, String)>, bool), SysError> {
+    pub(crate) fn query(
+        &mut self,
+        log: &str,
+        query: &str,
+        messages: bool,
+    ) -> Result<(Vec<(String, String)>, bool), SysError> {
         let flags = EvtQueryChannelPath.0 | EvtQueryReverseDirection.0;
         // SAFETY: both strings are NUL-terminated HSTRINGs that outlive the call.
         let results = unsafe { EvtQuery(None, &HSTRING::from(log), &HSTRING::from(query), flags) }
@@ -509,6 +514,38 @@ impl LogReader {
         let Some(meta) = meta else { return String::new() };
         format_message(meta.0, event)
     }
+}
+
+/// The rendered XML of the newest event of `log` matching `query` that `accept` takes, looking at
+/// most at `max` events (newest first). `None` when none was found or the log cannot be read.
+pub(crate) fn newest_event_xml(log: &str, query: &str, max: usize, accept: impl Fn(&str) -> bool) -> Option<String> {
+    let flags = EvtQueryChannelPath.0 | EvtQueryReverseDirection.0;
+    // SAFETY: both strings are NUL-terminated HSTRINGs that outlive the call.
+    let results = unsafe { EvtQuery(None, &HSTRING::from(log), &HSTRING::from(query), flags) }
+        .map(Handle)
+        .ok()?;
+    let mut seen = 0usize;
+    let mut batch = [0isize; 16];
+    while seen < max {
+        let mut returned = 0u32;
+        // SAFETY: `batch` is writable for its length; `returned` receives how many were filled.
+        if unsafe { EvtNext(results.0, &mut batch, 5000, 0, &mut returned) }.is_err() {
+            return None;
+        }
+        let handles: Vec<Handle> = batch[..returned as usize]
+            .iter()
+            .map(|&raw| Handle(EVT_HANDLE(raw)))
+            .collect();
+        for event in &handles {
+            seen += 1;
+            if let Some(xml) = render_xml(event.0)
+                && accept(&xml)
+            {
+                return Some(xml);
+            }
+        }
+    }
+    None
 }
 
 /// The provider name in rendered event XML.
@@ -637,19 +674,19 @@ pub fn local_time(unix_ms: i64) -> String {
 // ------------------------------------------------------------------------------ parsing
 
 /// The parts of a rendered event every category uses.
-struct Record {
-    provider: String,
-    event_id: u32,
-    level: u8,
-    time_ms: i64,
-    record_id: u64,
-    log: String,
+pub(crate) struct Record {
+    pub(crate) provider: String,
+    pub(crate) event_id: u32,
+    pub(crate) level: u8,
+    pub(crate) time_ms: i64,
+    pub(crate) record_id: u64,
+    pub(crate) log: String,
     /// EventData `<Data>` values (with their Name, "" when unnamed) or UserData leaves.
-    data: Vec<(String, String)>,
+    pub(crate) data: Vec<(String, String)>,
 }
 
 impl Record {
-    fn parse(xml: &str) -> Option<Self> {
+    pub(crate) fn parse(xml: &str) -> Option<Self> {
         let root = parse_xml(xml)?;
         let system = root.child("System")?;
         let provider = system.child("Provider")?.attr("Name").to_string();
@@ -679,7 +716,7 @@ impl Record {
 
     /// A data value by name, or else by position when the event names none of its values ("" when
     /// missing). An empty `name` reads by position only.
-    fn get(&self, name: &str, index: usize) -> &str {
+    pub(crate) fn get(&self, name: &str, index: usize) -> &str {
         if !name.is_empty()
             && let Some((_, value)) = self.data.iter().find(|(n, _)| n.eq_ignore_ascii_case(name))
         {
@@ -703,7 +740,7 @@ fn leaves(node: &Node, out: &mut Vec<(String, String)>, depth: usize) {
 }
 
 /// `2026-03-01T10:11:12.1234567Z` (UTC) to Unix milliseconds.
-fn iso_utc_ms(text: &str) -> Option<i64> {
+pub(crate) fn iso_utc_ms(text: &str) -> Option<i64> {
     let text = text.trim();
     let num = |range: std::ops::Range<usize>| text.get(range).and_then(|s| s.parse::<i64>().ok());
     let (year, month, day) = (num(0..4)?, num(5..7)?, num(8..10)?);

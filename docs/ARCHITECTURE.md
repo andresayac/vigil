@@ -21,10 +21,13 @@ crates/
   vigil-sys/            live data: processes (NtQuerySystemInformation), PDH metrics, DXGI GPUs, connections,
                         elevation, the process inspector (modules, hosted services), Windows services, startup
                         entries, scheduled tasks (Task Scheduler COM), firewall rules (INetFwPolicy2),
-                        installed programs (the Uninstall keys), reliability events (the Event Log API)
+                        installed programs (the Uninstall keys), reliability and sign-in events (the Event Log
+                        API), local accounts, groups and sessions (NetApi32, Remote Desktop Services),
+                        the security posture (registry, WMI, the TPM API)
   vigil-scan/           read-only scan: PowerShell collectors (embedded), rules, analysis, posture, reports,
                         the AI agent (the OpenAI- and Anthropic-compatible API standards, local CLI
-                        agents), anonymization, VirusTotal
+                        agents), anonymization, VirusTotal, browser extensions and policies read live
+                        for the Browser extensions page (`browsers.rs`)
   vigil-actions/        action engine: guards, journal, quarantine, undo, tool runner, tuning actions
   vigil-maint/          volumes, junk cleanup, space analyzer, Recycle Bin, hardware, tuning state, insights
   vigil-app/            Tauri app (binary: vigil.exe): commands, live sampler, planner, request validation,
@@ -50,8 +53,10 @@ package.json            UI toolchain (npm)
 - The background watch (`vigil-app/src/watch.rs`) only reads. Once a minute it compares a fingerprint of startup
   entries, services, scheduled tasks, security switches and remote-access ports with the last one saved in
   `%LOCALAPPDATA%\Vigil\watch\watch.json`, and turns each difference into an alert; a named mutex lets one copy of
-  Vigil watch at a time. Starting in the tray at sign-in is itself an action (`vigil.autostart`): confirmed, journaled
-  and undoable like any other change.
+  Vigil watch at a time. That folder is the user's, and an elevated Vigil writes there too, so `userdir.rs` opens it
+  by handle (`NtCreateFile` relative to the parent, no reparse points) and replaces the file by a flushed temporary
+  file and a rename; a lock file shared by both copies serializes every change. Starting in the tray at sign-in is
+  itself an action (`vigil.autostart`): confirmed, journaled and undoable like any other change.
 - The AI agent's answer is data: validated against a schema, never executed, and it can never lower the verdict of
   an item the local rules rate critical. API keys live in Windows Credential Manager.
 - Two API standards cover every model server: OpenAI Chat Completions (`vigil-scan/src/ai/openai.rs`) and Anthropic

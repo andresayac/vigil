@@ -5,15 +5,18 @@
 //! a native confirmation dialog and run by the action engine, so text coming from the inspected
 //! computer (process names, command lines) can never trigger anything.
 
+mod accounts;
 mod alerts;
 mod autostart;
 mod cli;
 mod commands;
 mod confirm;
+mod extensions;
 mod firewall;
 mod live;
 mod notify;
 mod planner;
+mod posture;
 mod programs;
 mod protection;
 mod reliability;
@@ -23,6 +26,7 @@ mod settings;
 mod storage_ops;
 mod tools;
 mod tray;
+mod userdir;
 mod watch;
 
 use serde::Serialize;
@@ -123,8 +127,10 @@ pub fn run() {
     if hidden && !owner {
         return;
     }
-    let watch_dir = watch::default_dir().unwrap_or_else(|| state.root.join("watch"));
-    let watcher = std::sync::Arc::new(watch::Watcher::new(watch_dir, state.admin, owner));
+    let store = watch::Store::in_profile().unwrap_or_else(|| watch::Store::new(state.root.join("watch")));
+    let watcher = std::sync::Arc::new(watch::Watcher::new(store, state.admin, owner));
+    // A state saved before a language was ever chosen takes this copy's language.
+    watcher.adopt_language(vigil_i18n::language());
     let result = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(state)
@@ -185,8 +191,12 @@ pub fn run() {
             firewall::firewall_list,
             programs::programs_list,
             programs::program_signatures,
+            extensions::extensions_list,
+            extensions::extension_icons,
             protection::protection_state,
+            posture::posture_state,
             reliability::reliability_read,
+            accounts::accounts_read,
             commands::ai_providers,
             commands::ai_models,
             alerts::watch_status,

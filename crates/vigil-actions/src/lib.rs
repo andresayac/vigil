@@ -15,6 +15,7 @@
 //! The journal, the quarantine records and the backups have stable formats (see `tests/data/formats`), so
 //! History can always undo what an earlier session recorded and restore what it quarantined.
 
+mod browser;
 mod cmdline;
 mod datadir;
 mod engine;
@@ -25,6 +26,7 @@ mod json_text;
 mod labels;
 mod ops;
 mod params;
+mod posture;
 mod procs;
 mod programs;
 mod quarantine;
@@ -34,6 +36,7 @@ mod signature;
 mod store;
 mod tuning;
 
+pub mod accounts;
 pub mod defender;
 pub mod run;
 pub mod shell;
@@ -47,7 +50,10 @@ pub use engine::{
 pub use error::ActionError;
 pub use guards::{ESSENTIAL_SERVICES, guard_file, guard_service};
 pub use labels::{known_op_label, op_label};
-pub use ops::{approved_location, create_restore_point, service_status, startup_folder_approved, task_enabled};
+pub use ops::{
+    approved_location, create_restore_point, service_status, startup_folder_approved, task_enabled,
+    task_stores_password,
+};
 pub use procs::{CRITICAL_PROCESSES, Proc, find_processes, io_memory_priority, process_protection};
 pub use quarantine::{delete_quarantined, mask, quarantine_file, restore_quarantined};
 pub use registry::{reg_delete, reg_read, reg_write, restore_value, split_key};

@@ -72,7 +72,8 @@
   const publisherText = (e: StartupEntry) => (e.host ? t("startup.viaHost", { host: baseName(e.executable) }) : e.publisher);
   const statusRank = (e: StartupEntry) => (!e.canToggle ? 2 : e.enabled ? 0 : 1);
   const statusText = (e: StartupEntry) =>
-    !e.canToggle ? t("startup.runsOnce") : e.enabled ? t("startup.enabled") : t("startup.disabled");
+    e.kind === "policy" ? t("startup.byPolicy")
+      : !e.canToggle ? t("startup.runsOnce") : e.enabled ? t("startup.enabled") : t("startup.disabled");
 
   function signatureOf(e: StartupEntry): { text: string; color: string; rank: number; tip: string } {
     if (!e.executable) return { text: t("startup.sigUnknown"), color: "var(--ink3)", rank: 5, tip: "" };
@@ -88,6 +89,7 @@
     const user = e.scope === "user";
     if (e.kind === "folder") return t(user ? "startup.locFolderUser" : "startup.locFolderMachine");
     if (e.kind === "run_once") return t(user ? "startup.locOnceUser" : "startup.locOnceMachine");
+    if (e.kind === "policy") return t(user ? "startup.locPolicyUser" : "startup.locPolicyMachine");
     if (user) return t("startup.locRunUser");
     return t(/wow6432node/i.test(e.location) ? "startup.locRun32" : "startup.locRunMachine");
   }
@@ -132,11 +134,14 @@
   const switchable = $derived(!!current && current.canToggle && (current.scope === "user" || elevated) && !report.busy);
   const canEnable = $derived(switchable && !current?.enabled);
   const canDisable = $derived(switchable && !!current?.enabled);
+  // A Run key set by policy has no switch; its value can be deleted (History can put it back).
+  const canDelete = $derived(!!current && current.kind === "policy" && elevated && !report.busy);
   // A host program's folder (System32) says nothing; its shortcut, when there is one, does.
   const target = $derived(!current ? "" : current.host || !current.exists ? current.file : current.executable);
   const currentSignature = $derived(current ? signatureOf(current) : null);
   const note = $derived.by(() => {
     if (!current) return "";
+    if (current.kind === "policy") return elevated ? t("startup.policyNote") : t("startup.policyAdminNote");
     if (!current.canToggle) return t("startup.onceNote");
     if (current.scope === "machine" && !elevated) return t("startup.adminNote");
     if (!current.exists) return t("startup.missingNote");
@@ -149,7 +154,7 @@
     return (report.analysis?.items ?? []).find((i) => (i.path ?? "").toLowerCase() === exe && i.roles.some((r) => r.kind === "startup")) ?? null;
   });
 
-  async function toggle(op: "enable" | "disable"): Promise<void> {
+  async function toggle(op: "enable" | "disable" | "delete"): Promise<void> {
     if (!current) return;
     const id = current.id;
     const outcome = await act({ kind: "startup", op, id });
@@ -174,6 +179,10 @@
     <div class="commandbar">
       <button class="command" disabled={!canEnable} onclick={() => toggle("enable")}><i class="icon">{""}</i>{t("startup.enable")}</button>
       <button class="command" disabled={!canDisable} onclick={() => toggle("disable")}><i class="icon">{""}</i>{t("startup.disable")}</button>
+      {#if current?.kind === "policy"}
+        <button class="command" disabled={!canDelete} title={t("startup.policyNote")} onclick={() => toggle("delete")}>
+          <i class="icon">{""}</i>{t("startup.delete")}</button>
+      {/if}
       <span class="sep"></span>
       <button class="command" disabled={!target} onclick={() => act({ kind: "shell", op: "location", path: target })}>
         <i class="icon">{""}</i>{t("proc.location")}</button>

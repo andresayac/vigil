@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use serde_json::Value;
 
 pub mod ai;
+pub mod browsers;
 pub mod cmdline;
 pub mod diff;
 pub mod model;
@@ -40,6 +41,11 @@ mod reference;
 pub use analyze::{own_autostart_command, signature_text};
 pub use engine::{local_verdict, sort_for_report};
 pub use error::ScanError;
+
+/// An address on the internet (globally reachable), as the scan judges network endpoints.
+pub fn is_public_address(address: &str) -> bool {
+    ip::is_public(address)
+}
 
 /// Collects the inventory of this computer and evaluates it (read-only).
 ///

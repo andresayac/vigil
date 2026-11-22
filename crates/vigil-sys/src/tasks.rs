@@ -154,6 +154,114 @@ pub fn list() -> Result<Vec<ScheduledTask>, SysError> {
     }
 }
 
+/// The XML definition of one task (`\Folder\Name`), exactly as Task Scheduler stores it: the text
+/// `IRegisteredTask::Xml` returns, without any code page conversion. Read on a worker thread with
+/// a timeout, like the listing.
+pub fn definition(path: &str) -> Result<String, SysError> {
+    let path = path.to_string();
+    let (tx, rx) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("vigil-task-xml".into())
+        .spawn(move || {
+            // SAFETY: COM for this worker thread only; balanced below when it succeeded.
+            let initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok();
+            let result = read_definition(&path);
+            if initialized {
+                // SAFETY: balances the successful CoInitializeEx above; every interface was released.
+                unsafe { CoUninitialize() };
+            }
+            let _ = tx.send(result);
+        })
+        .map_err(|e| SysError::new(format!("could not start reading the scheduled task: {e}"), 0))?;
+    match rx.recv_timeout(TIMEOUT) {
+        Ok(result) => result,
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(SysError::new("Task Scheduler did not answer in time", 0)),
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err(SysError::new("reading the scheduled task failed", 0)),
+    }
+}
+
+fn read_definition(path: &str) -> Result<String, SysError> {
+    // SAFETY: creates the in-process Task Scheduler object; released when dropped.
+    let service: ITaskService = unsafe { CoCreateInstance(&TaskScheduler, None, CLSCTX_INPROC_SERVER) }
+        .map_err(|e| SysError::from_windows("Task Scheduler is not available", &e))?;
+    let empty = VARIANT::default();
+    // SAFETY: empty VARIANTs connect to this computer as the current user.
+    unsafe { service.Connect(&empty, &empty, &empty, &empty) }
+        .map_err(|e| SysError::from_windows("could not connect to Task Scheduler", &e))?;
+    // SAFETY: plain calls on valid interfaces; the BSTRs outlive them.
+    let root = unsafe { service.GetFolder(&BSTR::from("\\")) }
+        .map_err(|e| SysError::from_windows("could not open the Task Scheduler library", &e))?;
+    // SAFETY: as above; a path relative to the root folder finds the task in any folder.
+    let task = unsafe { root.GetTask(&BSTR::from(path)) }
+        .map_err(|e| SysError::from_windows("the scheduled task was not found", &e))?;
+    // SAFETY: plain property read on a valid interface.
+    let xml = unsafe { task.Xml() }.map_err(|e| SysError::from_windows("the task definition could not be read", &e))?;
+    Ok(xml.to_string())
+}
+
+/// The text of a task file in `System32\Tasks` (UTF-16 with a byte order mark, as Task Scheduler
+/// writes them; UTF-8 otherwise).
+pub fn decode_task_file(bytes: &[u8]) -> String {
+    let utf16 = |data: &[u8], big: bool| {
+        let units: Vec<u16> = data
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| {
+                if big {
+                    u16::from_be_bytes(*pair)
+                } else {
+                    u16::from_le_bytes(*pair)
+                }
+            })
+            .collect();
+        String::from_utf16_lossy(&units)
+    };
+    match bytes {
+        [0xFF, 0xFE, rest @ ..] => utf16(rest, false),
+        [0xFE, 0xFF, rest @ ..] => utf16(rest, true),
+        [0xEF, 0xBB, 0xBF, rest @ ..] => String::from_utf8_lossy(rest).into_owned(),
+        // No mark: UTF-16 LE when every other byte of the start is zero ("<\0?\0").
+        [_, 0, _, 0, ..] => utf16(bytes, false),
+        _ => String::from_utf8_lossy(bytes).into_owned(),
+    }
+}
+
+/// What a task does, for the background watch: a summary of its actions to compare between two
+/// readings, and the files they run (programs, COM servers), resolved like the listing does.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FileActions {
+    /// One line per action: the command and its arguments, or the COM class and its data.
+    pub summary: String,
+    /// The programs and DLLs the actions run (empty entries left out).
+    pub programs: Vec<String>,
+}
+
+/// The actions of a task definition (`path` is only used for its name).
+pub fn file_actions(path: &str, xml: &str) -> FileActions {
+    let task = from_xml(path, xml);
+    let mut summary = Vec::new();
+    let mut programs = Vec::new();
+    for action in &task.actions {
+        match action.kind.as_str() {
+            "exec" => {
+                summary.push(format!("exec {} {}", action.command.trim(), action.arguments.trim()));
+                programs.push(resolve_program(&action.command, &action.working_dir));
+            }
+            "com" => {
+                summary.push(format!("com {} {}", action.class_id.trim(), action.data.trim()));
+                programs.push(com_server(&action.class_id));
+            }
+            other => summary.push(other.to_string()),
+        }
+    }
+    programs.retain(|p| !p.is_empty());
+    FileActions {
+        summary: summary.join("\n").trim().to_string(),
+        programs,
+    }
+}
+
 fn read_all() -> Result<Vec<ScheduledTask>, SysError> {
     // SAFETY: COM for this worker thread only; balanced below when it succeeded.
     let initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok();
@@ -467,14 +575,20 @@ fn name_sid(name: &str) -> Option<String> {
     value
 }
 
-/// An OLE automation date (local time) as a local ISO time; `None` for "never" (1899) or nonsense.
+/// Whether a date is one of Task Scheduler's "never" markers: before 1971 (the OLE zero date,
+/// 1899) or 30 November 1999, which it reports as the last run of a task that never ran.
+pub fn never_date(year: u16, month: u16, day: u16) -> bool {
+    year < 1971 || (year, month, day) == (1999, 11, 30)
+}
+
+/// An OLE automation date (local time) as a local ISO time; `None` for "never" or nonsense.
 fn local_time(date: f64) -> Option<String> {
     if !date.is_finite() || date < 2.0 {
         return None;
     }
     let mut time = SYSTEMTIME::default();
     // SAFETY: `time` is a valid output structure.
-    if unsafe { VariantTimeToSystemTime(date, &mut time) } == 0 || time.wYear < 1971 {
+    if unsafe { VariantTimeToSystemTime(date, &mut time) } == 0 || never_date(time.wYear, time.wMonth, time.wDay) {
         return None;
     }
     Some(format!(
@@ -967,6 +1081,42 @@ mod tests {
         assert_eq!(duration_secs(""), 0);
         assert_eq!(duration_secs("15 minutes"), 0);
         assert_eq!(snake("ConsoleConnect"), "console_connect");
+    }
+
+    #[test]
+    fn never_run_dates_and_task_files() {
+        assert!(never_date(1899, 12, 30) && never_date(1999, 11, 30));
+        assert!(!never_date(1999, 11, 29) && !never_date(2026, 11, 30));
+        let xml = r#"<?xml version="1.0" encoding="UTF-16"?><Task><Actions Context="Author">
+            <Exec><Command>"%SystemRoot%\System32\cmd.exe"</Command><Arguments>/c echo</Arguments></Exec>
+            <ComHandler><ClassId>{00000000-0000-0000-0000-000000000000}</ClassId><Data>x</Data></ComHandler>
+            </Actions></Task>"#;
+        let utf16: Vec<u8> = [0xFF, 0xFE]
+            .into_iter()
+            .chain(xml.encode_utf16().flat_map(u16::to_le_bytes))
+            .collect();
+        assert_eq!(decode_task_file(&utf16), xml);
+        let no_mark: Vec<u8> = xml.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        assert_eq!(decode_task_file(&no_mark), xml);
+        assert_eq!(decode_task_file(xml.as_bytes()), xml);
+        let actions = file_actions(r"\Vendor\Updater", &decode_task_file(&utf16));
+        assert_eq!(
+            actions.summary,
+            "exec \"%SystemRoot%\\System32\\cmd.exe\" /c echo\ncom {00000000-0000-0000-0000-000000000000} x"
+        );
+        // The program is expanded and found; an unregistered COM class names no file.
+        assert_eq!(actions.programs.len(), 1, "{:?}", actions.programs);
+        assert!(
+            actions.programs[0].to_lowercase().ends_with(r"\system32\cmd.exe"),
+            "{:?}",
+            actions.programs
+        );
+        assert_eq!(file_actions("x", "not xml"), FileActions::default());
+    }
+
+    #[test]
+    fn a_missing_task_has_no_definition() {
+        assert!(definition(r"\Vigil test\No such task 7f3a").is_err());
     }
 
     #[test]

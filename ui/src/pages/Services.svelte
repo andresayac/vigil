@@ -63,6 +63,8 @@
   function startLabel(value: string): string {
     const known = START_TYPES.find((type) => type.value === value);
     if (known) return t(known.key);
+    // "": its configuration could not be read with these rights (nothing is claimed).
+    if (!value) return "—";
     return value === "boot" || value === "system" ? t("services.boot") : value;
   }
   const startRank = (value: string) => {

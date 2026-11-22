@@ -33,9 +33,11 @@ crates/
   vigil-i18n/     translations of the core's texts: `tr!` with English templates, catalogs in locales/
   vigil-sys/      Windows access for live data: processes (NtQuerySystemInformation), PDH metrics, DXGI GPUs,
                   connections, elevation, process inspector, services, startup entries, scheduled tasks,
-                  firewall rules, installed programs, event logs (reliability)
+                  firewall rules, installed programs, event logs (reliability, sign-ins), local accounts,
+                  groups and sessions, security posture
   vigil-scan/     the read-only scan: PowerShell collectors (embedded ps1), rules, analysis, posture, report
-                  (JSON + HTML), the AI agent (providers), anonymization, VirusTotal
+                  (JSON + HTML), the AI agent (providers), anonymization, VirusTotal, browser extensions
+                  and policies read live (`browsers.rs`)
   vigil-actions/  the action engine: every change to the system goes through execute() / undo(); guards,
                   journal, quarantine, tool runner
   vigil-maint/    maintenance data and primitives: volumes, cleanup targets, space analysis, hardware,
@@ -66,8 +68,9 @@ Each crate has its tests next to the code (`#[cfg(test)]`) or in `tests/`; recor
    journals it and keeps what is needed to undo it. Never add a Tauri command that changes the system
    directly, and never let the UI choose an op, a path or a command line that Rust has not checked.
 4. **Guards stay on.** Never act on critical Windows processes, essential services, `\Microsoft\` scheduled
-   tasks, Microsoft-signed files, the Windows folder, Vigil itself or its data folder (see `guards.rs`,
-   process protection in `procs.rs`, the registry allowlist). Do not weaken a guard to make a feature work.
+   tasks, Microsoft-signed files, the Windows folder, Vigil itself or its data folder, the account running
+   Vigil or the last enabled administrator (see `guards.rs`, process protection in `procs.rs`, the registry
+   allowlist, `vigil-actions/src/accounts.rs`). Do not weaken a guard to make a feature work.
 5. **No shell, no injection.** Run tools by absolute path (System32) with argument lists through the
    runner (`vigil_actions::runner`). Values for PowerShell travel as environment variables
    (`$env:PC_NAME`); never put a value inside script text. Child processes get no window.

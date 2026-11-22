@@ -652,6 +652,7 @@ pub fn settings_get(state: State<'_, AppState>) -> View {
 #[tauri::command]
 pub fn settings_set(
     state: State<'_, AppState>,
+    watcher: State<'_, Arc<crate::watch::Watcher>>,
     settings: View,
     secrets: Option<std::collections::HashMap<String, Option<String>>>,
 ) -> CmdResult<View> {
@@ -665,7 +666,10 @@ pub fn settings_set(
     let mut inner = state.lock();
     inner.settings.apply(&settings)?;
     inner.settings.save(&state.root.join("settings.json"))?;
-    vigil_i18n::set_language(&inner.settings.language);
+    let language = vigil_i18n::set_language(&inner.settings.language);
+    // The copy of Vigil that watches from the tray (its own settings file when it runs without
+    // administrator rights) writes its alerts and notifications in the language chosen here.
+    watcher.set_language(language);
     let stored = secrets::stored(&*state.secrets);
     Ok(inner.settings.view(stored))
 }
@@ -860,6 +864,17 @@ async fn build_plan(app: &AppHandle, request: &Request) -> CmdResult<Plan> {
     {
         let live = crate::protection::read_async().await?;
         return crate::protection::plan(op, setting, list, value, &live);
+    }
+    if let Request::Posture { op } = request {
+        let live = crate::posture::read_async().await?;
+        return crate::posture::plan(op, &live);
+    }
+    match request {
+        Request::Extension { op, key, browser } => {
+            return crate::extensions::plan_extension(op.clone(), key.clone(), browser.clone()).await;
+        }
+        Request::BrowserPolicy { op, id } => return crate::extensions::plan_policy(op.clone(), id.clone()).await,
+        _ => {}
     }
     let processes = match request {
         Request::Process { .. } => {

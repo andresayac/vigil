@@ -87,10 +87,17 @@ pub fn open_url(url: &str) -> Result<()> {
     Ok(())
 }
 
-const CONSOLES: [&str; 5] = ["taskschd.msc", "services.msc", "eventvwr.msc", "compmgmt.msc", "wf.msc"];
+const CONSOLES: [&str; 6] = [
+    "taskschd.msc",
+    "services.msc",
+    "eventvwr.msc",
+    "compmgmt.msc",
+    "wf.msc",
+    "lusrmgr.msc",
+];
 
 /// Opens one of the management consoles (Task Scheduler, Services, Event Viewer, Computer
-/// Management, Windows Defender Firewall with Advanced Security).
+/// Management, Windows Defender Firewall with Advanced Security, Local Users and Groups).
 pub fn open_console(name: &str) -> Result<()> {
     if !CONSOLES.contains(&name) {
         return fail(tr!("unknown console"));
@@ -112,11 +119,17 @@ const TOOLS: [&str; 8] = [
 /// Reliability Monitor: Performance Monitor's `/rel` view, asked for by this name.
 const RELIABILITY_MONITOR: &str = "reliability";
 
+/// BitLocker Drive Encryption in Control Panel, asked for by this name.
+const BITLOCKER: &str = "bitlocker";
+
 /// Opens one of a few Windows tools (performance options, disk cleanup, defragmenter, Reliability
-/// Monitor...).
+/// Monitor, BitLocker...).
 pub fn open_tool(name: &str) -> Result<()> {
     if name == RELIABILITY_MONITOR {
         return launch(&tool("perfmon.exe"), &["/rel"]);
+    }
+    if name == BITLOCKER {
+        return launch(&tool("control.exe"), &["/name", "Microsoft.BitLockerDriveEncryption"]);
     }
     if !TOOLS.contains(&name) {
         return fail(tr!("unknown tool"));
@@ -144,26 +157,67 @@ const BROWSERS: [(&str, &str, &str); 8] = [
     ("Chromium", "chrome.exe", "chrome://extensions"),
 ];
 
+/// Where browsers install themselves: (browser, base folder variable, folder below it).
+const BROWSER_FOLDERS: [(&str, &str, &str); 17] = [
+    ("Chrome", "ProgramFiles", r"Google\Chrome\Application"),
+    ("Chrome", "ProgramFiles(x86)", r"Google\Chrome\Application"),
+    ("Chrome", "LOCALAPPDATA", r"Google\Chrome\Application"),
+    ("Edge", "ProgramFiles(x86)", r"Microsoft\Edge\Application"),
+    ("Edge", "ProgramFiles", r"Microsoft\Edge\Application"),
+    ("Brave", "ProgramFiles", r"BraveSoftware\Brave-Browser\Application"),
+    ("Brave", "LOCALAPPDATA", r"BraveSoftware\Brave-Browser\Application"),
+    ("Vivaldi", "LOCALAPPDATA", r"Vivaldi\Application"),
+    ("Vivaldi", "ProgramFiles", r"Vivaldi\Application"),
+    ("Opera", "LOCALAPPDATA", r"Programs\Opera"),
+    ("Opera", "ProgramFiles", "Opera"),
+    ("Opera GX", "LOCALAPPDATA", r"Programs\Opera GX"),
+    ("Opera GX", "ProgramFiles", "Opera GX"),
+    ("Firefox", "ProgramFiles", "Mozilla Firefox"),
+    ("Firefox", "ProgramFiles(x86)", "Mozilla Firefox"),
+    ("Chromium", "LOCALAPPDATA", r"Chromium\Application"),
+    ("Chromium", "ProgramFiles", r"Chromium\Application"),
+];
+
+/// The browser's own program: its install folders first for the browsers whose App Paths entry is
+/// shared with another one (Opera and Opera GX both register opera.exe; Chromium's chrome.exe would
+/// be Chrome's), App Paths first for the others.
+fn browser_exe(browser: &str, exe: &str) -> Option<String> {
+    let from_folders = || {
+        BROWSER_FOLDERS
+            .iter()
+            .filter(|(name, _, _)| *name == browser)
+            .filter_map(|(_, var, folder)| std::env::var_os(var).map(|base| Path::new(&base).join(folder).join(exe)))
+            .find(|path| path.is_file())
+            .map(|path| path.to_string_lossy().into_owned())
+    };
+    let from_app_paths = || {
+        let sub = format!(r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{exe}");
+        [Hive::LocalMachine, Hive::CurrentUser].into_iter().find_map(|hive| {
+            let key = Key::open(hive, &sub, windows::Win32::System::Registry::KEY_READ).ok()?;
+            let (kind, data) = key.query("").ok()??;
+            let text = decode_value(kind, &data).as_str()?.trim_matches('"').to_string();
+            Path::new(&text).is_file().then_some(text)
+        })
+    };
+    if matches!(browser, "Opera" | "Opera GX" | "Chromium") {
+        from_folders()
+    } else {
+        from_app_paths().or_else(from_folders)
+    }
+}
+
 /// Opens a browser's extensions page.
 pub fn open_browser_extensions(browser: &str) -> Result<()> {
     let Some((_, exe, page)) = BROWSERS.iter().find(|(name, _, _)| *name == browser) else {
         return fail(tr!("unknown browser {0}", browser));
     };
-    let sub = format!(r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{exe}");
-    let mut path = None;
-    for hive in [Hive::LocalMachine, Hive::CurrentUser] {
-        let Ok(key) = Key::open(hive, &sub, windows::Win32::System::Registry::KEY_READ) else {
-            continue;
-        };
-        if let Ok(Some((kind, data))) = key.query("")
-            && let Some(text) = decode_value(kind, &data).as_str()
-        {
-            path = Some(text.trim_matches('"').to_string());
-            break;
-        }
+    match browser_exe(browser, exe) {
+        Some(path) => launch(&path, &[page]),
+        None => fail(tr!("{0} was not found; open {1} in it yourself", browser, page)),
     }
-    match path {
-        Some(path) if Path::new(&path).is_file() => launch(&path, &[page]),
-        _ => fail(tr!("{0} was not found; open {1} in it yourself", browser, page)),
-    }
+}
+
+/// Whether Vigil knows how to open this browser's extensions page.
+pub fn known_browser(browser: &str) -> bool {
+    BROWSERS.iter().any(|(name, _, _)| *name == browser)
 }

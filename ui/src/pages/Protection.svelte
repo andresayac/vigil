@@ -29,11 +29,10 @@
 
   onMount(() => {
     void load();
-    let stop: (() => void) | null = null;
-    void api.onDefenderScan((event) => {
+    const stop = api.subscribe(api.onDefenderScan((event) => {
       progress = event;
       if (!event.running && event.found !== null) void load();
-    }).then((off) => (stop = off));
+    }));
     const timer = setInterval(() => (now = Date.now()), 1000);
     return () => {
       stop?.();
