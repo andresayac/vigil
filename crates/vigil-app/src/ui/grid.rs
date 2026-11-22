@@ -210,6 +210,11 @@ impl Grid {
         self.rebuild();
     }
 
+    /// What the grid says when it has no rows.
+    pub fn set_empty(&mut self, text: impl Into<SharedString>) {
+        self.name = text.into();
+    }
+
     pub fn set_filter(&mut self, text: &str) {
         self.filter = text.split_whitespace().map(str::to_lowercase).collect();
         self.rebuild();

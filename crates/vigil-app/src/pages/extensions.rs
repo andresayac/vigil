@@ -347,6 +347,12 @@ impl ExtensionsPage {
                 row
             })
             .collect();
+        let any = self.data.as_ref().is_some_and(|d| !d.a("extensions").is_empty());
+        self.table.update(cx, |table, _| {
+            table
+                .delegate_mut()
+                .set_empty(t(if any { "ext.empty" } else { "ext.noBrowsers" }))
+        });
         grid::fill(&self.table, rows, cx);
         let browser = self.place_browser();
         let mut policies: Vec<Value> = self

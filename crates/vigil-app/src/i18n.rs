@@ -158,14 +158,8 @@ mod tests {
         }
     }
 
-    /// Every key the code names is in the English catalog: a string literal shaped like a key of
-    /// one of the catalog's areas ("proc.endTask"), wherever it is (in `t(…)`, a table, a branch).
-    #[test]
-    fn every_key_used_is_translated() {
-        const AREAS: [&str; 12] = [
-            "app", "chart", "nav", "page", "perf", "proc", "res", "settings", "table", "time", "unit", "common",
-        ];
-        let english = keys("en");
+    /// The text of every source file of the window.
+    fn sources() -> Vec<(std::path::PathBuf, String)> {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut files = Vec::new();
         let mut stack = vec![dir];
@@ -179,21 +173,69 @@ mod tests {
                 }
             }
         }
+        files
+            .into_iter()
+            .map(|file| {
+                let text = std::fs::read_to_string(&file).unwrap_or_default();
+                (file, text)
+            })
+            .collect()
+    }
+
+    /// The string literals of the sources (a leading "@" marks a key a table translates later).
+    fn literals(text: &str) -> impl Iterator<Item = &str> {
+        text.split('"').skip(1).step_by(2).map(|l| l.trim_start_matches('@'))
+    }
+
+    /// Every key the code names is in the English catalog: a string literal shaped like a key of
+    /// one of the catalog's areas ("proc.endTask"), wherever it is (in `t(…)`, a table, a branch).
+    #[test]
+    fn every_key_used_is_translated() {
+        let english = keys("en");
+        let areas: BTreeSet<&str> = english.iter().filter_map(|k| k.split('.').next()).collect();
         let mut missing = Vec::new();
-        for file in files {
-            let text = std::fs::read_to_string(&file).unwrap_or_default();
-            for literal in text.split('"').skip(1).step_by(2) {
+        for (file, text) in sources() {
+            for literal in literals(&text) {
                 let Some((area, name)) = literal.split_once('.') else {
                     continue;
                 };
-                let file_name = ["msc", "exe", "dll", "json"].contains(&name);
-                let shaped = !file_name && !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric());
-                if AREAS.contains(&area) && shaped && !english.contains(literal) {
+                let file_name = ["msc", "exe", "dll", "json", "ico", "png"].contains(&name);
+                let shaped =
+                    !file_name && !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '.');
+                if areas.contains(area) && shaped && !english.contains(literal) {
                     missing.push(format!("{literal} ({})", file.display()));
                 }
             }
         }
         assert!(missing.is_empty(), "keys missing from en.json: {missing:#?}");
+    }
+
+    /// Every key of the catalogs is used: named as a string literal, or under the literal head of a
+    /// `format!("area.{…}")` that builds keys (verdicts, kinds, states).
+    #[test]
+    fn no_catalog_key_is_stale() {
+        let sources = sources();
+        let mut named = BTreeSet::new();
+        let mut prefixes = BTreeSet::new();
+        for (_, text) in &sources {
+            named.extend(literals(text).map(str::to_string));
+            for rest in text.split("format!(").skip(1) {
+                let Some(start) = rest.trim_start().strip_prefix('"') else {
+                    continue;
+                };
+                let literal = start.split('"').next().unwrap_or("");
+                if let Some((head, _)) = literal.split_once('{')
+                    && head.contains('.')
+                {
+                    prefixes.insert(head.to_string());
+                }
+            }
+        }
+        let stale: Vec<String> = keys("en")
+            .into_iter()
+            .filter(|key| !named.contains(key) && !prefixes.iter().any(|p| key.starts_with(p.as_str())))
+            .collect();
+        assert!(stale.is_empty(), "keys no code uses: {stale:#?}");
     }
 
     #[test]

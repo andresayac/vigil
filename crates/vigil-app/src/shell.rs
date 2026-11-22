@@ -29,6 +29,7 @@ use crate::pages::services::ServicesPage;
 use crate::pages::startup::StartupPage;
 use crate::platform::Command;
 use crate::theme::{self, Choice, FONT_BODY, Tokens, tokens};
+use crate::ui::kit::J as _;
 use crate::ui::{self, FButton, Kind, Severity};
 use gpui_kit::base::Selectable as _;
 
@@ -606,6 +607,22 @@ impl Shell {
     fn render_nav(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let tk = *tokens(cx);
         let compact = self.compact;
+        // The scan in progress, and when the loaded report was made.
+        let (scanning, last_scan) = {
+            let report = self.report.read(cx);
+            let last = match report.analysis.as_ref().map(|a| a.at("meta")) {
+                Some(meta) => {
+                    let key = if meta.b("is_admin") {
+                        "nav.lastScan"
+                    } else {
+                        "nav.lastScanReadOnly"
+                    };
+                    tf(key, &[("when", &crate::pages::common::when(meta.s("started")))])
+                }
+                None => t("nav.noScanYet"),
+            };
+            (report.scanning, last)
+        };
         let item = |id: &'static str, glyph: char, label: String, active: bool| {
             let mut button = FButton::new(id, Kind::Subtle)
                 .glyph(glyph)
@@ -768,17 +785,32 @@ impl Shell {
                     }),
             )
             .child(div().px_1().pb_2().flex().child({
+                let label = t(if scanning { "nav.scanning" } else { "nav.newScan" });
                 let mut scan = FButton::new("new-scan", Kind::Accent)
                     .glyph(icons::SCAN)
+                    .disabled(scanning)
                     .flex_1()
                     .h(px(34.));
                 if compact {
-                    scan = scan.accessible_name(t("nav.newScan"));
+                    scan = scan.accessible_name(label).tip(last_scan.clone());
                 } else {
-                    scan = scan.label(t("nav.newScan"));
+                    scan = scan.label(label);
                 }
-                scan.on_click(cx.listener(|this, _, window, cx| this.open("overview", window, cx)))
+                scan.on_click(cx.listener(|this, _, window, cx| {
+                    this.open("overview", window, cx);
+                    this.scan_dialog(window, cx);
+                }))
             }))
+            .when(!compact, |this| {
+                this.child(
+                    div()
+                        .px_2()
+                        .pb_2()
+                        .text_size(px(12.))
+                        .text_color(tk.ink3)
+                        .child(last_scan.clone()),
+                )
+            })
             .child(list)
             .child(
                 div()
