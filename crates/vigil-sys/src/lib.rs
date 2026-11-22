@@ -28,6 +28,7 @@ pub mod reliability;
 pub mod services;
 pub mod signins;
 pub mod startup;
+pub mod svcsec;
 pub mod tasks;
 pub mod watchlog;
 

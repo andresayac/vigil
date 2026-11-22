@@ -264,7 +264,26 @@ are never "optimizations").
    - settings that blind the defences, only when set explicitly: Defender told to allow threats, cloud protection
      or block at first sight off, network exclusions, attack surface reduction rules off, the Defender or Event
      Log service stopped, event logs or their autologgers off, LSA protection or the vulnerable driver blocklist
-     turned off.
+     turned off;
+   - PowerShell profiles (Windows PowerShell and PowerShell 7, for every user and for you, Documents included when
+     it is in OneDrive), reported only when their text looks like an attack, so prompt themes and environment
+     managers stay quiet;
+   - Microsoft Office: the "Office test" DLL, add-ins that load at start (COM add-ins judged by their DLL's
+     signature and folder, VSTO add-ins installed from the web or kept in a folder anyone can change), files with
+     macros in the Word and Excel startup folders (your own PERSONAL.XLSB excepted), Outlook's VBA project and
+     Outlook home pages;
+   - Windows Defender Firewall rules, with the Firewall rules page's own marks (open to everyone on public
+     networks, remote-access ports, programs in folders anyone can change, rules left for removed programs), and
+     the firewall's log of rules added by command line or opening remote-access ports. Windows' own rule changes
+     are left out;
+   - services and scheduled tasks hidden from Windows' own lists: service keys the Service Control Manager does
+     not show (their permissions refuse even to list them, or they were written to the registry behind its back),
+     and tasks in the task cache or `System32\Tasks` that Task Scheduler does not return (their security
+     descriptor removed). Their programs are judged like any other startup entry; Windows components and security
+     products that restrict who sees their services count as information only. Tasks need administrator rights;
+   - services standard users could use to gain SYSTEM rights, from the real permissions (no guessing from folder
+     names): who may change the service itself, its program or DLL, the folder it runs from and its registry key,
+     and unquoted paths with spaces where Windows would run a program from a folder anyone can write to first.
 2. **Grouping**: every reference is resolved to the file that really decides what runs (the DLL behind `rundll32`,
    the script behind `wscript`, the payload of an encoded PowerShell command...), so each file is judged once.
 3. **Local rules**: digital signatures, locations, names that imitate Windows, command-line patterns (miners,

@@ -291,6 +291,30 @@ fn config_steps(topic: &str) -> Vec<Step> {
             .command("Get-SmbShare")
             .admin(true)
             .note(tr!("Stop sharing a folder with: Remove-SmbShare -Name 'name'"))],
+        "firewall_open_public" | "firewall_remote_access" | "firewall_writable_program" | "firewall_missing_programs" => {
+            vec![Step::new(tr!("Review the rule on the Firewall rules page")).note(tr!(
+                "Turn it off or delete it there (History can undo it), or in Windows Defender Firewall (wf.msc) → Inbound Rules."
+            ))]
+        }
+        "ps_profile" => vec![Step::new(tr!("Review the PowerShell profile")).note(tr!(
+            "Open the file in Notepad and remove the lines you do not recognize: PowerShell runs it every time it starts."
+        ))],
+        "office_vsto_addin" | "office_startup_macros" | "outlook_vba" => vec![
+            Step::new(tr!("Review the Office add-ins and startup files")).note(tr!(
+                "In the Office program: File → Options → Add-ins (and Trust Center for macros). Move a file you do not use out of the startup folder."
+            )),
+        ],
+        "outlook_home_page" => vec![Step::new(tr!("Remove the Outlook home page")).note(tr!(
+            "Delete the URL value under the key shown here with regedit, or clear the folder's home page in its Properties."
+        ))],
+        "service_weak_permissions" => vec![Step::new(tr!("Update the program, or ask its maker for a fix")).note(tr!(
+            "Until then, remove write access for Users, Authenticated Users and Everyone on what is listed here (Properties → Security), or put the service's path in quotes in its ImagePath value."
+        ))],
+        "task_hidden_from_scheduler" => vec![Step::new(tr!("Delete the hidden task with administrator rights"))
+            .admin(true)
+            .note(tr!(
+                "Task Scheduler cannot show it: delete its key under HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache\\Tree and its file in C:\\Windows\\System32\\Tasks, or ask a security professional."
+            ))],
         _ => vec![],
     }
 }

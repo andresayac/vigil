@@ -29,11 +29,14 @@ mod analyze;
 mod collect;
 mod engine;
 mod error;
+mod firewall;
 mod hooks;
 mod ip;
 mod lenient;
 mod ntpath;
+mod persist;
 mod posture;
+mod svcsec;
 mod winreg;
 
 #[cfg(test)]

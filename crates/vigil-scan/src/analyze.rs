@@ -94,7 +94,7 @@ pub(crate) struct Ref {
 }
 
 impl Ref {
-    fn new(role: Role, parsed: ParsedCommand) -> Self {
+    pub(crate) fn new(role: Role, parsed: ParsedCommand) -> Self {
         Self {
             role,
             parsed,
@@ -923,6 +923,41 @@ fn autorun_refs(raw: &Value) -> (Vec<Ref>, Vec<Map<String, Value>>) {
                 None,
                 None,
             ),
+            // Office: the DLL is judged as a file (signature, folder); a signed vendor add-in in
+            // its own folder carries no signal of its own.
+            "office_test" | "office_addin" | "office_startup" => {
+                let file = text(entry.at("file"));
+                if file.is_empty() {
+                    continue;
+                }
+                let (label, flags) = match source {
+                    "office_test" => (
+                        tr!("\"Office test\" DLL ({0})", location),
+                        vec![Flag::new(
+                            "office_test",
+                            70,
+                            tr!(
+                                "every Office program loads this DLL when it starts; Office itself never uses this key"
+                            ),
+                        )],
+                    ),
+                    "office_addin" => (tr!("Office add-in \"{0}\" ({1})", name, location), vec![]),
+                    _ => (
+                        tr!("Office add-in file \"{0}\" in {1}", name, location),
+                        vec![Flag::new(
+                            "office_startup_dll",
+                            20,
+                            tr!("Word or Excel loads this DLL every time it starts"),
+                        )],
+                    ),
+                };
+                let parsed = ParsedCommand {
+                    program: Some(file.clone()),
+                    certain: true,
+                    ..ParsedCommand::new(&command)
+                };
+                add(&command, label, flags, None, Some(parsed));
+            }
             _ => {}
         }
     }
@@ -988,6 +1023,7 @@ pub(crate) fn build_references(raw: &Value) -> (Vec<Ref>, Aux) {
     refs.extend(driver_refs(raw));
     refs.extend(tasks);
     refs.extend(autoruns);
+    refs.extend(crate::svcsec::hidden_refs(raw));
     (
         refs,
         Aux {
@@ -1310,6 +1346,9 @@ struct Ctx {
     network: HashMap<i64, NetEntry>,
     detected_paths: HashSet<String>,
     exclusions: Vec<String>,
+    /// Privileged services' programs whose real permissions were read: whether standard users can
+    /// change the program or its folder (`svcsec.rs`).
+    acl_writable: HashMap<String, bool>,
 }
 
 fn evaluate_file(entity: &Entity, files: &Files, ctx: &Ctx) -> Item {
@@ -1470,18 +1509,28 @@ fn evaluate_file(entity: &Entity, files: &Files, ctx: &Ctx) -> Item {
     }
 
     // --- privileges and persistence
-    if !valid && file_exists(info) && is_user_writable(&path) {
-        if entity
+    // For a privileged service's program the real permissions, when they were read, replace the
+    // guess from the folder name.
+    let service_writable = ctx
+        .acl_writable
+        .get(&lower(&path))
+        .copied()
+        .unwrap_or_else(|| is_user_writable(&path));
+    if !valid
+        && file_exists(info)
+        && service_writable
+        && entity
             .refs
             .iter()
             .any(|r| r.role.kind == "service" && r.role.privileged && r.role.active)
-        {
-            item.add_flag(Flag::new(
-                "system_service_user_path",
-                25,
-                tr!("service with SYSTEM privileges whose file is in a user-writable folder"),
-            ));
-        }
+    {
+        item.add_flag(Flag::new(
+            "system_service_user_path",
+            25,
+            tr!("service with SYSTEM privileges whose file is in a user-writable folder"),
+        ));
+    }
+    if !valid && file_exists(info) && is_user_writable(&path) {
         if entity
             .refs
             .iter()
@@ -1538,6 +1587,9 @@ fn evaluate_file(entity: &Entity, files: &Files, ctx: &Ctx) -> Item {
             };
             item.add_flag(flag);
         }
+    }
+    if let Some(flag) = crate::svcsec::hidden_flag(&entity.refs, info, &path) {
+        item.add_flag(flag);
     }
     if !valid && truthy(item.network.at("exposed")) {
         item.add_flag(Flag::new(
@@ -1604,6 +1656,9 @@ fn evaluate_command(entity: &Entity, files: &Files, ctx: &Ctx) -> Item {
         item.commands = vec![raw];
     }
     common_flags(&mut item, &entity.refs, files);
+    if let Some(flag) = crate::svcsec::hidden_flag(&entity.refs, None, "") {
+        item.add_flag(flag);
+    }
     let mut names = vec![first.raw.clone()];
     for r in &entity.refs {
         for key in ["name", "task_name", "value"] {
@@ -1743,6 +1798,7 @@ pub(crate) fn evaluate_entities(raw: &Value, refs: Vec<Ref>, files: &Files) -> V
         network: network_by_pid(raw),
         detected_paths: detected,
         exclusions,
+        acl_writable: crate::svcsec::acl_writable(raw),
     };
 
     let items = entities

@@ -653,6 +653,8 @@ pub(crate) fn event_items(raw: &Value) -> Vec<Item> {
         }
     }
 
+    items.extend(firewall_change_items(events, &days));
+
     let consumers: Vec<&Value> = list(events.at("wmi_consumers"))
         .iter()
         .filter(|e| {
@@ -1638,6 +1640,9 @@ pub(crate) fn config_items(raw: &Value, aux: &Aux) -> (Vec<Item>, Map<String, Va
     }
 
     items.extend(hook_items(raw, other_av_active));
+    items.extend(crate::svcsec::items(raw));
+    items.extend(persistence_items(raw));
+    items.extend(firewall_rule_items(raw));
 
     // --- pathless processes and findings from the registry
     let odd: BTreeSet<&String> = aux
@@ -1940,6 +1945,375 @@ fn hook_items(raw: &Value, other_av_active: bool) -> Vec<Item> {
             tr!("some attack surface reduction rules are set to off explicitly"),
             Some(&facts(vec![("rules", json!(asr))])),
             vec![],
+        ));
+    }
+    items
+}
+
+// --------------------------------------------------------------------------- PowerShell and Office
+
+/// PowerShell profiles, VSTO add-ins, macro files in the Office startup folders and Outlook
+/// (`sysconfig.persistence`). A profile is reported only when its text scores like a suspicious
+/// script (30, the threshold of the PowerShell history): prompt themes and environment managers that
+/// pipe their setup into Invoke-Expression score 20 and stay quiet.
+fn persistence_items(raw: &Value) -> Vec<Item> {
+    let mut items = Vec::new();
+    let cfg = raw.at("sysconfig").at("persistence");
+    for profile in list(cfg.at("ps_profiles")) {
+        let content = text(profile.at("content"));
+        let flags = scan_text(&content);
+        if weight_sum(&flags) < 30 {
+            continue;
+        }
+        let path = text(profile.at("path"));
+        let everyone = str_of(profile.at("scope")) == "all_users";
+        let patterns: Vec<&str> = flags.iter().map(|f| f.text.as_str()).collect();
+        let detail = facts(vec![
+            ("path", json!(path)),
+            ("scope", profile.at("scope").clone()),
+            ("patterns", json!(patterns)),
+            ("snippet", json!(clip(&scrub_secrets(&content), 900))),
+        ]);
+        items.push(config(
+            "ps_profile",
+            tr!(
+                "PowerShell profile with suspicious commands: {0}",
+                crate::ntpath::basename(&path)
+            ),
+            if everyone { 20 } else { 15 },
+            if everyone {
+                tr!("PowerShell runs this script for every user, every time it starts")
+            } else {
+                tr!("PowerShell runs this script every time it starts")
+            },
+            Some(&detail),
+            flags,
+        ));
+    }
+
+    let office = cfg.at("office");
+    for addin in list(office.at("vsto_addins")) {
+        // Add-ins installed from the Office Store or by a vendor's installer in its own folder are
+        // normal; one fetched from a web address, or kept where any program can change it, is not.
+        let web = truthy(addin.at("web"));
+        if !web && !truthy(addin.at("user_writable")) {
+            continue;
+        }
+        let detail = facts(vec![
+            ("app", addin.at("app").clone()),
+            ("name", addin.at("name").clone()),
+            ("manifest", addin.at("manifest").clone()),
+            ("key", addin.at("location").clone()),
+        ]);
+        items.push(config(
+            "office_vsto_addin",
+            tr!(
+                "Office add-in \"{0}\" ({1})",
+                str_of(addin.at("name")),
+                str_of(addin.at("app"))
+            ),
+            if web { 20 } else { 10 },
+            if web {
+                tr!("the add-in is installed and updated from a web address every time the program starts")
+            } else {
+                tr!("the add-in loads every time the program starts, from a folder any program can change")
+            },
+            Some(&detail),
+            vec![],
+        ));
+    }
+    for file in list(office.at("startup_macros")) {
+        let path = text(file.at("file"));
+        let app = str_of(file.at("app"));
+        items.push(config(
+            "office_startup_macros",
+            tr!(
+                "Office opens a file with macros at start: {0}",
+                crate::ntpath::basename(&path)
+            ),
+            30,
+            tr!("{0} opens this file, macros included, every time it starts", app),
+            Some(&facts(vec![
+                ("path", json!(path)),
+                ("folder", file.at("folder").clone()),
+                ("app", json!(app)),
+                ("size", file.at("size").clone()),
+            ])),
+            vec![],
+        ));
+    }
+    let outlook = office.at("outlook");
+    let vba = outlook.at("vba_project");
+    if truthy(vba) {
+        items.push(config(
+            "outlook_vba",
+            tr!("Outlook loads a VBA project at start"),
+            25,
+            tr!("Outlook runs the macros in VbaProject.OTM whenever it starts; malware uses it to stay on a computer"),
+            Some(&facts(vec![
+                ("path", vba.at("path").clone()),
+                ("size", vba.at("size").clone()),
+            ])),
+            vec![],
+        ));
+    }
+    for page in list(outlook.at("home_pages")) {
+        items.push(config(
+            "outlook_home_page",
+            tr!("Outlook home page set: {0}", str_of(page.at("url"))),
+            60,
+            tr!("Outlook shows this web page inside the program, where it can run code: a known way to keep access to a computer"),
+            Some(&facts(vec![("key", page.at("key").clone()), ("url", page.at("url").clone())])),
+            vec![],
+        ));
+    }
+    items
+}
+
+// --------------------------------------------------------------------------- firewall rules
+
+/// Any remote address: empty, "*" or "Any".
+fn any_remote(addresses: &str) -> bool {
+    let a = lower(addresses.trim());
+    a.is_empty() || a == "*" || a == "any"
+}
+
+/// The firewall rules the Firewall rules page marks (`sysconfig.firewall_rules`). Rules of Windows'
+/// own groups only appear here when flagged; Remote Desktop's group is left to the Remote Desktop
+/// setting. A rule for a program that no longer exists is housekeeping: one low summary.
+fn firewall_rule_items(raw: &Value) -> Vec<Item> {
+    let rules = raw.at("sysconfig").at("firewall_rules");
+    let mut candidates = Vec::new();
+    let mut missing = Vec::new();
+    let mut writable = Vec::new();
+    for rule in list(rules.at("flagged")) {
+        let codes: Vec<String> = list(rule.at("flags")).iter().map(str_of).collect();
+        let has = |code: &str| codes.iter().any(|c| c == code);
+        let name = str_of(rule.at("name"));
+        let program = text(rule.at("program"));
+        if has("missing_program") {
+            missing.push(json!({"name": name, "program": program}));
+        }
+        let public_any = list(rule.at("profiles")).iter().any(|p| str_of(p) == "public")
+            && any_remote(&text(rule.at("remote_addresses")));
+        let port = as_int(rule.at("port")).unwrap_or(0);
+        let mut found: Vec<(String, String, i64, String)> = Vec::new();
+        if has("open_public") {
+            found.push((
+                "firewall_open_public".into(),
+                tr!("Firewall rule open to everyone on public networks: {0}", name),
+                35,
+                tr!("every program on this computer can be reached from any address on public networks (cafés, airports, hotels)"),
+            ));
+        }
+        if has("remote_access") {
+            found.push((
+                "firewall_remote_access".into(),
+                tr!("Firewall rule opens a remote-access port: {0} (port {1})", name, port),
+                if public_any { 45 } else { 30 },
+                if public_any {
+                    tr!("lets any computer, also on public networks, reach port {0}, used to control a computer remotely", port)
+                } else {
+                    tr!("lets other computers reach port {0}, used to control a computer remotely", port)
+                },
+            ));
+        }
+        // Many programs install in the user's folders (and Windows' "allow this app" prompt adds
+        // their rule): on its own, that is one summary, not a finding per rule.
+        if has("writable_program") && found.is_empty() {
+            writable.push(json!({"name": name, "program": program}));
+            continue;
+        }
+        if has("writable_program") {
+            found.push((
+                "firewall_writable_program".into(),
+                tr!("Firewall rule for a program in a folder anyone can change: {0}", name),
+                30,
+                tr!(
+                    "any program could take the place of {0} and receive connections through this rule",
+                    program
+                ),
+            ));
+        }
+        if found.is_empty() {
+            continue;
+        }
+        found.sort_by_key(|f| std::cmp::Reverse(f.2));
+        let (topic, title, score, text_main) = found.remove(0);
+        let extra = found
+            .into_iter()
+            .map(|(code, _, weight, text)| Flag::new(code, weight, text))
+            .collect();
+        let detail = facts(vec![
+            ("rule", json!(name)),
+            ("group", rule.at("group").clone()),
+            ("program", json!(program)),
+            ("service", rule.at("service").clone()),
+            ("direction", rule.at("direction").clone()),
+            ("profiles", rule.at("profiles").clone()),
+            ("protocol", rule.at("protocol").clone()),
+            ("local_ports", rule.at("local_ports").clone()),
+            ("remote_addresses", rule.at("remote_addresses").clone()),
+            ("windows_group", rule.at("builtin").clone()),
+        ]);
+        candidates.push(config(&topic, title, score, text_main, Some(&detail), extra));
+    }
+    let mut items = top(candidates, 15);
+    if !writable.is_empty() {
+        items.push(config(
+            "firewall_writable_program",
+            tr!("Firewall rules for programs in folders anyone can change"),
+            15,
+            count_n(
+                writable.len(),
+                tl!("{0} rule lets in traffic for a program kept where any program could take its place"),
+                tl!("{0} rules let in traffic for programs kept where any program could take their place"),
+            ),
+            Some(&facts(vec![(
+                "rules",
+                json!(writable.iter().take(30).collect::<Vec<_>>()),
+            )])),
+            vec![],
+        ));
+    }
+    if !missing.is_empty() {
+        items.push(config(
+            "firewall_missing_programs",
+            tr!("Firewall rules for programs that no longer exist"),
+            5,
+            count_n(
+                // The inventory keeps a capped list; the count covers every rule.
+                as_int(rules.at("missing")).map_or(missing.len(), |n| usize::try_from(n).unwrap_or(missing.len())),
+                tl!("{0} rule lets in traffic for a program that was removed; a file put at that path would inherit it"),
+                tl!("{0} rules let in traffic for programs that were removed; a file put at one of those paths would inherit it"),
+            ),
+            Some(&facts(vec![("rules", json!(missing.iter().take(30).collect::<Vec<_>>()))])),
+            vec![],
+        ));
+    }
+    items
+}
+
+/// Programs that change the firewall from a script or a command line.
+const SCRIPTED_MODIFIERS: &[&str] = &["netsh.exe", "powershell.exe", "pwsh.exe", "wmiprvse.exe", "cmd.exe"];
+/// Remote-access ports (Remote Desktop, SSH, Telnet, VNC, WinRM).
+const REMOTE_PORTS: &[&str] = &["3389", "22", "23", "5900", "5985", "5986"];
+
+/// Firewall changes from the Firewall log (`events.firewall_changes`). Windows changes its own
+/// rules all the time (Store apps, features, the "allow this app" prompt), so a change made by a
+/// Windows program for a Windows program or for no program is never reported. Rules added by
+/// command line, rules opening remote-access ports to the network and rules for every program are
+/// worth a look; any other rule added for a program outside Windows goes to one low summary.
+fn firewall_change_items(events: &Value, days: &str) -> Vec<Item> {
+    let mut items = Vec::new();
+    let mut added = Vec::new();
+    let mut deleted = 0usize;
+    for change in list(events.at("firewall_changes")) {
+        let id = int_of(change.at("id"));
+        let by = text(change.at("by_app"));
+        let by_name = lower(crate::ntpath::basename(&by));
+        let scripted = SCRIPTED_MODIFIERS.contains(&by_name.as_str());
+        let windows_modifier = !scripted && (by.is_empty() || crate::rules::in_windows_dir(&by));
+        let program = text(change.at("program"));
+        let windows_program = program.is_empty() || crate::rules::in_windows_dir(&program);
+        let rule = str_of(change.at("rule"));
+        let when = str_of(change.at("time"));
+        let detail = facts(vec![
+            ("rule", json!(rule)),
+            ("program", json!(program)),
+            ("changed_by", json!(by)),
+            ("time", json!(when)),
+            ("local_ports", change.at("local_ports").clone()),
+        ]);
+        match id {
+            2004 | 2097 => {
+                if windows_modifier && windows_program {
+                    continue;
+                }
+                // Direction 1 is inbound; action 2 is block (the firewall's own numbering).
+                let inbound = str_of(change.at("direction")) == "1";
+                let allows = str_of(change.at("action")) != "2";
+                let ports = text(change.at("local_ports"));
+                let remote_port = ports.split(',').map(str::trim).find(|p| REMOTE_PORTS.contains(p));
+                let every_program = program.is_empty() && text(change.at("service")).is_empty();
+                let mut flags = Vec::new();
+                if inbound && allows {
+                    if scripted {
+                        flags.push(Flag::new(
+                            "firewall_rule_scripted",
+                            35,
+                            tr!("an inbound rule was added from a command line ({0})", by_name),
+                        ));
+                    }
+                    if let Some(port) = remote_port {
+                        flags.push(Flag::new(
+                            "firewall_rule_remote_port",
+                            35,
+                            tr!(
+                                "the new rule lets other computers reach port {0}, used to control a computer remotely",
+                                port
+                            ),
+                        ));
+                    }
+                    if every_program && !windows_modifier {
+                        flags.push(Flag::new(
+                            "firewall_rule_every_program",
+                            30,
+                            tr!("the new rule lets in traffic for every program"),
+                        ));
+                    }
+                }
+                if flags.is_empty() {
+                    if !windows_program {
+                        added.push(json!({"rule": rule, "program": program, "by": by, "time": when}));
+                    }
+                    continue;
+                }
+                items.push(event(
+                    tr!("Firewall rule added: {0}", rule),
+                    tr!("on {0}", when),
+                    flags,
+                    detail,
+                ));
+            }
+            2006 | 2052 => {
+                if !windows_modifier {
+                    deleted += 1;
+                }
+            }
+            2003 if scripted => items.push(event(
+                tr!("Firewall settings changed from a command line"),
+                tr!("on {0}", when),
+                vec![Flag::new(
+                    "firewall_settings_scripted",
+                    25,
+                    tr!("{0} changed a firewall profile setting", by_name),
+                )],
+                with_fields(
+                    detail,
+                    &json!({"setting": change.at("setting"), "value": change.at("value")}),
+                ),
+            )),
+            _ => {}
+        }
+    }
+    if !added.is_empty() || deleted > 0 {
+        items.push(event(
+            tr!("Firewall rules added for programs"),
+            tr!("in the last {0} days", days),
+            vec![Flag::new(
+                "firewall_rules_added",
+                5,
+                count_n(
+                    added.len(),
+                    tl!("{0} rule was added for a program outside Windows"),
+                    tl!("{0} rules were added for programs outside Windows"),
+                ),
+            )],
+            facts(vec![
+                ("rules", json!(added.iter().take(20).collect::<Vec<_>>())),
+                ("deleted_by_programs", json!(deleted)),
+            ]),
         ));
     }
     items

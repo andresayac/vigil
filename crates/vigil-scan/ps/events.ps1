@@ -67,6 +67,26 @@ $r.log_cleared = @(Get-EventList -Filter @{ LogName = 'System'; Id = 104; StartT
     @{ time = (ConvertTo-Iso $_.TimeCreated); log = $f['Channel']; source = 'System' }
 })
 
+# --- Windows Firewall: rules added (2004, 2097) or deleted (2006, 2052), profile settings (2003) ---
+$fwLog = 'Microsoft-Windows-Windows Firewall With Advanced Security/Firewall'
+$r.firewall_changes = @(Get-EventList -Filter @{ LogName = $fwLog; Id = 2004, 2097, 2006, 2052, 2003; StartTime = $since } -Max 300 | ForEach-Object {
+    $f = Get-EventFields $_
+    @{
+        time             = (ConvertTo-Iso $_.TimeCreated)
+        id               = [int]$_.Id
+        rule             = (Limit-Text $f['RuleName'] 300)
+        program          = (Limit-Text $f['ApplicationPath'] 1000)
+        service          = $f['ServiceName']
+        direction        = $f['Direction']
+        action           = $f['Action']
+        local_ports      = (Limit-Text $f['LocalPorts'] 200)
+        remote_addresses = (Limit-Text $f['RemoteAddresses'] 300)
+        setting          = $f['SettingType']
+        value            = (Limit-Text $f['SettingValueString'] 200)
+        by_app           = (Limit-Text $f['ModifyingApplication'] 1000)
+    }
+})
+
 # --- Microsoft Defender ---
 $defLog = 'Microsoft-Windows-Windows Defender/Operational'
 $r.defender_detections = @(Get-EventList -Filter @{ LogName = $defLog; Id = 1006, 1007, 1008, 1015, 1116, 1117, 1118, 1119; StartTime = $since } -Max 200 | ForEach-Object {

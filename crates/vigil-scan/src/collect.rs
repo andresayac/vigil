@@ -623,6 +623,7 @@ pub(crate) fn collect_autoruns() -> Vec<Value> {
         ]));
     }
     entries.extend(crate::hooks::collect_autoruns());
+    entries.extend(crate::persist::collect_autoruns());
     entries
 }
 
@@ -1166,6 +1167,9 @@ pub(crate) fn collect_sysconfig() -> Value {
     );
     cfg.insert("hooks".into(), crate::hooks::collect_config());
     cfg.insert("evasion".into(), crate::hooks::collect_evasion());
+    cfg.insert("persistence".into(), crate::persist::collect_config());
+    cfg.insert("firewall_rules".into(), crate::firewall::collect());
+    cfg.insert(crate::svcsec::SECTION.into(), crate::svcsec::collect(is_admin()));
     Value::Object(cfg)
 }
 
@@ -1494,6 +1498,9 @@ pub(crate) fn collect_all(workdir: &Path, days: u32, progress: &dyn Fn(&str), ca
         if let Some(Value::Object(section)) = data.get(name) {
             notes.extend(list(section.at("notes")).iter().cloned());
         }
+    }
+    if let Some(config) = data.get("sysconfig") {
+        notes.extend(list(config.at(crate::svcsec::SECTION).at("notes")).iter().cloned());
     }
     let section = |name: &str, key: &str| -> Value {
         match data.get(name) {
