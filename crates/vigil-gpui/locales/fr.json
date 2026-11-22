@@ -9,6 +9,8 @@
   "gpui.settingsNote": "Dans ce prototype, le choix dure jusqu’à la fermeture de Vigil.",
   "nav.administrator": "Administrateur",
   "nav.administratorNote": "Les actions sont activées. Chaque modification est journalisée et la plupart peuvent être annulées.",
+  "nav.collapse": "Réduire la navigation",
+  "nav.expand": "Développer la navigation",
   "nav.live": "En direct",
   "nav.maintenance": "Maintenance",
   "nav.more": "Plus",

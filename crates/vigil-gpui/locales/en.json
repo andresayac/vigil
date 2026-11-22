@@ -9,6 +9,8 @@
   "gpui.settingsNote": "In this prototype the choice lasts until Vigil closes.",
   "nav.administrator": "Administrator",
   "nav.administratorNote": "Actions are enabled. Every change is journaled and most can be undone.",
+  "nav.collapse": "Collapse navigation",
+  "nav.expand": "Expand navigation",
   "nav.live": "Live",
   "nav.maintenance": "Maintenance",
   "nav.more": "More",

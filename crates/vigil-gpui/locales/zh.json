@@ -8,6 +8,8 @@
   "gpui.settingsNote": "在此原型中，所做选择在 Vigil 关闭前有效。",
   "nav.administrator": "管理员",
   "nav.administratorNote": "操作已启用。每项更改都会被记录，大多数可以撤消。",
+  "nav.collapse": "折叠导航",
+  "nav.expand": "展开导航",
   "nav.live": "实时",
   "nav.maintenance": "维护",
   "nav.more": "更多",

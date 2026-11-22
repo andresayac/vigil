@@ -73,8 +73,9 @@ fn wobble(seed: u32, tick: u64) -> f32 {
     x - x.floor()
 }
 
-/// The fictitious process list at second `tick`.
-pub fn processes(tick: u64, now_ms: i64) -> Vec<ProcessRow> {
+/// The fictitious process list at second `tick`; `started_ms` (when the demo began) anchors the
+/// start times, so each process keeps the same identity (pid + start time) from sample to sample.
+pub fn processes(tick: u64, started_ms: i64) -> Vec<ProcessRow> {
     PROCESSES
         .iter()
         .map(|&(pid, ppid, name, exe, description, user, window, cpu, mb)| {
@@ -96,7 +97,7 @@ pub fn processes(tick: u64, now_ms: i64) -> Vec<ProcessRow> {
                 threads: 4 + pid % 40,
                 handles: 120 + pid % 900,
                 session: u32::from(user == USER),
-                created_ms: now_ms - i64::from(pid) * 9_000 - 3_600_000,
+                created_ms: started_ms - i64::from(pid) * 9_000 - 3_600_000,
                 io_bps: f64::from(cpu * w) * 180_000.0,
                 status: if pid == 4012 {
                     ProcessStatus::Suspended
@@ -180,10 +181,11 @@ pub fn snapshot(tick: u64, now_ms: i64, rows: &[ProcessRow]) -> Snapshot {
 /// The demo's sampler thread: the same rhythm and switch as the real one.
 pub fn sample_forever(tx: &UnboundedSender<Sample>, switch: &Switch, interval: Duration) {
     let mut tick = 0u64;
+    let started = crate::format::now_ms();
     loop {
         switch.wait_until_on();
         let now = crate::format::now_ms();
-        let rows = processes(tick, now);
+        let rows = processes(tick, started);
         let snap = snapshot(tick, now, &rows);
         let sample = Sample {
             snapshot: Some(snap),

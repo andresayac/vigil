@@ -45,8 +45,11 @@ crates/
                   (service::run_action), settings, secrets, the command lines
   vigil-app/      the Tauri app: commands for the UI (thin wrappers over vigil-core), live sampler,
                   background watch (tray, notifications, alerts)
+  vigil-gpui/     prototype of a native GPUI window over vigil-core (docs/GPUI-MIGRATION.md); it never
+                  depends on vigil-actions and only sends requests to vigil_core::service::run_action
 ui/               Svelte 5 + TypeScript: pages, components, lib/api.ts (the only module that calls Rust)
-docs/             ARCHITECTURE.md (how it fits together), NATIVE-UI.md (the Windows 11 look)
+docs/             ARCHITECTURE.md (how it fits together), NATIVE-UI.md (the Windows 11 look),
+                  GPUI-MIGRATION.md (the move to a native GPUI interface)
 ```
 
 Each crate has its tests next to the code (`#[cfg(test)]`) or in `tests/`; recorded reference data lives in

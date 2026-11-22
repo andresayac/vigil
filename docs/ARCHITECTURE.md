@@ -32,6 +32,7 @@ crates/
                         secrets, the read-only command lines (`vigil scan`, `list`, `ports`, `services`)
   vigil-app/            Tauri app (binary: vigil.exe): commands (thin wrappers over vigil-core), live
                         sampler, the background watch (tray icon, notifications, alerts)
+  vigil-gpui/           prototype of the native GPUI window (binary: vigil-gpui.exe), see GPUI-MIGRATION.md
 ui/                     Svelte 5 + TypeScript, built by Vite into ui/dist and embedded in vigil.exe
 package.json            UI toolchain (npm)
 ```

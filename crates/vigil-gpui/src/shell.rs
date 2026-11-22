@@ -8,7 +8,7 @@ use gpui_kit::component::WindowExt as _;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyView, AppContext, ClickEvent, Context, Entity, FontWeight, InteractiveElement, IntoElement, ParentElement,
-    Render, StatefulInteractiveElement, Styled, Subscription, Window, div, px,
+    Render, Role, StatefulInteractiveElement, Styled, Subscription, Window, div, px,
 };
 use vigil_core::state::AppState;
 
@@ -81,10 +81,10 @@ impl Shell {
             mica,
         } = options;
         let live = Live::start(demo, cx);
+        // Windows changed its theme: GPUI has just painted the title bar in Windows' theme, so
+        // apply Vigil's again (it may be a fixed light or dark).
         let subscriptions = vec![cx.observe_window_appearance(window, |this, window, cx| {
-            if this.choice == Choice::System {
-                this.apply_theme(window, cx);
-            }
+            this.apply_theme(window, cx);
         })];
         let mut shell = Self {
             page,
@@ -230,6 +230,9 @@ impl Shell {
         let item = |id: &'static str, glyph: char, label: String, active: bool| {
             div()
                 .id(id)
+                .role(Role::Button)
+                .aria_label(label.clone())
+                .aria_selected(active)
                 .relative()
                 .flex()
                 .flex_none()
@@ -356,6 +359,8 @@ impl Shell {
                     .child(
                         div()
                             .id("hamburger")
+                            .role(Role::Button)
+                            .aria_label(t(if compact { "nav.expand" } else { "nav.collapse" }))
                             .w(px(40.))
                             .h(px(36.))
                             .flex()
@@ -377,6 +382,8 @@ impl Shell {
                 div().px_1().pb_2().flex().child(
                     div()
                         .id("new-scan")
+                        .role(Role::Button)
+                        .aria_label(t("nav.newScan"))
                         .flex_1()
                         .flex()
                         .items_center()

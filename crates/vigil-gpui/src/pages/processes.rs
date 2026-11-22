@@ -18,8 +18,8 @@ use gpui_kit::component::{Sizable, Size};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     App, AppContext, ClickEvent, Context, Div, Entity, FocusHandle, FontWeight, InteractiveElement, IntoElement,
-    KeyBinding, ParentElement, Render, SharedString, Stateful, StatefulInteractiveElement, Styled, Subscription,
-    Window, div, px,
+    KeyBinding, ParentElement, Render, Role, SharedString, Stateful, StatefulInteractiveElement, Styled, Subscription,
+    Toggled, Window, div, px,
 };
 use vigil_core::requests::{ProcessRef, Request};
 use vigil_core::state::AppState;
@@ -936,7 +936,16 @@ impl ProcessesPage {
             delegate.vram_total = vram_total;
             delegate.now = now_ms();
             delegate.rebuild();
+            let reveal = found
+                .then(|| {
+                    let key = delegate.selected.as_deref()?;
+                    delegate.items.iter().position(|item| item.key() == key)
+                })
+                .flatten();
             table.refresh(cx);
+            if let Some(index) = reveal {
+                table.scroll_to_row(index, cx);
+            }
             cx.notify();
         });
         if found {
@@ -1028,6 +1037,8 @@ impl ProcessesPage {
         let command = |id: &'static str, glyph: char, label: String, enabled: bool| {
             div()
                 .id(id)
+                .role(Role::Button)
+                .aria_label(label.clone())
                 .flex()
                 .items_center()
                 .gap_2()
@@ -1044,6 +1055,9 @@ impl ProcessesPage {
         let segment = |id: &'static str, label: String, on: bool| {
             div()
                 .id(id)
+                .role(Role::RadioButton)
+                .aria_label(label.clone())
+                .aria_toggled(if on { Toggled::True } else { Toggled::False })
                 .px(px(10.))
                 .h(px(26.))
                 .flex()

@@ -149,9 +149,13 @@ mod tests {
         }
     }
 
-    /// Every key the code asks for (`t("…")`, `tf("…"`, `tn("…"`) is in the English catalog.
+    /// Every key the code names is in the English catalog: a string literal shaped like a key of
+    /// one of the catalog's areas ("proc.endTask"), wherever it is (in `t(…)`, a table, a branch).
     #[test]
     fn every_key_used_is_translated() {
+        const AREAS: [&str; 12] = [
+            "chart", "gpui", "nav", "page", "perf", "proc", "res", "settings", "table", "time", "unit", "common",
+        ];
         let english = keys("en");
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut files = Vec::new();
@@ -169,17 +173,13 @@ mod tests {
         let mut missing = Vec::new();
         for file in files {
             let text = std::fs::read_to_string(&file).unwrap_or_default();
-            for marker in ["t(\"", "tf(\"", "tn(\""] {
-                for (pos, _) in text.match_indices(marker) {
-                    let before = text[..pos].chars().next_back();
-                    if before.is_some_and(|c| c.is_alphanumeric() || c == '_') {
-                        continue;
-                    }
-                    let rest = &text[pos + marker.len()..];
-                    let key = rest.split('"').next().unwrap_or("");
-                    if key.contains('.') && !english.contains(key) {
-                        missing.push(format!("{key} ({})", file.display()));
-                    }
+            for literal in text.split('"').skip(1).step_by(2) {
+                let Some((area, name)) = literal.split_once('.') else {
+                    continue;
+                };
+                let shaped = !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric());
+                if AREAS.contains(&area) && shaped && !english.contains(literal) {
+                    missing.push(format!("{literal} ({})", file.display()));
                 }
             }
         }
