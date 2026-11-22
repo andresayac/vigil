@@ -112,6 +112,9 @@ A server on this computer (`localhost`) keeps everything here: nothing leaves th
 | `get_posture`, `get_defender`, `list_extensions` | Security settings, Microsoft Defender, browser extensions and policies |
 | `get_signins_summary`, `get_reliability_summary`, `list_alerts` | Accounts and sign-ins, event-log problems, the background watch's alerts |
 | `check_file` | One local file's signature, version information and SHA-256 |
+| `get_scan_summary`, `get_related` | A digest of the whole scan (most serious findings, settings, changes, next steps); the findings that share a file, folder, signer, parent process or network endpoint with one finding |
+| `get_process_events` | A program's recent crashes and hangs, Defender detections, services installed, scheduled tasks created, firewall rule changes and watch alerts |
+| `get_file_history` | One file's times, where it was downloaded from (Mark of the Web, without user names or query strings), its signer, when Vigil's saved scans first saw it and in which role, and whether Windows recorded it running (Prefetch, administrator only) |
 | `propose_action` | Nothing: it records a suggestion for you; Vigil never acts on it |
 
 - **Nothing changes the computer.** The tools only read, and the MCP process never shows a window or a dialog;
@@ -166,11 +169,14 @@ a task that runs something outside the Windows folder), the security switches (D
 protection and the policy that turns Defender off, the three firewall profiles, UAC, Remote Desktop, WDigest password
 caching, LSA protection), remote-access ports (SSH, Telnet, Remote Desktop, VNC, TeamViewer, WinRM) listening on every
 network interface with the program that listens, kernel and file system drivers (a new one, or one moved outside the
-Windows driver folders), the hosts file (names it newly redirects), and the registry places Windows reads to load or
+Windows driver folders), the hosts file (names it newly redirects), each connected adapter's DNS servers and the
+proxies (servers the network hands out changing is information; servers set by hand or a new proxy is worth a
+look), and the registry places Windows reads to load or
 run something: image hijacks (including the Ease of Access programs of the sign-in screen), Winlogon, AppInit and
 AppCert DLLs, BootExecute, the LSA packages, per-user Settings and console handlers used to bypass UAC, the .NET
-profiler variables, NetSh helpers, print monitors, time providers and Microsoft Defender exclusions (the non-policy
-exclusions only as administrator). It also reads a few Windows logs from where the last check stopped, which catches
+profiler variables, NetSh helpers, print monitors, time providers, AMSI providers and the switch that turns script
+scanning off, the trusted root certificate stores (a new root outside Microsoft's list is worth a look) and Microsoft
+Defender exclusions (the non-policy exclusions only as administrator). It also reads a few Windows logs from where the last check stopped, which catches
 changes undone within the minute: a service installed, a log cleared, a new account or administrator and a scheduled
 task created (the Security log only as administrator), Microsoft Defender detections and changes, and new permanent WMI
 subscriptions. A change already reported from the fingerprint is not reported again from a log. Each difference becomes
@@ -311,6 +317,26 @@ are never "optimizations").
      start with Windows (information) or when something deserves a look: not signed by their maker, renamed, a
      relay server that is not their maker's, installed in the last 7 days, or a copy running from a folder
      anyone can change. Whether unattended access is set up is read as yes or no; a password never is;
+   - root certificates outside Microsoft's Trusted Root Program, checked offline against the list Windows keeps
+     (and the few old roots Windows ships): one added to your account's store (any program can, without
+     administrator rights), more so in the last week; an unknown one on the computer; one that borrows a
+     well-known authority's name; known unsafe ones such as Superfish or eDellRoot. Debugging proxies, antivirus
+     web shields and company filters that read encrypted connections, and local development certificates, are
+     listed as information; so are trusted publishers, except self-made code signing certificates;
+   - script scanning (AMSI): the providers that see every script before it runs, judged by their DLL's
+     signature and folder (Microsoft Defender's and known security vendors' are normal); script scanning turned
+     off for Windows Script Host; no provider at all; PowerShell's execution policy forced to Bypass or
+     Unrestricted by policy. PowerShell's logging policies and `__PSLockdownPolicy` are shown as information;
+   - where name lookups and web traffic go, from the local configuration only (nothing is looked up or sent):
+     DNS servers set by hand or by a program that are neither on your network, nor your router, nor a
+     well-known resolver (more so when set on every adapter or in the last days), name resolution policy rules
+     that send names to such a server, DNS over HTTPS templates of an unknown service (Windows, an adapter or a
+     browser policy), the proxy of Windows services, a proxy or proxy script pointing to an internet address or to
+     a port on this computer that no program, or a program in a folder anyone can change, listens on, automatic
+     proxy detection (WPAD) redirected by the hosts file, permanent routes through an address that is not a
+     gateway, and tunnel adapters or network filter drivers from vendors that are neither Microsoft nor a known
+     VPN, virtualization, capture or security company. LLMNR and NetBIOS are a posture fact, worth a look only
+     while a public network is connected;
 2. **Grouping**: every reference is resolved to the file that really decides what runs (the DLL behind `rundll32`,
    the script behind `wscript`, the payload of an encoded PowerShell command...), so each file is judged once.
 3. **Local rules**: digital signatures, locations, names that imitate Windows, command-line patterns (miners,

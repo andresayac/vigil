@@ -34,6 +34,7 @@ export const KIND_LABEL: Record<AlertKind, Key> = {
   hook: "watch.kind.hook",
   driver: "watch.kind.driver",
   hosts: "watch.kind.hosts",
+  network: "watch.kind.network",
   event: "watch.kind.event",
   scan: "watch.kind.scan",
   watch: "watch.kind.watch",

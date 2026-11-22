@@ -59,7 +59,8 @@ package.json            UI toolchain (npm)
   itself an action (`vigil.autostart`): confirmed, journaled and undoable like any other change.
 - The AI agent's answer is data: validated against a schema, never executed, and it can never lower the verdict of
   an item the local rules rate critical. API keys live in Windows Credential Manager.
-- **AI tools.** One registry of read-only tools (`vigil-app/src/mcp/registry.rs`) serves two callers: `vigil mcp`
+- **AI tools.** One registry of read-only tools (`vigil-app/src/mcp/registry.rs`, plus the context tools in
+  `mcp/context.rs`: scan digest, related findings, a program's events, a file's history) serves two callers: `vigil mcp`
   (`mcp/server.rs`, MCP over stdio, newline-delimited JSON-RPC) and "Investigate with AI" (`investigate.rs`). The
   investigation loop (`vigil-scan/src/ai/agent.rs`) speaks tool calling in both API standards and gives the local
   agents the same tools by starting `vigil mcp` for that run (Claude Code `--mcp-config --strict-mcp-config`, Codex

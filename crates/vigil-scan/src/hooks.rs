@@ -69,6 +69,7 @@ pub(crate) const HOOK_SOURCES: &[&str] = &[
     "known_dll",
     "ifeo_verifier",
     "clr_profiler",
+    "amsi_provider",
 ];
 
 /// Per-user handlers that Windows' auto-elevating programs open (fodhelper and computerdefaults

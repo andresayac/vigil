@@ -110,6 +110,25 @@ pub fn read_after(log: &str, ids: &[u32], after: u64, max: usize) -> Result<Vec<
         .collect())
 }
 
+/// The events with one of `ids` from the last `days` days, newest first, at most `max`.
+pub fn read_recent(log: &str, ids: &[u32], days: u32, max: usize) -> Result<Vec<LogEvent>, SysError> {
+    let results = open(log, &recent_query(ids, days), true)?;
+    Ok(take(&results, max)
+        .iter()
+        .filter_map(|xml| LogEvent::from_xml(log, xml))
+        .collect())
+}
+
+/// `*[System[(EventID=1 or EventID=2) and TimeCreated[timediff(@SystemTime) <= 86400000]]]`.
+pub fn recent_query(ids: &[u32], days: u32) -> String {
+    let ids: Vec<String> = ids.iter().map(|id| format!("EventID={id}")).collect();
+    let ms = u64::from(days.max(1)) * 86_400_000;
+    format!(
+        "*[System[({}) and TimeCreated[timediff(@SystemTime) <= {ms}]]]",
+        ids.join(" or ")
+    )
+}
+
 /// `*[System[(EventID=1 or EventID=2) and EventRecordID>10]]`.
 pub fn query(ids: &[u32], after: u64) -> String {
     let ids: Vec<String> = ids.iter().map(|id| format!("EventID={id}")).collect();
@@ -138,6 +157,15 @@ mod tests {
         assert_eq!(event.get("ImagePath"), r"C:\Users\jdoe\AppData\Local\Temp\ch.exe");
         assert_eq!(event.get("missing"), "");
         assert!(event.time_ms > 0);
+    }
+
+    #[test]
+    fn the_recent_query_filters_ids_and_days() {
+        assert_eq!(
+            recent_query(&[7045, 4698], 2),
+            "*[System[(EventID=7045 or EventID=4698) and TimeCreated[timediff(@SystemTime) <= 172800000]]]"
+        );
+        assert!(recent_query(&[1], 0).ends_with("<= 86400000]]]"), "at least one day");
     }
 
     #[test]

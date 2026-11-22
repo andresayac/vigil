@@ -475,6 +475,10 @@ fn hook_label(source: &str, name: &str, location: &str) -> (String, String) {
             tr!("verifier DLL attached to \"{0}\" ({1})", name, location),
             name.to_string(),
         ),
+        "amsi_provider" => (
+            tr!("AMSI provider \"{0}\" ({1})", name, location),
+            tr!("every program that runs scripts"),
+        ),
         _ => (tr!(".NET profiler \"{0}\" ({1})", name, location), tr!(".NET programs")),
     }
 }
@@ -929,7 +933,7 @@ fn autorun_refs(raw: &Value) -> (Vec<Ref>, Vec<Map<String, Value>>) {
                 add(&command, label, vec![], Some(detail), Some(parsed));
             }
             "print_monitor" | "print_processor" | "time_provider" | "netsh_helper" | "network_provider"
-            | "winsock_provider" | "known_dll" | "ifeo_verifier" | "clr_profiler" => {
+            | "winsock_provider" | "known_dll" | "ifeo_verifier" | "clr_profiler" | "amsi_provider" => {
                 let file = text(entry.at("file"));
                 if file.is_empty() {
                     continue;
@@ -1671,6 +1675,17 @@ fn evaluate_file(entity: &Entity, files: &Files, ctx: &Ctx) -> Item {
                 "unsigned_hook_dll",
                 40,
                 tr!("DLL without a valid signature loaded into a Windows process"),
+            ));
+        }
+        if source == "amsi_provider"
+            && valid
+            && !ms_signed
+            && !crate::svcsec::is_security_vendor(&info.map(|i| text(i.at("signer"))).unwrap_or_default())
+        {
+            item.add_flag(Flag::new(
+                "amsi_unknown_vendor",
+                20,
+                tr!("AMSI provider from a publisher that is not a known security vendor: it sees every script before it runs"),
             ));
         }
         if is_user_writable(&path) && !matches!(source, "ifeo_verifier" | "clr_profiler") {

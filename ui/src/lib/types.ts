@@ -165,6 +165,8 @@ export interface Analysis {
   items: Item[];
   /** What changed since the previous scan in the same folder; absent for a first scan. */
   changes?: ScanChanges;
+  /** Opened from a folder a standard user can change: shown, but no action is offered. */
+  viewOnly?: boolean;
 }
 
 /** Comparison with the previous scan. `new` and `changed[].id` are ids of this scan's items; texts are already localized. */
@@ -789,7 +791,7 @@ export interface AutoScanStatus {
 /** "watch": about the background watch itself (its saved state was damaged and reset); "scan": an
  *  automatic scan found something. */
 export type AlertKind =
-  | "startup" | "service" | "task" | "security" | "port" | "hook" | "driver" | "hosts" | "event" | "scan" | "watch";
+  | "startup" | "service" | "task" | "security" | "port" | "hook" | "driver" | "hosts" | "network" | "event" | "scan" | "watch";
 
 /** One change the background watch noticed. Title and detail are plain text from Rust. */
 export interface WatchAlert {

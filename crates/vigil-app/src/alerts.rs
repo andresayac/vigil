@@ -74,12 +74,18 @@ pub async fn watch_open_auto_report(app: AppHandle) -> CmdResult<Option<serde_js
         return Ok(None);
     }
     let path = std::path::PathBuf::from(report);
-    let mut folders = vec![crate::commands::scans_folder(&app)];
+    let own = crate::commands::scans_folder(&app);
+    let mut folders = vec![own.clone()];
     if let Some(local) = std::env::var_os("LOCALAPPDATA").filter(|v| !v.is_empty()) {
         folders.push(std::path::PathBuf::from(local).join("Vigil").join("scans"));
     }
     crate::autoscan::check_report_path(&path, &folders)?;
-    crate::commands::open_report_file(&app, path).await
+    // An elevated copy reads a report the standard-user tray copy wrote in a folder any program of
+    // this user can write to: it may look, but nothing is planned from it (a planted report could
+    // mark a security product "remove"). Its own folder (Administrators only) is trusted.
+    let elevated = app.state::<crate::commands::AppState>().admin;
+    let trusted = !elevated || crate::autoscan::inside(&path, &own);
+    crate::commands::open_report_file(&app, path, trusted).await
 }
 
 /// Saves the Background watch settings.

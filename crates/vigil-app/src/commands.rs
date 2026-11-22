@@ -44,6 +44,10 @@ struct Inner {
     /// The report in the form the UI and the planner read (render_json).
     analysis_json: Option<Value>,
     report_path: Option<PathBuf>,
+    /// The loaded report came from a folder a standard user can write to while this copy runs
+    /// elevated (the tray copy's automatic scan): it is shown, but no action is planned or built
+    /// from it, since its findings could have been planted.
+    report_untrusted: bool,
     restore_point_done: bool,
     pending: Option<Pending>,
     cleanup: Vec<CleanupTarget>,
@@ -127,6 +131,22 @@ impl AppState {
         inner.analysis = Some(analysis);
         inner.analysis_json = Some(json);
         inner.report_path = path;
+        inner.report_untrusted = false;
+    }
+
+    /// Loads a report to look at only (see `Inner::report_untrusted`).
+    fn set_analysis_untrusted(&self, analysis: Analysis, path: PathBuf) {
+        self.set_analysis(analysis, Some(path));
+        self.lock().report_untrusted = true;
+    }
+
+    /// The loaded report, for planning or building actions: none when it is only to be looked at.
+    fn actionable(inner: &Inner) -> Option<&Value> {
+        if inner.report_untrusted {
+            None
+        } else {
+            inner.analysis_json.as_ref()
+        }
     }
 
     /// Saves the current report in place (after an action recorded on one of its findings).
@@ -195,12 +215,21 @@ pub(crate) fn scans_folder(app: &AppHandle) -> PathBuf {
 
 /// Opens a report whose path Rust chose and checked itself (the last automatic scan) and makes it
 /// the current report.
-pub(crate) async fn open_report_file(app: &AppHandle, path: PathBuf) -> CmdResult<Option<Value>> {
+pub(crate) async fn open_report_file(app: &AppHandle, path: PathBuf, trusted: bool) -> CmdResult<Option<Value>> {
     let loaded = blocking(move || vigil_scan::pipeline::load_report(&path).map(|a| (a, path))).await?;
     let (analysis, path) = loaded.map_err(|e| format!("Could not open the report: {e}"))?;
     let st = state(app);
-    st.set_analysis(analysis, Some(path));
-    Ok(st.lock().analysis_json.clone())
+    if trusted {
+        st.set_analysis(analysis, Some(path));
+    } else {
+        st.set_analysis_untrusted(analysis, path);
+    }
+    let mut json = st.lock().analysis_json.clone();
+    // The page says why this report offers no actions.
+    if let (false, Some(Value::Object(map))) = (trusted, json.as_mut()) {
+        map.insert("viewOnly".into(), Value::Bool(true));
+    }
+    Ok(json)
 }
 
 #[tauri::command]
@@ -307,7 +336,7 @@ pub async fn scan_collect(app: AppHandle, days: u32, virustotal: bool) -> CmdRes
     .await??;
     let (analysis, provider, problem) = collected;
     let meta = |key: &str| analysis.meta.get(key).and_then(Value::as_str).unwrap_or("").to_string();
-    let redactor = vigil_scan::privacy::Redactor::new(&meta("user"), &meta("computer"), redact);
+    let redactor = vigil_scan::privacy::Redactor::for_this_computer(&meta("user"), &meta("computer"), redact);
     let pending_items: Vec<_> = analysis.items.iter().filter(|i| !i.trusted).collect();
     let preview: Vec<Value> = pending_items
         .iter()
@@ -446,7 +475,7 @@ fn truncate(text: &str, max: usize) -> String {
 #[tauri::command]
 pub fn plan_actions(state: State<'_, AppState>, item_id: String) -> Vec<ActionSpec> {
     let inner = state.lock();
-    let analysis = inner.analysis_json.as_ref();
+    let analysis = AppState::actionable(&inner);
     requests::find_item(analysis, &item_id)
         .map(|item| planner::plan_actions(item, requests::scan_started(analysis)))
         .unwrap_or_default()
@@ -960,7 +989,7 @@ async fn build_plan(app: &AppHandle, request: &Request) -> CmdResult<Plan> {
         .filter_map(|t| serde_json::to_value(t).ok())
         .collect();
     let ctx = Context {
-        analysis: inner.analysis_json.as_ref(),
+        analysis: AppState::actionable(&inner),
         processes: &processes,
         cleanup: &cleanup,
         services: &services,

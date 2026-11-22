@@ -32,7 +32,11 @@ pub fn scrub_secrets(text: &str) -> String {
     let text = SECRET_KV.replace_all(&text, keep_first);
     let text = URL_CREDS.replace_all(&text, |caps: &Captures| format!("{}<redacted>@", &caps[1]));
     let text = BEARER.replace_all(&text, keep_first);
-    KNOWN_TOKENS.replace_all(&text, NoExpand("<redacted>")).into_owned()
+    let text = KNOWN_TOKENS.replace_all(&text, NoExpand("<redacted>"));
+    // Everything the secrets scanner recognizes too (`net user NAME PASS`, `-AsPlainText`
+    // literals, `$dbPassword=`, `*_API_KEY=`, `github_pat_`, `AccountKey=`...), from its own
+    // patterns, so an excerpt can never show a value the scanner would report as a secret.
+    crate::secrets::mask_values(&text)
 }
 
 /// Cuts a text to `limit` characters, saying how many were left out.
@@ -45,11 +49,80 @@ pub fn clip(text: &str, limit: usize) -> String {
     }
 }
 
-/// Replaces the user name, the computer name and the machine SID with markers.
+/// Replaces the user name, the computer name and the machine SID with markers; with
+/// [`Redactor::with_accounts`] (or [`Redactor::for_this_computer`]) also the other local account
+/// names and the sign-in domain. Every profile folder (`C:\Users\<name>`) other than the shared
+/// ones (Public, Default...) loses its name too, whoever it belongs to.
 pub struct Redactor {
     enabled: bool,
     computer: Option<Regex>,
     user: Option<Regex>,
+    domain: Option<Regex>,
+    accounts: Vec<Regex>,
+}
+
+/// Account and folder names that identify nobody: Windows' own accounts and shared profiles. A
+/// local account with one of these names is left alone, so ordinary words are not replaced.
+const NOT_PERSONAL: &[&str] = &[
+    "administrator",
+    "admin",
+    "guest",
+    "defaultaccount",
+    "wdagutilityaccount",
+    "defaultuser0",
+    "user",
+    "users",
+    "owner",
+    "test",
+    "home",
+    "public",
+    "default",
+    "default user",
+    "all users",
+    "defaultapppool",
+    "system",
+    "local service",
+    "network service",
+    "localservice",
+    "networkservice",
+    "everyone",
+    "service",
+    "local",
+    "network",
+    "workgroup",
+    "azuread",
+    "nt authority",
+    "builtin",
+    "nt service",
+    "font driver host",
+    "window manager",
+];
+
+fn personal(name: &str) -> bool {
+    let name = name.trim();
+    char_len(name) >= 3 && !NOT_PERSONAL.contains(&name.to_lowercase().as_str()) && !name.starts_with('<')
+}
+
+/// The names of this computer's local accounts and the sign-in domain, read once.
+#[cfg(windows)]
+fn this_computer_names() -> &'static (Vec<String>, String) {
+    static NAMES: std::sync::OnceLock<(Vec<String>, String)> = std::sync::OnceLock::new();
+    NAMES.get_or_init(|| {
+        let accounts = vigil_sys::accounts::read()
+            .accounts
+            .into_iter()
+            .flat_map(|a| [a.name, a.full_name])
+            .filter(|n| personal(n))
+            .collect();
+        let domain = std::env::var("USERDOMAIN").unwrap_or_default();
+        let computer = std::env::var("COMPUTERNAME").unwrap_or_default();
+        let domain = if domain.eq_ignore_ascii_case(&computer) {
+            String::new()
+        } else {
+            domain
+        };
+        (accounts, domain)
+    })
 }
 
 impl Redactor {
@@ -63,7 +136,45 @@ impl Redactor {
             enabled,
             computer: literal(computer),
             user: literal(user),
+            domain: None,
+            accounts: Vec::new(),
         }
+    }
+
+    /// Also replaces these account names (whole words) with `<account>` and the domain with
+    /// `<domain>`. Windows' own names and shared profiles are left alone.
+    pub fn with_accounts(mut self, names: &[String], domain: &str) -> Self {
+        if !self.enabled {
+            return self;
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        let mut names: Vec<&str> = names
+            .iter()
+            .map(|n| n.trim())
+            .filter(|n| personal(n) && seen.insert(n.to_lowercase()))
+            .collect();
+        // Longer names first: "Ana Lopez" before "ana".
+        names.sort_by_key(|n| std::cmp::Reverse(char_len(n)));
+        self.accounts = names
+            .into_iter()
+            .filter_map(|n| Regex::new(&format!("(?i){}", regex::escape(n))).ok())
+            .collect();
+        self.domain = personal(domain)
+            .then(|| Regex::new(&format!("(?i){}", regex::escape(domain.trim()))).ok())
+            .flatten();
+        self
+    }
+
+    /// [`Redactor::new`] plus this computer's local account names and the sign-in domain: what the
+    /// AI review and the MCP tools use, so other people's names on the computer are hidden too.
+    pub fn for_this_computer(user: &str, computer: &str, enabled: bool) -> Self {
+        let redactor = Self::new(user, computer, enabled);
+        #[cfg(windows)]
+        if enabled {
+            let (names, domain) = this_computer_names();
+            return redactor.with_accounts(names, domain);
+        }
+        redactor
     }
 
     pub fn text(&self, value: &str) -> String {
@@ -77,6 +188,13 @@ impl Redactor {
         if let Some(user) = &self.user {
             value = replace_whole_word(user, &value, "<user>");
         }
+        if let Some(domain) = &self.domain {
+            value = replace_whole_word(domain, &value, "<domain>");
+        }
+        for account in &self.accounts {
+            value = replace_whole_word(account, &value, "<account>");
+        }
+        value = profile_names(&value);
         MACHINE_SID
             .replace_all(&value, |caps: &Captures| {
                 format!("S-1-5-21-<sid>{}", caps.get(1).map_or("", |m| m.as_str()))
@@ -99,6 +217,50 @@ impl Redactor {
             other => other.clone(),
         }
     }
+}
+
+/// `X:\Users\<name>` with the name replaced by `<account>`, unless it is a shared profile (Public,
+/// Default...) or already a marker. The name runs to the next `\` (or, with none after it, to the
+/// first space or quote), so `C:\Users\John Smith\x` and `C:\Users\jdoe` both lose it.
+fn profile_names(text: &str) -> String {
+    const NEEDLE: &str = ":\\users\\";
+    let lower = text.to_ascii_lowercase();
+    let mut out = String::with_capacity(text.len());
+    let mut copied = 0;
+    let mut from = 0;
+    while let Some(found) = lower[from..].find(NEEDLE).map(|i| i + from) {
+        let drive_ok = found >= 1 && text.as_bytes()[found - 1].is_ascii_alphabetic();
+        let start = found + NEEDLE.len();
+        from = start;
+        if !drive_ok || start >= text.len() {
+            continue;
+        }
+        let rest = &text[start..];
+        let stop = |c: char| {
+            matches!(
+                c,
+                '"' | '\'' | '\r' | '\n' | '\t' | '<' | '>' | '|' | '*' | '?' | ',' | ';'
+            )
+        };
+        let end = match rest.find(|c: char| c == '\\' || c == '/' || stop(c)) {
+            Some(at) if rest[at..].starts_with(['\\', '/']) => at,
+            other => {
+                // No folder after it: the name ends at the first space too.
+                let cut = other.unwrap_or(rest.len());
+                rest[..cut].find(char::is_whitespace).unwrap_or(cut)
+            }
+        };
+        let name = &rest[..end];
+        if name.is_empty() || !personal(name) {
+            continue;
+        }
+        out.push_str(&text[copied..start]);
+        out.push_str("<account>");
+        copied = start + end;
+        from = copied;
+    }
+    out.push_str(&text[copied..]);
+    out
 }
 
 /// `(?<![A-Za-z0-9])name(?![A-Za-z0-9])` replacement: whole words only, so names inside
@@ -126,4 +288,45 @@ fn replace_whole_word(pattern: &Regex, text: &str, replacement: &str) -> String 
     }
     out.push_str(&text[copied..]);
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn other_profiles_and_accounts_are_hidden_too() {
+        let redactor = Redactor::new("jdoe", "PC-VICTIM", true).with_accounts(
+            &[
+                "ana".into(),
+                "support".into(),
+                "Administrator".into(),
+                "Ana Lopez".into(),
+            ],
+            "CONTOSO",
+        );
+        let cases = [
+            (r"C:\Users\jdoe\x.exe", r"C:\Users\<user>\x.exe"),
+            (r"C:\Users\ana\AppData\x.exe", r"C:\Users\<account>\AppData\x.exe"),
+            (
+                r"D:\users\Someone Else\Downloads\a.zip",
+                r"D:\users\<account>\Downloads\a.zip",
+            ),
+            (r#""C:\Users\mallory""#, r#""C:\Users\<account>""#),
+            (r"C:\Users\mallory and more", r"C:\Users\<account> and more"),
+            (r"C:\Users\Public\Desktop\a.lnk", r"C:\Users\Public\Desktop\a.lnk"),
+            (r"C:\Users\Default\NTUSER.DAT", r"C:\Users\Default\NTUSER.DAT"),
+            (r"PC-VICTIM\support signed in", r"<computer>\<account> signed in"),
+            (r"CONTOSO\ana", r"<domain>\<account>"),
+            ("Administrator and Guest", "Administrator and Guest"),
+            ("Ana Lopez", "<account>"),
+            ("supporting text", "supporting text"),
+        ];
+        for (text, want) in cases {
+            assert_eq!(redactor.text(text), want, "{text}");
+        }
+        // Off: nothing changes.
+        let off = Redactor::new("jdoe", "PC-VICTIM", false).with_accounts(&["ana".into()], "CONTOSO");
+        assert_eq!(off.text(r"C:\Users\ana\x"), r"C:\Users\ana\x");
+    }
 }

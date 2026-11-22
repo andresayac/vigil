@@ -232,9 +232,19 @@ pub(crate) fn agent_for(text: &str) -> Option<&'static Agent> {
 /// Whether a small text file has a `key=value` line (or `key = 'value'`) with a non-empty value.
 /// Only the answer is kept, never the value.
 fn has_setting(path: &std::path::Path, key: &str) -> Option<bool> {
-    let bytes = std::fs::read(path).ok()?;
-    let text = String::from_utf8_lossy(&bytes[..bytes.len().min(64 * 1024)]).to_string();
+    let bytes = read_head(path)?;
+    let text = String::from_utf8_lossy(&bytes).to_string();
     Some(setting(&text, key).is_some_and(|v| !v.is_empty()))
+}
+
+/// The first 64 KiB of a settings file, read without loading the rest: these files sit in folders
+/// the user can write to, so a huge one must not exhaust memory in an elevated scan.
+fn read_head(path: &std::path::Path) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let file = std::fs::File::open(path).ok()?;
+    let mut bytes = Vec::new();
+    file.take(64 * 1024).read_to_end(&mut bytes).ok()?;
+    Some(bytes)
 }
 
 /// The value of `key` in a `key=value` / `key = 'value'` text (TOML-like or AnyDesk's .conf).
@@ -310,9 +320,9 @@ pub(crate) fn collect_config() -> Value {
             rustdesk_password = Some(rustdesk_password.unwrap_or(false) || set);
         }
         if rustdesk_server.is_empty()
-            && let Ok(bytes) = std::fs::read(dir.join("RustDesk2.toml"))
+            && let Some(bytes) = read_head(&dir.join("RustDesk2.toml"))
         {
-            let text = String::from_utf8_lossy(&bytes[..bytes.len().min(64 * 1024)]).to_string();
+            let text = String::from_utf8_lossy(&bytes).to_string();
             rustdesk_server = setting(&text, "custom-rendezvous-server")
                 .or_else(|| setting(&text, "relay-server"))
                 .map(|s| take(strip(s), 255).to_string())
@@ -630,6 +640,20 @@ pub(crate) fn items(raw: &Value) -> Vec<Item> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_files_are_read_up_to_64_kib() {
+        let dir = std::env::temp_dir().join(format!("vigil-rmm-head-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let big = dir.join("system.conf");
+        let mut text = String::from("ad.anynet.pwd_hash=abc\n");
+        text.push_str(&"x".repeat(200 * 1024));
+        std::fs::write(&big, &text).ok();
+        assert_eq!(read_head(&big).map(|b| b.len()), Some(64 * 1024));
+        assert_eq!(has_setting(&big, "ad.anynet.pwd_hash"), Some(true));
+        assert_eq!(read_head(&dir.join("missing.conf")), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn by(id: &str) -> &'static Agent {
         AGENTS.iter().find(|a| a.id == id).expect("agent")

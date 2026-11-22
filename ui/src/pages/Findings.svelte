@@ -110,6 +110,7 @@
     <span class="grow"></span>
     <input type="search" placeholder={t("findings.search")} bind:value={text} />
   </div>
+  {#if report.analysis?.viewOnly}<p class="view-only">{t("findings.viewOnly")}</p>{/if}
   <div class="filters">
     {#each VERDICT_ORDER as verdict (verdict)}
       <button class="chip" class:on={verdicts[verdict] && !ids && !onlyNew} onclick={() => pickVerdict(verdict)}>
@@ -169,6 +170,7 @@
 </div>
 
 <style>
+  .view-only { margin: 0 0 8px; padding: 8px 12px; border-radius: 6px; background: var(--layer); border: 1px solid var(--rule); color: var(--warn); font-size: 13px; }
   .filters { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .filters .grow { flex: 1; }
   select { font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--rule-strong); border-radius: 5px; padding: 4px 8px; }

@@ -1,6 +1,7 @@
 //! Vigil's read-only tools for AI models: the shared registry ([`registry`]) and the MCP server
 //! (`vigil mcp`, [`server`]). The in-app investigation uses the same registry.
 
+pub mod context;
 pub mod registry;
 pub mod server;
 
@@ -35,6 +36,16 @@ struct Options {
     print_config: bool,
     help: bool,
     log: Option<PathBuf>,
+    /// Hidden: Vigil's own investigations pass their budget (`--max-calls`, `--max-bytes`,
+    /// `--max-result`).
+    budget: server::Budget,
+}
+
+fn number(value: Option<&String>, name: &str) -> Result<usize, String> {
+    value
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .ok_or_else(|| tr!("{0} needs a value", name))
 }
 
 fn parse(args: &[String]) -> Result<Options, String> {
@@ -44,6 +55,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
         print_config: false,
         help: false,
         log: None,
+        budget: server::Budget::default(),
     };
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
@@ -55,6 +67,13 @@ fn parse(args: &[String]) -> Result<Options, String> {
             "--log" => {
                 let path = iter.next().ok_or_else(|| tr!("{0} needs a value", "--log"))?;
                 options.log = Some(PathBuf::from(path));
+            }
+            "--max-calls" => options.budget.max_calls = Some(number(iter.next(), "--max-calls")?),
+            "--max-bytes" => options.budget.max_bytes = Some(number(iter.next(), "--max-bytes")?),
+            "--max-result" => {
+                // Never above the server's own cap.
+                let wanted = number(iter.next(), "--max-result")?;
+                options.budget.max_result = wanted.min(registry::MAX_RESULT_BYTES);
             }
             "--no-anonymize" => options.anonymize = false,
             "--anonymize" => options.anonymize = true,
@@ -107,10 +126,11 @@ pub fn cli(args: &[String]) -> i32 {
         },
         None => registry::newest_report(),
     };
-    let server = server::Server {
-        ctx: registry::Context::new(report, options.anonymize),
-        log: options.log,
-    };
+    let server = server::Server::new(
+        registry::Context::new(report, options.anonymize),
+        options.log,
+        options.budget,
+    );
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     match server.serve(BufReader::new(stdin.lock()), stdout.lock()) {

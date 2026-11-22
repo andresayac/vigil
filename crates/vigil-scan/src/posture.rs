@@ -1452,12 +1452,20 @@ pub(crate) fn config_items(raw: &Value, aux: &Aux) -> (Vec<Item>, Map<String, Va
     posture.insert("hosts_file".into(), Value::Object(hosts_counts));
     items.extend(hosts);
 
+    let network_config = crate::netcfg::posture(raw);
+    if !network_config.is_null() {
+        posture.insert("network_config".into(), network_config);
+    }
+    items.extend(crate::netcfg::items(raw, Local::now().timestamp_millis()));
+    // Servers set by hand are reported by `netcfg` with what is known about them.
+    let hand_set_dns = crate::netcfg::hand_set_dns(raw);
     let mut unknown_dns: Vec<(String, BTreeSet<String>)> = Vec::new();
     for iface in list(raw.at("network").at("dns_servers")) {
         for server in list(iface.at("servers")) {
             let server_text = str_of(server);
             if server.as_str().is_some_and(|s| KNOWN_DNS.contains(&s))
                 || lower(&server_text).starts_with("fec0:0:0:ffff")
+                || hand_set_dns.contains(&server_text)
             {
                 continue;
             }
@@ -1645,6 +1653,8 @@ pub(crate) fn config_items(raw: &Value, aux: &Aux) -> (Vec<Item>, Map<String, Va
     items.extend(crate::secrets::items(raw));
     items.extend(firewall_rule_items(raw));
     items.extend(crate::rmm::items(raw));
+    items.extend(crate::certs::items(raw));
+    items.extend(crate::amsi::items(raw));
 
     // --- pathless processes and findings from the registry
     let odd: BTreeSet<&String> = aux

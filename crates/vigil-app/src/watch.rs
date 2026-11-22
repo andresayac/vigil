@@ -25,6 +25,9 @@
 //! - kernel and file system drivers: a new one, or a driver file that moved outside the Windows
 //!   driver folders (driver updates inside them are not news);
 //! - the hosts file: its size and time each check, its contents only when they changed;
+//! - each connected adapter's DNS servers and the WinHTTP and user proxies (`vigil_sys::netcfg`):
+//!   servers the network hands out changing is information, servers set by hand or a new proxy
+//!   is worth a look, and an adapter appearing or going away is a network change, not news;
 //! - a few Windows log events (`vigil_sys::watchlog`), read from where the last check stopped:
 //!   a service installed, a log cleared, a new account or administrator, a scheduled task created,
 //!   Microsoft Defender detections and changes, and new permanent WMI subscriptions. They catch
@@ -121,7 +124,7 @@ pub struct WatchSettings {
     pub notify_tasks: bool,
     pub notify_security: bool,
     pub notify_ports: bool,
-    /// Hook values, drivers and the hosts file.
+    /// Hook values, drivers, the hosts file, DNS servers and proxies.
     pub notify_hooks: bool,
     /// Events read from the Windows logs.
     pub notify_events: bool,
@@ -164,7 +167,7 @@ impl WatchSettings {
             "task" => self.notify_tasks,
             "security" => self.notify_security,
             "port" => self.notify_ports,
-            "hook" | "driver" | "hosts" => self.notify_hooks,
+            "hook" | "driver" | "hosts" | "network" => self.notify_hooks,
             "event" => self.notify_events,
             _ => true,
         }
@@ -282,6 +285,8 @@ pub struct Fingerprint {
     /// Driver service name (lower case) -> driver.
     pub drivers: Option<BTreeMap<String, DriverPrint>>,
     pub hosts: Option<HostsPrint>,
+    /// DNS servers per adapter and the proxies (`None` when they could not be read).
+    pub network: Option<NetPrint>,
     /// Log name -> where the last check stopped reading it.
     pub events: BTreeMap<String, LogMark>,
     /// Permanent WMI subscriptions already reported (a short hash of each), so the same one logged
@@ -301,6 +306,28 @@ pub struct DriverPrint {
     /// ImagePath as written; "" means the default `System32\drivers\<name>.sys`.
     pub path: String,
     pub start: String,
+}
+
+/// Where name lookups and web traffic go: each connected adapter's DNS servers and the proxies.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct NetPrint {
+    /// Adapter `{GUID}` (lower case) -> its DNS servers.
+    pub dns: BTreeMap<String, DnsPrint>,
+    /// WinHTTP's proxy ("" when it goes direct).
+    pub winhttp: String,
+    /// The user's proxy server and proxy script ("" when none).
+    pub proxy: String,
+    pub pac: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct DnsPrint {
+    pub name: String,
+    pub servers: Vec<String>,
+    /// Set by hand or by a program (`NameServer`), not handed out by the network.
+    pub manual: bool,
 }
 
 /// The hosts file: its size and time (read each check) and, read only when they changed, a hash
@@ -509,6 +536,9 @@ pub fn diff(old: &Fingerprint, new: &Fingerprint) -> Vec<Alert> {
     if let (Some(old), Some(new)) = (&old.hosts, &new.hosts) {
         out.extend(hosts_alert(old, new));
     }
+    if let (Some(old), Some(new)) = (&old.network, &new.network) {
+        out.extend(network_alerts(old, new));
+    }
     out.extend(event_alerts(&new.event_hits, old, new));
     out
 }
@@ -631,6 +661,7 @@ pub fn merged(old: &Fingerprint, new: Fingerprint) -> Fingerprint {
         hooks,
         drivers: new.drivers.or_else(|| old.drivers.clone()),
         hosts: new.hosts.or_else(|| old.hosts.clone()),
+        network: new.network.or_else(|| old.network.clone()),
         events,
         wmi_seen,
         event_hits: Vec::new(),
@@ -664,6 +695,7 @@ pub fn read_fingerprint(elevated: bool, previous: &Fingerprint) -> Fingerprint {
         hooks: vigil_sys::hooks::read(&vigil_sys::hooks::default_sources()),
         drivers: vigil_sys::hooks::drivers().map(|list| driver_print(&list)),
         hosts: read_hosts(&hosts_path(), previous.hosts.as_ref()),
+        network: network_print(),
         events,
         wmi_seen: Vec::new(),
         event_hits,
@@ -942,6 +974,7 @@ fn hook_label(kind: &str) -> String {
         "netsh" => tr!("NetSh helpers"),
         "print_monitor" => tr!("Print monitors (loaded by the print spooler)"),
         "time_provider" => tr!("Time providers (loaded by the time service)"),
+        "amsi" => tr!("AMSI providers (they see every script before it runs)"),
         other => other.to_string(),
     }
 }
@@ -953,6 +986,8 @@ pub fn hook_alerts(
 ) -> Vec<Alert> {
     let sources = hook_sources();
     let mut out = Vec::new();
+    // Microsoft's root program, read once and only when a root appeared.
+    let mut program: Option<Option<std::collections::BTreeSet<String>>> = None;
     for (id, values) in new {
         let Some(before) = old.get(id) else { continue };
         let (kind, location) = sources.get(id).cloned().unwrap_or(("", String::new()));
@@ -962,12 +997,80 @@ pub fn hook_alerts(
                 Some(_) => true,
                 None => false,
             };
-            if let Some(found) = hook_alert(kind, &location, name, value, changed) {
+            if kind == "root_cert" {
+                let scope = root_scope(id);
+                let subject = vigil_sys::certs::root_subject(scope, name).unwrap_or_default();
+                let known = program
+                    .get_or_insert_with(vigil_sys::certs::root_program)
+                    .as_ref()
+                    .is_some_and(|p| p.contains(&name.to_uppercase()));
+                out.push(root_alert(scope, &location, name, &subject, known));
+                continue;
+            }
+            let value = if kind == "amsi" {
+                vigil_sys::hooks::amsi_provider_dll(name)
+            } else {
+                value.clone()
+            };
+            if let Some(found) = hook_alert(kind, &location, name, &value, changed) {
                 out.push(found);
             }
         }
     }
     out
+}
+
+/// Which store a root certificate source reads.
+fn root_scope(id: &str) -> vigil_sys::certs::Scope {
+    use vigil_sys::certs::Scope;
+    match id {
+        "root_user" => Scope::User,
+        "root_policy" => Scope::Policy,
+        "root_enterprise" => Scope::Enterprise,
+        _ => Scope::Machine,
+    }
+}
+
+/// A root certificate that appeared. In your account's store any program can add one without
+/// administrator rights; one in Microsoft's root program (Windows downloads these by itself) is
+/// information only, as are roots set by Group Policy or an enterprise.
+pub fn root_alert(
+    scope: vigil_sys::certs::Scope,
+    location: &str,
+    sha1: &str,
+    subject: &str,
+    in_program: bool,
+) -> Alert {
+    use vigil_sys::certs::Scope;
+    let name = if subject.is_empty() { sha1 } else { subject };
+    let severity = match scope {
+        _ if in_program => "info",
+        Scope::Policy | Scope::Enterprise => "info",
+        _ => "warning",
+    };
+    let detail = if in_program {
+        tr!(
+            "It is in Microsoft's list of trusted root authorities (in {0}); Windows adds these by itself.",
+            location
+        )
+    } else if matches!(scope, Scope::Policy | Scope::Enterprise) {
+        tr!(
+            "It was set by your organization (in {0}). Companies and schools add their own roots this way.",
+            location
+        )
+    } else {
+        tr!(
+            "It is not in Microsoft's list of trusted root authorities (in {0}). With its key, websites and programs can be made to look genuine on this computer. Debugging proxies, antivirus web shields and local development tools add one; if you did not install such a tool, remove it with certmgr.msc or certlm.msc.",
+            location
+        )
+    };
+    alert(
+        "hook",
+        severity,
+        "alerts",
+        tr!("New trusted root certificate: {0}", name),
+        detail,
+    )
 }
 
 fn hook_alert(kind: &str, location: &str, name: &str, value: &str, changed: bool) -> Option<Alert> {
@@ -1012,6 +1115,36 @@ fn hook_alert(kind: &str, location: &str, name: &str, value: &str, changed: bool
             ),
         ),
         "appinit" if name.eq_ignore_ascii_case("LoadAppInit_DLLs") && value == "0" => return None,
+        // AmsiEnable back to 1 (or another value) is not news; 0 turns scanning off.
+        "amsi_enable" if value.trim() != "0" => return None,
+        "amsi_enable" => alert(
+            "security",
+            "critical",
+            "alerts",
+            tr!("Script scanning turned off for Windows Script Host"),
+            tr!(
+                "AmsiEnable is now 0 (in {0}): .vbs and .js scripts run without being shown to the antivirus. Malware sets it before running its scripts.",
+                location
+            ),
+        ),
+        "amsi" if changed => return None,
+        "amsi" => alert(
+            "hook",
+            if value.is_empty() {
+                "warning"
+            } else if windows_hook_value(value) || value.to_lowercase().contains(r"\microsoft\windows defender\") {
+                "info"
+            } else {
+                "warning"
+            },
+            "alerts",
+            tr!("New AMSI provider: {0}", name),
+            tr!(
+                "{0} now sees every script before it runs (PowerShell, Office macros, Windows Script Host), in {1}. Antivirus programs add one; if you did not install a security program, look at it.",
+                if value.is_empty() { name } else { value },
+                location
+            ),
+        ),
         "appinit" | "appcert" | "winlogon" | "lsa" | "class" => alert(
             "hook",
             if name.eq_ignore_ascii_case("LoadAppInit_DLLs") {
@@ -1107,6 +1240,117 @@ pub fn driver_alerts(old: &BTreeMap<String, DriverPrint>, new: &BTreeMap<String,
                 ));
             }
             Some(_) => {}
+        }
+    }
+    out
+}
+
+// ------------------------------------------------------------------------------------ network settings
+
+/// Each connected adapter's DNS servers and the proxies; `None` when one of them cannot be read.
+fn network_print() -> Option<NetPrint> {
+    let adapters = vigil_sys::netcfg::adapters_light()?;
+    let winhttp = vigil_sys::netcfg::winhttp_proxy()?;
+    let user = vigil_sys::netcfg::user_proxy()?;
+    let dns = adapters
+        .into_iter()
+        .filter(|a| a.up && !a.dns.is_empty())
+        .map(|a| {
+            (
+                a.guid.to_lowercase(),
+                DnsPrint {
+                    name: a.name,
+                    servers: a.dns,
+                    manual: !a.static_dns.is_empty(),
+                },
+            )
+        })
+        .collect();
+    Some(NetPrint {
+        dns,
+        winhttp: winhttp.server,
+        proxy: user.server,
+        pac: user.pac_url,
+    })
+}
+
+/// Changes of the DNS servers and proxies. A server list the network handed out (DHCP) changes
+/// with the network, so it is information; one set by hand or by a program is worth a look, as
+/// is any new proxy. An adapter that appears or goes away is a network change, not news.
+pub fn network_alerts(old: &NetPrint, new: &NetPrint) -> Vec<Alert> {
+    let mut out = Vec::new();
+    for (guid, now) in &new.dns {
+        let Some(before) = old.dns.get(guid) else {
+            continue;
+        };
+        if before.servers == now.servers {
+            continue;
+        }
+        let servers = now.servers.join(", ");
+        let (severity, detail) = if now.manual {
+            (
+                "warning",
+                tr!(
+                    "Now: {0}. They were set by hand or by a program, not by the network.",
+                    servers
+                ),
+            )
+        } else {
+            ("info", tr!("Now: {0}, as the network handed them out.", servers))
+        };
+        out.push(alert(
+            "network",
+            severity,
+            "network",
+            tr!("DNS servers changed on {0}", now.name),
+            detail,
+        ));
+    }
+    // (before, now, the title when it is set, the title when it is removed)
+    type Proxy<'a> = (&'a String, &'a String, fn(&str) -> String, fn() -> String);
+    let proxies: [Proxy; 3] = [
+        (
+            &old.winhttp,
+            &new.winhttp,
+            |now| tr!("Proxy for Windows services set: {0}", now),
+            || tr!("Proxy for Windows services removed"),
+        ),
+        (
+            &old.proxy,
+            &new.proxy,
+            |now| tr!("Proxy set: {0}", now),
+            || tr!("Proxy removed"),
+        ),
+        (
+            &old.pac,
+            &new.pac,
+            |now| tr!("Proxy script set: {0}", now),
+            || tr!("Proxy script removed"),
+        ),
+    ];
+    for (before, now, set, removed) in proxies {
+        if before.eq_ignore_ascii_case(now) {
+            continue;
+        }
+        if now.is_empty() {
+            out.push(alert(
+                "network",
+                "info",
+                "network",
+                removed(),
+                tr!("Web traffic no longer goes through {0}.", before),
+            ));
+        } else {
+            out.push(alert(
+                "network",
+                "warning",
+                "network",
+                set(now),
+                tr!(
+                    "Web traffic now goes through {0}; whoever runs it sees and can change it.",
+                    now
+                ),
+            ));
         }
     }
     out
@@ -1332,6 +1576,12 @@ pub fn read_events(
         // Capped: go on from the last event read next time, so nothing is skipped.
         let mark = match found.last() {
             Some(last) if found.len() >= MAX_EVENTS && !reset => LogMark {
+                record: last.record_id,
+                time: last.time_ms,
+            },
+            // An event written between reading the newest record and reading the events has been
+            // read (and reported) already: the mark never stays behind it, or it would come back.
+            Some(last) if last.record_id > newest.record => LogMark {
                 record: last.record_id,
                 time: last.time_ms,
             },
@@ -2925,6 +3175,65 @@ mod more_tests {
         });
     }
 
+    #[test]
+    fn amsi_and_root_certificate_alerts() {
+        use vigil_sys::certs::Scope;
+        vigil_i18n::with_language("en", || {
+            let off = hook_alert("amsi_enable", "HKCU", "AmsiEnable", "0", true).expect("alert");
+            assert_eq!((off.kind.as_str(), off.severity.as_str()), ("security", "critical"));
+            assert!(hook_alert("amsi_enable", "HKCU", "AmsiEnable", "1", true).is_none());
+            let defender = hook_alert(
+                "amsi",
+                "HKLM",
+                "{2781761E-28E0-4109-99FE-B9D127C57AFE}",
+                r"C:\ProgramData\Microsoft\Windows Defender\Platform\4.18.1-0\MpOav.dll",
+                false,
+            )
+            .expect("alert");
+            assert_eq!(defender.severity, "info");
+            let other = hook_alert(
+                "amsi",
+                "HKLM",
+                "{11111111-2222-3333-4444-555555555555}",
+                r"C:\Users\jdoe\AppData\Local\Contoso\amsi.dll",
+                false,
+            )
+            .expect("alert");
+            assert_eq!(other.severity, "warning");
+            assert!(other.detail.contains("amsi.dll"));
+
+            let user = root_alert(Scope::User, "HKCU", "00AA", "Contoso Root", false);
+            assert_eq!(user.severity, "warning");
+            assert!(user.title.contains("Contoso Root"));
+            assert_eq!(root_alert(Scope::Machine, "HKLM", "00AA", "", true).severity, "info");
+            assert!(
+                root_alert(Scope::Machine, "HKLM", "00AA", "", true)
+                    .title
+                    .contains("00AA")
+            );
+            assert_eq!(
+                root_alert(Scope::Policy, "HKLM", "00AA", "Corp", false).severity,
+                "info"
+            );
+        });
+    }
+
+    #[test]
+    fn a_new_root_store_entry_is_compared_only_when_both_sides_read_it() {
+        let mut old = BTreeMap::new();
+        let mut new = BTreeMap::new();
+        new.insert(
+            "root_user".to_string(),
+            BTreeMap::from([("00AA".to_string(), String::new())]),
+        );
+        // Not in the previous fingerprint: a quiet baseline after the upgrade.
+        assert!(hook_alerts(&old, &new).is_empty());
+        old.insert("root_user".to_string(), BTreeMap::new());
+        let alerts = vigil_i18n::with_language("en", || hook_alerts(&old, &new));
+        assert_eq!(alerts.len(), 1);
+        assert_eq!(alerts[0].severity, "warning");
+    }
+
     fn driver(path: &str) -> DriverPrint {
         DriverPrint {
             path: path.into(),
@@ -3006,6 +3315,70 @@ mod more_tests {
             hash: hash.into(),
             redirects: values(pairs),
         }
+    }
+
+    #[test]
+    fn network_changes_become_alerts() {
+        vigil_i18n::with_language("en", || {
+            let dns = |servers: &[&str], manual: bool| DnsPrint {
+                name: "Wi-Fi".into(),
+                servers: servers.iter().map(|s| s.to_string()).collect(),
+                manual,
+            };
+            let print = |servers: &[&str], manual: bool, winhttp: &str, proxy: &str| NetPrint {
+                dns: BTreeMap::from([("{wifi}".to_string(), dns(servers, manual))]),
+                winhttp: winhttp.into(),
+                proxy: proxy.into(),
+                pac: String::new(),
+            };
+            let old = print(&["192.168.1.1"], false, "", "");
+            assert!(network_alerts(&old, &old.clone()).is_empty());
+
+            // The network handed out other servers: information.
+            let dhcp = network_alerts(&old, &print(&["192.168.1.254"], false, "", ""));
+            assert_eq!(dhcp.len(), 1);
+            assert_eq!((dhcp[0].kind.as_str(), dhcp[0].severity.as_str()), ("network", "info"));
+            assert_eq!(dhcp[0].title, "DNS servers changed on Wi-Fi");
+
+            // Set by hand or by a program: worth a look.
+            let manual = network_alerts(&old, &print(&["203.0.113.53"], true, "", ""));
+            assert_eq!(manual[0].severity, "warning");
+
+            // A new adapter is a network change, not news.
+            let mut more = old.clone();
+            more.dns.insert("{tunnel}".into(), dns(&["203.0.113.53"], true));
+            assert!(network_alerts(&old, &more).is_empty());
+
+            // A proxy set is worth a look; removed, information.
+            let set = network_alerts(
+                &old,
+                &print(&["192.168.1.1"], false, "203.0.113.80:3128", "127.0.0.1:8888"),
+            );
+            assert_eq!(set.len(), 2);
+            assert!(set.iter().all(|a| a.severity == "warning"));
+            assert_eq!(set[0].title, "Proxy for Windows services set: 203.0.113.80:3128");
+            let removed = network_alerts(&print(&["192.168.1.1"], false, "", "127.0.0.1:8888"), &old);
+            assert_eq!((removed.len(), removed[0].severity.as_str()), (1, "info"));
+        });
+    }
+
+    #[test]
+    fn the_network_section_starts_quietly() {
+        // Saved before the network section existed: the first check only records it.
+        let old = Fingerprint {
+            version: FINGERPRINT_VERSION,
+            ..Fingerprint::default()
+        };
+        let new = Fingerprint {
+            network: Some(NetPrint {
+                winhttp: "203.0.113.80:3128".into(),
+                ..NetPrint::default()
+            }),
+            version: FINGERPRINT_VERSION,
+            ..Fingerprint::default()
+        };
+        assert!(diff(&old, &new).iter().all(|a| a.kind != "network"));
+        assert!(merged(&old, new).network.is_some());
     }
 
     #[test]
@@ -3139,6 +3512,45 @@ mod more_tests {
             ..Fingerprint::default()
         };
         assert_eq!(merged(&old, now).events[SECURITY_LOG].record, 7);
+    }
+
+    /// A source whose newest record is read before an event arrives (the race between the two
+    /// calls of one check).
+    struct LateEvent {
+        logs: FakeLogs,
+        newest_before: u64,
+    }
+
+    impl LogSource for LateEvent {
+        fn newest(&self, log: &str) -> Result<Option<(u64, i64)>, ()> {
+            if log == SYSTEM_LOG {
+                return Ok(Some((self.newest_before, 1_000)));
+            }
+            self.logs.newest(log)
+        }
+
+        fn read_after(&self, log: &str, ids: &[u32], after: u64, max: usize) -> Result<Vec<LogEvent>, ()> {
+            self.logs.read_after(log, ids, after, max)
+        }
+    }
+
+    #[test]
+    fn an_event_written_during_a_check_is_reported_once() {
+        let logs = FakeLogs::default();
+        logs.add(SYSTEM_LOG, 7045, 10, 1_000, &[("ServiceName", "Old")]);
+        let (marks, _, _) = read_events(&logs, &BTreeMap::new(), 5_000);
+        logs.add(SYSTEM_LOG, 7045, 11, 1_100, &[("ServiceName", "First")]);
+        logs.add(SYSTEM_LOG, 7045, 12, 1_200, &[("ServiceName", "Late")]);
+        // The newest record was read as 11, then record 12 arrived before the events were read.
+        let racing = LateEvent {
+            logs,
+            newest_before: 11,
+        };
+        let (next, hits, _) = read_events(&racing, &marks, 6_000);
+        assert_eq!(hits.iter().map(|e| e.record_id).collect::<Vec<_>>(), vec![11, 12]);
+        assert_eq!(next[SYSTEM_LOG].record, 12, "the mark covers the late event");
+        let (_, again, _) = read_events(&racing.logs, &next, 7_000);
+        assert!(again.is_empty(), "the late event is not reported a second time");
     }
 
     #[test]

@@ -272,7 +272,19 @@ impl Dir {
             let mut writer = &file;
             writer.write_all(bytes)?;
             file.sync_all()?;
-            self.rename(&file, name)
+            // Replacing a file fails with "access denied" or a sharing violation while another
+            // handle has it open for a moment (the other copy reading it, an antivirus scan), so
+            // the rename is retried briefly before giving up.
+            let mut tries = 0;
+            loop {
+                match self.rename(&file, name) {
+                    Err(error) if tries < 25 && transient(&error) => {
+                        tries += 1;
+                        std::thread::sleep(Duration::from_millis(10 + 10 * tries));
+                    }
+                    other => break other,
+                }
+            }
         })();
         if result.is_err() {
             delete_on_close(&file);
@@ -351,6 +363,12 @@ impl Dir {
             std::thread::sleep(Duration::from_millis(20));
         }
     }
+}
+
+/// Errors that go away once another handle on the file is closed.
+fn transient(error: &io::Error) -> bool {
+    // ERROR_ACCESS_DENIED (5), ERROR_SHARING_VIOLATION (32), ERROR_LOCK_VIOLATION (33).
+    matches!(error.raw_os_error(), Some(5 | 32 | 33))
 }
 
 fn delete_on_close(file: &File) {
