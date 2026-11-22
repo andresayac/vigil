@@ -1140,3 +1140,77 @@ fn defence_evasion_settings_only_when_explicit() {
     assert!(with_flag(&analysis, "defender_service_stopped").is_empty());
     assert_eq!(with_flag(&analysis, "eventlog_stopped").len(), 1);
 }
+
+// --------------------------------------------------------------------------- hidden entries and service permissions
+
+#[test]
+fn hidden_services_and_tasks_are_judged_by_their_program() {
+    let sys = system32();
+    let windows_dll = format!(r"{sys}\zthelperdemo.dll");
+    let mut files = serde_json::Map::new();
+    files.insert(r"c:\programdata\fabrikam\helper.exe".into(), unsigned_file());
+    files.insert(r"c:\users\public\sync.exe".into(), unsigned_file());
+    files.insert(windows_dll.to_lowercase(), ms_file());
+    let raw = mini(json!({
+        "files": files,
+        "sysconfig": {"service_security": {
+            "elevated": true,
+            "hidden_services": [
+                {"name": "FabrikamHelper", "image": r"C:\ProgramData\Fabrikam\helper.exe",
+                 "file": r"C:\ProgramData\Fabrikam\helper.exe", "dll": "", "account": "LocalSystem",
+                 "driver": false, "start": 2, "reason": "denied"},
+                {"name": "ZtHelperDemo", "image": format!(r"{sys}\svchost.exe -k ZtHelper"),
+                 "file": format!(r"{sys}\svchost.exe"), "dll": windows_dll, "account": "LocalSystem",
+                 "driver": false, "start": 3, "reason": "denied"},
+            ],
+            "hidden_tasks": {"api_read": true, "registry_read": true, "files_read": true, "tasks": [
+                {"path": r"\ContosoSync", "reasons": ["not_listed", "no_security_descriptor"],
+                 "command": r"C:\Users\Public\sync.exe", "arguments": "--silent", "account": ""},
+            ]},
+            "permissions": {"checked": 0, "unreadable": 0, "weak": [], "unquoted_safe": [], "binaries": []},
+        }},
+    }));
+    let analysis = run_analysis(&raw, false);
+    let hidden = with_flag(&analysis, "hidden_entry");
+    let weight = |needle: &str| {
+        hidden
+            .iter()
+            .find(|i| i.path.as_deref().is_some_and(|p| p.to_lowercase().ends_with(needle)))
+            .and_then(|i| i.flags.iter().find(|f| f.code == "hidden_entry"))
+            .map(|f| f.weight)
+    };
+    assert_eq!(
+        weight("helper.exe"),
+        Some(60),
+        "an unsigned program behind a hidden service"
+    );
+    assert_eq!(weight("sync.exe"), Some(60), "a hidden task");
+    assert_eq!(
+        weight("zthelperdemo.dll"),
+        Some(5),
+        "a Windows component that restricts who sees it"
+    );
+}
+
+#[test]
+fn services_standard_users_can_take_over() {
+    let raw = mini(json!({"sysconfig": {"service_security": {
+        "elevated": true,
+        "permissions": {"checked": 2, "unreadable": 0, "weak": [
+            {"name": "ContosoAgent", "account": "", "image": r"C:\Contoso Tools\agent.exe", "driver": false, "issues": [
+                {"kind": "service", "target": "ContosoAgent", "rights": ["change_config"], "exists": false},
+                {"kind": "unquoted", "target": r"C:\Contoso.exe", "rights": ["add_file"], "exists": false},
+            ]},
+        ], "unquoted_safe": ["TailspinVPN"], "binaries": []},
+    }}}));
+    let analysis = run_analysis(&raw, false);
+    let weak = with_flag(&analysis, "service_weak_permissions");
+    assert_eq!(weak.len(), 1);
+    assert_eq!(
+        weak[0].score, 70,
+        "changing the service's configuration is the worst issue here"
+    );
+    let safe = with_flag(&analysis, "unquoted_service_path");
+    assert_eq!(safe.len(), 1);
+    assert_eq!(safe[0].score, 0, "an unquoted path nobody can use is information only");
+}

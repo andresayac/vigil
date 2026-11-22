@@ -4125,7 +4125,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vigil-actions"
-version = "1.6.0"
+version = "1.7.0"
 dependencies = [
  "chrono",
  "regex",
@@ -4140,7 +4140,7 @@ dependencies = [
 
 [[package]]
 name = "vigil-app"
-version = "1.6.0"
+version = "1.7.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -4158,7 +4158,7 @@ dependencies = [
 
 [[package]]
 name = "vigil-i18n"
-version = "1.6.0"
+version = "1.7.0"
 dependencies = [
  "serde_json",
  "windows",
@@ -4166,7 +4166,7 @@ dependencies = [
 
 [[package]]
 name = "vigil-maint"
-version = "1.6.0"
+version = "1.7.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -4176,7 +4176,7 @@ dependencies = [
 
 [[package]]
 name = "vigil-scan"
-version = "1.6.0"
+version = "1.7.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -4186,12 +4186,13 @@ dependencies = [
  "sha2 0.10.9",
  "ureq",
  "vigil-i18n",
+ "vigil-sys",
  "windows",
 ]
 
 [[package]]
 name = "vigil-sys"
-version = "1.6.0"
+version = "1.7.0"
 dependencies = [
  "serde",
  "serde_json",

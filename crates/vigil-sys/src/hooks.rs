@@ -401,7 +401,7 @@ pub fn standard_driver_path(path: &str) -> bool {
 
 // --------------------------------------------------------------------------- registry
 
-struct Key(HKEY);
+pub(crate) struct Key(pub(crate) HKEY);
 
 impl Drop for Key {
     fn drop(&mut self) {
@@ -414,7 +414,7 @@ impl Drop for Key {
 
 impl Key {
     /// `Ok(None)` when the key does not exist, `Err` when it exists but cannot be opened.
-    fn open(parent: HKEY, sub: &str, view: REG_SAM_FLAGS) -> Result<Option<Self>, ()> {
+    pub(crate) fn open(parent: HKEY, sub: &str, view: REG_SAM_FLAGS) -> Result<Option<Self>, ()> {
         let sub = wide(sub);
         let mut key = HKEY::default();
         // SAFETY: `sub` is NUL-terminated; `key` receives the handle, owned by `Key`.
@@ -450,7 +450,7 @@ impl Key {
     }
 
     /// The names of the subkeys; `None` when they cannot be listed.
-    fn subkeys(&self) -> Option<Vec<String>> {
+    pub(crate) fn subkeys(&self) -> Option<Vec<String>> {
         let (longest, _, _) = self.sizes()?;
         let mut out = Vec::new();
         let mut index = 0u32;
@@ -522,7 +522,7 @@ impl Key {
 
     /// Every value as (name, type, raw data); `None` when it cannot be read completely (a value
     /// that grows while it is read is read again with a bigger buffer, not skipped).
-    fn raw_values(&self) -> Option<Vec<(String, REG_VALUE_TYPE, Vec<u8>)>> {
+    pub(crate) fn raw_values(&self) -> Option<Vec<(String, REG_VALUE_TYPE, Vec<u8>)>> {
         let (_, mut max_name, mut max_data) = self.sizes()?;
         let mut out = Vec::new();
         let mut index = 0u32;
@@ -583,7 +583,7 @@ impl Key {
 
 /// A value as text: strings as they are, multi-strings joined with "; ", numbers in decimal,
 /// anything else in hex.
-fn text(kind: REG_VALUE_TYPE, data: &[u8]) -> String {
+pub(crate) fn text(kind: REG_VALUE_TYPE, data: &[u8]) -> String {
     let units = || -> Vec<u16> {
         data.as_chunks::<2>()
             .0

@@ -25,9 +25,15 @@ features = [
     "Wdk_System_SystemInformation",
     "Win32_Foundation",
     "Win32_Storage_FileSystem",
+    "Win32_System_Com",
     "Win32_System_Registry",
     "Win32_UI_Shell",
 ]
+
+# Security descriptors, the service database and the task cache (`svcsec.rs`), and the firewall
+# rules, judged with the Firewall rules page's own reader and flags (`firewall.rs`).
+[target.'cfg(windows)'.dependencies.vigil-sys]
+path = "../vigil-sys"
 
 [dev-dependencies]
 base64 = "0.22"

@@ -122,7 +122,7 @@ mod tests {
         let store = Store::open(&dir).expect("store");
         let command = command().expect("command");
         assert!(command.ends_with("\" --tray --no-elevate"));
-        // The scanner leaves out exactly this entry (vigil-scan cannot depend on vigil-sys).
+        // The scanner builds the same command on its own, so it leaves out exactly this entry.
         let exe = std::env::current_exe().expect("test program");
         assert_eq!(vigil_scan::own_autostart_command(&exe), command);
 
