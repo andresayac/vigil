@@ -35,9 +35,9 @@ crates/
   vigil-maint/          volumes, junk cleanup, space analyzer, Recycle Bin, hardware, tuning state, insights
   vigil-core/           the service layer: app state, planner, request validation, native confirmation,
                         the action path (`service::run_action`), the window's reads and scan flow (`api.rs`),
-                        settings and secrets, the background watch and its notifications, the AI
-                        investigation, the MCP tool registry and server (`vigil mcp`), the read-only
-                        command lines (`vigil scan`, `list`, `ports`, `services`, `programs`, `reliability`)
+                        settings and secrets, the background watch, its notifications and automatic scans
+                        (`autoscan.rs`), the AI investigation, the MCP tool registry and server
+                        (`vigil mcp`), the read-only command lines (`vigil scan`, `list`, `ports`, `services`, `programs`, `reliability`)
   vigil-app/            vigil.exe: the window (src/shell.rs, src/pages, src/ui, src/theme.rs), the live
                         sampler, the tray and single-instance pieces (src/platform.rs), the dialogs, the
                         catalogs (locales/) and the demo data (data/demo.json)

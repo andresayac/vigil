@@ -43,8 +43,9 @@ crates/
                   tuning state, insights
   vigil-core/     the service layer: app state, planner (actions per finding), requests (request -> trusted
                   ActionSpec), native confirmation, the action path (service::run_action), the window's
-                  reads (`api.rs`), settings, secrets, the background watch and its notifications, the AI
-                  investigation, the MCP tool registry and `vigil mcp`, the command lines
+                  reads (`api.rs`), settings, secrets, the background watch, its notifications and
+                  automatic scans (`autoscan.rs`), the AI investigation, the MCP tool registry and
+                  `vigil mcp`, the command lines
   vigil-app/      vigil.exe: the window (gpui-kit), the tray, the command-line entry points; pages in
                   src/pages, Fluent controls in src/ui, catalogs in locales/, demo data in data/demo.json.
                   It never depends on vigil-actions: it only sends requests to service::run_action
