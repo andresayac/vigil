@@ -974,6 +974,8 @@
   "overview.nothing": "Nothing needs your attention.",
   "overview.openPosture": "Windows security settings",
   "overview.openProtection": "Microsoft Defender in detail",
+  "overview.posture": "posture",
+  "overview.postureRing": "Security posture: {pct}. Open Security posture",
   "overview.quick": "Quick actions",
   "overview.quickAsk": "Ask the assistant",
   "overview.quickAskNote": "In your own words, about this computer",
@@ -989,6 +991,8 @@
   "overview.scanAgain": "Scan again",
   "overview.scanned": "Scanned {when}",
   "overview.security": "Security state",
+  "overview.see": "Review",
+  "overview.seeAll": "See everything in Security",
   "overview.showItems": {
     "one": "Show {count} item",
     "other": "Show {count} items"
@@ -1990,6 +1994,8 @@
   "startup.summary": "{shown} shown · {total} startup apps · {enabled} enabled",
   "startup.viaHost": "Runs through {host}",
   "startup.where": "Registered in",
+  "status.figures": "CPU {cpu} · Memory {memory}",
+  "status.keys": "Ctrl+K finds anything · Ctrl+J asks the assistant",
   "storage.analyze": "Analyze",
   "storage.analyzeDrive": "Analyze {drive}",
   "storage.analyzeFailed": "Could not analyze: {error}",

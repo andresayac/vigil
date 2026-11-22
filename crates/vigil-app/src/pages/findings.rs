@@ -73,7 +73,7 @@ pub struct FindingsPage {
 const GROUP_MIN: usize = 3;
 
 /// Groups of open findings flagged by the same rule, largest first: (name, ids).
-fn groups(items: &[Value], ignored: &[String]) -> Vec<(String, Vec<String>)> {
+pub(crate) fn groups(items: &[Value], ignored: &[String]) -> Vec<(String, Vec<String>)> {
     let mut by_rule: BTreeMap<String, Vec<&Value>> = BTreeMap::new();
     for item in items {
         let id = item.s("id");

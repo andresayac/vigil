@@ -974,6 +974,8 @@
   "overview.nothing": "Nada requiere tu atención.",
   "overview.openPosture": "Configuración de seguridad de Windows",
   "overview.openProtection": "Microsoft Defender en detalle",
+  "overview.posture": "postura",
+  "overview.postureRing": "Postura de seguridad: {pct}. Abrir Postura de seguridad",
   "overview.quick": "Acciones rápidas",
   "overview.quickAsk": "Preguntar al asistente",
   "overview.quickAskNote": "Con tus palabras, sobre tu equipo",
@@ -989,6 +991,8 @@
   "overview.scanAgain": "Analizar de nuevo",
   "overview.scanned": "Analizado el {when}",
   "overview.security": "Estado de seguridad",
+  "overview.see": "Revisar",
+  "overview.seeAll": "Ver todo en Seguridad",
   "overview.showItems": {
     "one": "Mostrar {count} elemento",
     "other": "Mostrar {count} elementos"
@@ -1990,6 +1994,8 @@
   "startup.summary": "{shown} mostradas · {total} aplicaciones de arranque · {enabled} habilitadas",
   "startup.viaHost": "Se ejecuta con {host}",
   "startup.where": "Registrado en",
+  "status.figures": "CPU {cpu} · Memoria {memory}",
+  "status.keys": "Ctrl+K busca cualquier cosa · Ctrl+J pregunta al asistente",
   "storage.analyze": "Analizar",
   "storage.analyzeDrive": "Analizar {drive}",
   "storage.analyzeFailed": "No se pudo analizar: {error}",

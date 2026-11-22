@@ -832,6 +832,15 @@ impl Shell {
             }
             return true;
         }
+        // Ctrl+J: the Assistant, with a question about the page in view.
+        if keystroke.key == "j" && m.control && !m.alt && !m.shift && !m.platform {
+            self.palette = None;
+            if self.page != "assistant" {
+                self.ask_from = Some(self.page);
+                self.open("assistant", window, cx);
+            }
+            return true;
+        }
         let Some(palette) = self.palette.clone() else {
             return false;
         };
@@ -961,6 +970,58 @@ impl Shell {
             }
             _ => None,
         }
+    }
+
+    /// The status bar along the bottom of the window: the watch, the last live figures and the keys
+    /// worth knowing.
+    fn render_status(&self, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
+        let tk = *tokens(cx);
+        let (dot, watch) = match self.watcher.as_ref().map(|w| w.status()) {
+            Some(status) if !status.owner => (tk.ink3, t("watch.otherWindow")),
+            Some(status) if status.watching => (tk.ok, t("app.watchOn")),
+            Some(_) => (tk.warn, t("watch.paused")),
+            None if self.demo => (tk.ok, t("app.watchOn")),
+            None => (tk.ink3, t("watch.paused")),
+        };
+        let live = self.live.read(cx);
+        let figures = live.snapshot.as_ref().map(|s| {
+            let memory = if s.memory.total > 0 {
+                s.memory.used as f64 / s.memory.total as f64 * 100.0
+            } else {
+                0.0
+            };
+            tf(
+                "status.figures",
+                &[
+                    ("cpu", &crate::format::pct(f64::from(s.cpu), 0)),
+                    ("memory", &crate::format::pct(memory, 0)),
+                ],
+            )
+        });
+        div()
+            .flex_none()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap(px(18.))
+            .min_h(px(28.))
+            .px(px(16.))
+            .border_t_1()
+            .border_color(tk.rule)
+            .text_size(px(12.))
+            .text_color(tk.ink2)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .child(div().w(px(7.)).h(px(7.)).rounded(px(4.)).bg(dot))
+                    .child(watch),
+            )
+            .children(figures)
+            .child(div().flex_1())
+            .child(t("status.keys"))
+            .into_any_element()
     }
 
     /// The section's title over the content, and its pages as tabs (when it has more than one).
@@ -1130,10 +1191,10 @@ impl Shell {
                 t(&format!("section.{section}")),
                 current == section,
             );
-            if !compact && let Some((count, strong)) = self.badge(section, cx) {
-                entry = entry.child(
+            let expanded = !compact && current == section && pages.len() > 1;
+            if !compact {
+                let badge = self.badge(section, cx).map(|(count, strong)| {
                     div()
-                        .ml_auto()
                         .flex_none()
                         .px(px(7.))
                         .rounded(px(9.))
@@ -1142,13 +1203,69 @@ impl Shell {
                         .font_weight(FontWeight::SEMIBOLD)
                         .when(strong, |this| this.bg(tk.accent).text_color(tk.on_accent))
                         .when(!strong, |this| this.bg(tk.hover).text_color(tk.ink2))
-                        .child(count),
+                        .child(count)
+                });
+                // Sections with several pages: a chevron, down while the section is open.
+                let chevron = (pages.len() > 1).then(|| {
+                    icons::icon(
+                        if expanded {
+                            icons::CHEVRON_DOWN
+                        } else {
+                            icons::CHEVRON_RIGHT
+                        },
+                        10.0,
+                        tk.ink3,
+                    )
+                });
+                entry = entry.child(
+                    div()
+                        .ml_auto()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .children(badge)
+                        .children(chevron),
                 );
             }
             list = list.child(entry.on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                 let page = this.last.get(section).copied().unwrap_or(first);
                 this.open(page, window, cx);
             })));
+            // The open section lists its pages under it: every page of the app stays one click away.
+            if expanded {
+                for page in pages.iter().copied() {
+                    let index = PAGES.iter().position(|(key, _)| *key == page).unwrap_or(0);
+                    let selected = self.page == page;
+                    list = list.child(
+                        FButton::new(("nav-page", index), Kind::Subtle)
+                            .role(Role::Button)
+                            .selected(selected)
+                            .label(t(&format!("page.{page}")))
+                            .relative()
+                            .flex_none()
+                            .w_full()
+                            .h(px(30.))
+                            .justify_start()
+                            .pl(px(46.))
+                            .pr(px(12.))
+                            .text_size(px(13.))
+                            .text_color(if selected { tk.ink } else { tk.ink2 })
+                            .when(selected, |this| {
+                                this.child(
+                                    div()
+                                        .absolute()
+                                        .left(px(32.))
+                                        .top(px(11.))
+                                        .w(px(6.))
+                                        .h(px(6.))
+                                        .rounded(px(3.))
+                                        .bg(tk.brand),
+                                )
+                            })
+                            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.open(page, window, cx))),
+                    );
+                }
+            }
         }
 
         let status = (!compact).then(|| {
@@ -1338,7 +1455,7 @@ impl Shell {
 }
 
 /// Vigil's logo, decoded once (the window's own file, built into the program).
-fn logo() -> std::sync::Arc<gpui_kit::Image> {
+pub(crate) fn logo() -> std::sync::Arc<gpui_kit::Image> {
     static LOGO: std::sync::OnceLock<std::sync::Arc<gpui_kit::Image>> = std::sync::OnceLock::new();
     LOGO.get_or_init(|| {
         std::sync::Arc::new(gpui_kit::Image::from_bytes(
@@ -1403,47 +1520,51 @@ impl Render for Shell {
             .bar("shell-result", &tk)
             .map(|bar| div().absolute().bottom(px(16.)).right(px(20.)).w(px(560.)).child(bar));
         let palette = self.palette.clone();
+        let status = self.render_status(cx);
         div()
             .relative()
             .size_full()
             .flex()
+            .flex_col()
             .bg(tk.canvas)
             .text_color(tk.ink)
             .font_family(FONT_BODY)
             .text_size(px(14.))
             .line_height(px(20.))
-            .child(self.render_nav(cx))
             .child(
-                div()
-                    .relative()
-                    .flex_1()
-                    .min_w_0()
-                    .h_full()
-                    .bg(tk.layer)
-                    .border_t_1()
-                    .border_l_1()
-                    .border_color(tk.layer_stroke)
-                    .rounded_tl(px(8.))
-                    .overflow_hidden()
-                    .flex()
-                    .flex_col()
-                    .when(notice.is_some() || update.is_some(), |this| {
-                        this.child(
-                            div()
-                                .flex_none()
-                                .flex()
-                                .flex_col()
-                                .gap_2()
-                                .px(px(28.))
-                                .pt(px(12.))
-                                .children(notice)
-                                .children(update),
-                        )
-                    })
-                    .child(self.render_header(cx))
-                    .child(div().flex_1().min_h_0().child(body))
-                    .children(acting),
+                div().flex_1().min_h_0().flex().child(self.render_nav(cx)).child(
+                    div()
+                        .relative()
+                        .flex_1()
+                        .min_w_0()
+                        .h_full()
+                        .bg(tk.layer)
+                        .border_t_1()
+                        .border_l_1()
+                        .border_color(tk.layer_stroke)
+                        .rounded_tl(px(8.))
+                        .overflow_hidden()
+                        .flex()
+                        .flex_col()
+                        .when(notice.is_some() || update.is_some(), |this| {
+                            this.child(
+                                div()
+                                    .flex_none()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_2()
+                                    .px(px(28.))
+                                    .pt(px(12.))
+                                    .children(notice)
+                                    .children(update),
+                            )
+                        })
+                        .child(self.render_header(cx))
+                        .child(div().flex_1().min_h_0().child(body))
+                        .children(acting),
+                ),
             )
+            .child(status)
             .children(palette)
     }
 }

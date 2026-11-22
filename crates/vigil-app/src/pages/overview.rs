@@ -27,6 +27,10 @@ use crate::ui::kit::{self, J as _, Readout};
 pub struct OverviewPage {
     ctx: Ctx,
     drive: Option<Value>,
+    /// The security posture's score (Security posture page), for the ring on the verdict card.
+    posture: Option<Value>,
+    /// The last group of findings ignored from here, so it can be undone.
+    ignored_group: Option<(String, Vec<String>)>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -49,12 +53,153 @@ impl OverviewPage {
                     .cloned();
             },
         );
+        let core = ctx.core.clone();
+        common::read(
+            cx,
+            move || data::fetch(core.as_ref(), Src::Posture).unwrap_or(Value::Null),
+            |this: &mut Self, posture, _| {
+                let score = posture.at("score");
+                this.posture = score.is_object().then(|| score.clone());
+            },
+        );
         Self {
             ctx,
             drive: None,
+            posture: None,
+            ignored_group: None,
             _subscriptions: subscriptions,
         }
     }
+
+    /// Ignores (or, with `value` false, brings back) a group of findings, as Findings does.
+    fn ignore_group(&mut self, name: String, ids: Vec<String>, value: bool, cx: &mut Context<Self>) {
+        let result = match &self.ctx.core {
+            Some(core) => vigil_core::api::ignored_set_many(core, &ids, value),
+            None => {
+                let mut now = self.ctx.report.read(cx).ignored.clone();
+                now.retain(|x| !ids.contains(x));
+                if value {
+                    now.extend(ids.iter().cloned());
+                }
+                Ok(now)
+            }
+        };
+        if let Ok(now) = result {
+            self.ignored_group = value.then_some((name, ids));
+            self.ctx.report.update(cx, |r, cx| {
+                r.ignored = now;
+                cx.notify();
+            });
+        }
+    }
+}
+
+/// A ring `fraction` full: the track, then the arc from the top, clockwise.
+fn ring(fraction: f32, track: Hsla, color: Hsla, size: f32, width: f32) -> impl IntoElement {
+    gpui_kit::canvas(
+        |_, _, _| {},
+        move |bounds: gpui_kit::Bounds<gpui_kit::Pixels>, _, window, _| {
+            let side = f32::from(bounds.size.width).min(f32::from(bounds.size.height));
+            let cx0 = f32::from(bounds.origin.x) + side / 2.0;
+            let cy0 = f32::from(bounds.origin.y) + side / 2.0;
+            let r = side / 2.0 - width / 2.0 - 1.0;
+            let arc = |from: f32, to: f32| {
+                let mut path = gpui_kit::PathBuilder::stroke(px(width));
+                let steps = 96;
+                for i in 0..=steps {
+                    let a = from + (to - from) * i as f32 / steps as f32;
+                    let at = gpui_kit::point(px(cx0 + r * a.cos()), px(cy0 + r * a.sin()));
+                    if i == 0 {
+                        path.move_to(at);
+                    } else {
+                        path.line_to(at);
+                    }
+                }
+                path.build().ok()
+            };
+            let start = -std::f32::consts::FRAC_PI_2;
+            let full = std::f32::consts::TAU;
+            if let Some(path) = arc(start, start + full) {
+                window.paint_path(path, track);
+            }
+            let fraction = fraction.clamp(0.0, 1.0);
+            if fraction > 0.0
+                && let Some(path) = arc(start, start + full * fraction)
+            {
+                window.paint_path(path, color);
+            }
+        },
+    )
+    .w(px(size))
+    .h(px(size))
+}
+
+/// One line of "Needs your attention": a tinted glyph, the title with its label, a line under it
+/// and its buttons.
+fn attention_row(
+    glyph: char,
+    color: Hsla,
+    title: String,
+    label: Option<String>,
+    detail: String,
+    buttons: Vec<AnyElement>,
+    tk: &Tokens,
+) -> AnyElement {
+    div()
+        .flex()
+        .items_center()
+        .gap(px(14.))
+        .px(px(16.))
+        .py(px(12.))
+        .child(
+            div()
+                .w(px(36.))
+                .h(px(36.))
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(8.))
+                .bg(color.opacity(0.14))
+                .child(icons::icon(glyph, 16.0, color)),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(2.))
+                .child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .items_center()
+                        .gap_2()
+                        .child(div().font_weight(FontWeight::SEMIBOLD).child(kit::plain(title)))
+                        .children(label.map(|label| {
+                            div()
+                                .px(px(6.))
+                                .rounded(px(4.))
+                                .text_size(px(11.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(color)
+                                .bg(color.opacity(0.14))
+                                .child(label)
+                        })),
+                )
+                .child(
+                    div()
+                        .text_size(px(13.))
+                        .text_color(tk.ink2)
+                        .whitespace_nowrap()
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .child(kit::plain(detail)),
+                ),
+        )
+        .child(div().flex_none().flex().gap_2().children(buttons))
+        .into_any_element()
 }
 
 struct Tile {
@@ -444,7 +589,70 @@ impl Render for OverviewPage {
 
         // The verdict: a shield in the risk's colour, the headline, what the scan was.
         let brand = crate::theme::hero();
+        // The posture's score in a ring (Security posture), or the shield while it is read.
+        let lead: AnyElement = match &self.posture {
+            Some(score) if score.n("counted") > 0.0 => {
+                let percent = score.n("percent");
+                let open = ctx.clone();
+                BaseButton::new("ov-posture-ring")
+                    .role(Role::Button)
+                    .accessibility_label(tf("overview.postureRing", &[("pct", &pct(percent, 0))]))
+                    .relative()
+                    .flex_none()
+                    .w(px(112.))
+                    .h(px(112.))
+                    .rounded(px(56.))
+                    .hover(move |s| s.bg(brand.hover))
+                    .on_click(move |_, window, cx| open.go("posture", window, cx))
+                    .child(div().absolute().top_0().left_0().child(ring(
+                        (percent / 100.0) as f32,
+                        brand.hover,
+                        brand.mint,
+                        112.,
+                        10.,
+                    )))
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .size_full()
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .justify_center()
+                            .child(
+                                div()
+                                    .font_family(FONT_DISPLAY)
+                                    .text_size(px(28.))
+                                    .line_height(px(30.))
+                                    .font_weight(FontWeight::BOLD)
+                                    .child(pct(percent, 0)),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(brand.ink2)
+                                    .child(t("overview.posture")),
+                            ),
+                    )
+                    .into_any_element()
+            }
+            _ => div()
+                .w(px(56.))
+                .h(px(56.))
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(12.))
+                .bg(brand.hover)
+                .child(icons::icon(icons::SHIELD_PLAIN, 28.0, brand.mint))
+                .into_any_element(),
+        };
         let mut hero = div()
+            .relative()
+            .overflow_hidden()
             .flex()
             .flex_col()
             .gap_4()
@@ -452,60 +660,55 @@ impl Render for OverviewPage {
             .bg(brand.fill)
             .text_color(brand.ink)
             .rounded(RADIUS_CARD)
+            // The logo's waves, in the corner: the card is the logo's own teal.
             .child(
                 div()
-                    .flex()
-                    .items_start()
-                    .gap_4()
-                    .child(
-                        div()
-                            .w(px(48.))
-                            .h(px(48.))
-                            .flex_none()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(12.))
-                            .bg(brand.hover)
-                            .child(icons::icon(icons::SHIELD_PLAIN, 24.0, brand.mint)),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .gap(px(2.))
-                            .child(
-                                div()
-                                    .text_size(px(12.))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(brand.mint)
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .child(kit::dot(Some(risk_color(level, &tk))))
-                                    .child(risk_label(level)),
-                            )
-                            .child(
-                                div()
-                                    .font_family(FONT_DISPLAY)
-                                    .text_size(px(20.))
-                                    .line_height(px(28.))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child(kit::plain(headline)),
-                            )
-                            .when(summary.has("summary"), |this| {
-                                this.child(kit::body(summary.s("summary").to_string()).text_color(brand.ink2))
-                            })
-                            .child(
-                                div()
-                                    .pt_1()
-                                    .text_size(px(12.))
-                                    .text_color(brand.ink2)
-                                    .child(parts.join(" · ")),
-                            ),
-                    ),
+                    .absolute()
+                    .right(px(-36.))
+                    .bottom(px(-60.))
+                    .w(px(260.))
+                    .h(px(260.))
+                    .opacity(0.55)
+                    .child(gpui_kit::img(crate::shell::logo()).size_full()),
+            )
+            .child(
+                div().flex().items_center().gap(px(24.)).pr(px(180.)).child(lead).child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.))
+                        .child(
+                            div()
+                                .text_size(px(12.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(brand.mint)
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(kit::dot(Some(risk_color(level, &tk))))
+                                .child(risk_label(level)),
+                        )
+                        .child(
+                            div()
+                                .font_family(FONT_DISPLAY)
+                                .text_size(px(24.))
+                                .line_height(px(32.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(kit::plain(headline)),
+                        )
+                        .when(summary.has("summary"), |this| {
+                            this.child(kit::body(summary.s("summary").to_string()).text_color(brand.ink2))
+                        })
+                        .child(
+                            div()
+                                .pt_1()
+                                .text_size(px(12.))
+                                .text_color(brand.ink2)
+                                .child(parts.join(" · ")),
+                        ),
+                ),
             );
         // The two things to do from here: look at what matters, or scan again.
         let review_verdict = ["remove", "disable", "review"]
@@ -655,7 +858,51 @@ impl Render for OverviewPage {
                 );
             }
         } else if !top.is_empty() {
-            for (i, item) in top.iter().enumerate() {
+            // Findings flagged by the same rule come as one line, to see or ignore together; the
+            // others one by one, each with its button.
+            let groups = crate::pages::findings::groups(&visible, &report.ignored);
+            let grouped: Vec<&str> = groups
+                .iter()
+                .flat_map(|(_, ids)| ids.iter().map(String::as_str))
+                .collect();
+            let weak = cx.entity().downgrade();
+            for (i, (name, ids)) in groups.iter().take(2).enumerate() {
+                let count = ids.len().to_string();
+                let show = ctx.clone();
+                let (show_ids, show_name) = (ids.clone(), name.clone());
+                let ignore = weak.clone();
+                let (ignore_ids, ignore_name) = (ids.clone(), name.clone());
+                first.push(attention_row(
+                    icons::INFO,
+                    tk.verdict("review"),
+                    tf("findings.group", &[("name", name), ("count", &count)]),
+                    Some(verdict_label("review")),
+                    t("findings.groupNote"),
+                    vec![
+                        ui::button(("ov-group-show", i), tf("findings.groupShow", &[("count", &count)]))
+                            .on_click(move |_, window, cx| {
+                                show.find(Focus::Items(show_ids.clone(), show_name.clone()), window, cx)
+                            })
+                            .into_any_element(),
+                        ui::button(("ov-group-ignore", i), tf("findings.groupIgnore", &[("count", &count)]))
+                            .glyph(icons::CHECK)
+                            .tip(t("findings.groupIgnoreTip"))
+                            .on_click(move |_, _, cx| {
+                                let _ = ignore.update(cx, |this, cx| {
+                                    this.ignore_group(ignore_name.clone(), ignore_ids.clone(), true, cx)
+                                });
+                            })
+                            .into_any_element(),
+                    ],
+                    &tk,
+                ));
+            }
+            let singles: Vec<&&Value> = top
+                .iter()
+                .filter(|i| !grouped.contains(&i.s("id")))
+                .take(6usize.saturating_sub(first.len()))
+                .collect();
+            for (i, item) in singles.into_iter().enumerate() {
                 let id = item.s("id").to_string();
                 let c = ctx.clone();
                 let v = item.s("verdict");
@@ -664,16 +911,27 @@ impl Render for OverviewPage {
                 } else {
                     item.s("subtitle")
                 };
-                first.push(
-                    kit::NavRow::new(
-                        ElementId::NamedInteger("ov-top".into(), i as u64),
-                        item.s("title").to_string(),
-                    )
-                    .subtitle(detail.to_string())
-                    .lead(kit::lead_glyph(verdict_glyph(v), tk.verdict(v)))
-                    .trail(verdict_label(v), tk.verdict(v))
-                    .build(move |window, cx| c.find(Focus::Item(id.clone()), window, cx), &tk),
-                );
+                first.push(attention_row(
+                    verdict_glyph(v),
+                    tk.verdict(v),
+                    item.s("title").to_string(),
+                    Some(verdict_label(v)),
+                    detail.to_string(),
+                    vec![
+                        ui::FButton::new(
+                            ("ov-top", i),
+                            if v == "review" {
+                                ui::Kind::Standard
+                            } else {
+                                ui::Kind::Accent
+                            },
+                        )
+                        .label(t("overview.see"))
+                        .on_click(move |_, window, cx| c.find(Focus::Item(id.clone()), window, cx))
+                        .into_any_element(),
+                    ],
+                    &tk,
+                ));
             }
         } else {
             first.push(kit::info_row(
@@ -683,8 +941,42 @@ impl Render for OverviewPage {
                 &tk,
             ));
         }
+        if let Some((name, ids)) = self.ignored_group.clone() {
+            let undo = cx.entity().downgrade();
+            let count = ids.len().to_string();
+            first.insert(
+                0,
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .px(px(16.))
+                    .py(px(10.))
+                    .child(kit::colored(
+                        tf("findings.groupIgnored", &[("name", &name), ("count", &count)]),
+                        tk.ok,
+                    ))
+                    .child(kit::link(
+                        "ov-group-undo",
+                        t("findings.groupUndo"),
+                        move |_, cx| {
+                            let _ = undo.update(cx, |this, cx| this.ignore_group(name.clone(), ids.clone(), false, cx));
+                        },
+                        &tk,
+                    ))
+                    .into_any_element(),
+            );
+        }
+        let see_all = ctx.clone();
         let mut left = div().flex().flex_col().gap(px(20.)).min_w_0().child(kit::section(
-            kit::section_head(t("overview.first"), &tk),
+            kit::section_head(t("overview.first"), &tk)
+                .child(div().flex_1())
+                .child(kit::link(
+                    "ov-see-all",
+                    t("overview.seeAll"),
+                    move |window, cx| see_all.go("findings", window, cx),
+                    &tk,
+                )),
             kit::group(first, &tk),
         ));
         let habits = summary.strs("good_practices");
@@ -738,15 +1030,54 @@ impl Render for OverviewPage {
         .enumerate()
         .map(|(i, (target, title, note, glyph))| {
             let c = ctx.clone();
-            kit::NavRow::new(ElementId::NamedInteger("ov-quick".into(), i as u64), t(title))
-                .subtitle(t(note))
-                .lead(kit::lead_glyph(glyph, tk.accent))
-                .build(move |window, cx| c.go(target, window, cx), &tk)
+            let color = match target {
+                "storage" => tk.chart_disk,
+                "startup" => tk.chart_net,
+                "protection" => tk.ok,
+                "restore" => tk.chart_memory,
+                _ => tk.brand,
+            };
+            div()
+                .flex_basis(gpui_kit::relative(0.45))
+                .flex_grow(1.)
+                .min_w(px(160.))
+                .child(
+                    BaseButton::new(ElementId::NamedInteger("ov-quick".into(), i as u64))
+                        .role(Role::Button)
+                        .accessibility_label(t(title))
+                        .w_full()
+                        .h_full()
+                        .flex()
+                        .flex_col()
+                        .items_start()
+                        .gap(px(6.))
+                        .p(px(12.))
+                        .rounded(px(8.))
+                        .bg(tk.surface)
+                        .border_1()
+                        .border_color(tk.rule)
+                        .hover(move |s| s.bg(tk.hover))
+                        .on_click(move |_, window, cx| c.go(target, window, cx))
+                        .child(
+                            div()
+                                .w(px(32.))
+                                .h(px(32.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(8.))
+                                .bg(color.opacity(0.14))
+                                .child(icons::icon(glyph, 16.0, color)),
+                        )
+                        .child(div().font_weight(FontWeight::SEMIBOLD).child(t(title)))
+                        .child(kit::faint(t(note), &tk)),
+                )
+                .into_any_element()
         })
         .collect();
         let mut right = div().flex().flex_col().gap(px(20.)).min_w_0().child(kit::section(
             kit::section_head(t("overview.quick"), &tk),
-            kit::group(quick, &tk),
+            div().flex().flex_wrap().gap_2().children(quick),
         ));
         if let Some(w) = &watch {
             right = right.child(watchui::watch_card(&ctx, w, &tk));

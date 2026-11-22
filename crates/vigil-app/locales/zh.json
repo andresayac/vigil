@@ -952,6 +952,8 @@
   "overview.nothing": "没有需要你关注的内容。",
   "overview.openPosture": "Windows 安全设置",
   "overview.openProtection": "Microsoft Defender 详细信息",
+  "overview.posture": "安全状况",
+  "overview.postureRing": "安全状况：{pct}。打开安全状况",
   "overview.quick": "快捷操作",
   "overview.quickAsk": "询问助手",
   "overview.quickAskNote": "用你自己的话询问这台电脑",
@@ -967,6 +969,8 @@
   "overview.scanAgain": "重新扫描",
   "overview.scanned": "扫描时间：{when}",
   "overview.security": "安全状态",
+  "overview.see": "查看",
+  "overview.seeAll": "在“安全”中查看全部",
   "overview.showItems": {
     "other": "显示 {count} 个项目"
   },
@@ -1940,6 +1944,8 @@
   "startup.summary": "显示 {shown} 个 · 共 {total} 个启动应用 · {enabled} 个已启用",
   "startup.viaHost": "通过 {host} 运行",
   "startup.where": "注册位置",
+  "status.figures": "CPU {cpu} · 内存 {memory}",
+  "status.keys": "Ctrl+K 查找任何内容 · Ctrl+J 询问助手",
   "storage.analyze": "分析",
   "storage.analyzeDrive": "分析 {drive}",
   "storage.analyzeFailed": "无法分析：{error}",
