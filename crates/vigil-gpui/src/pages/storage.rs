@@ -823,7 +823,7 @@ impl StoragePage {
 type Open = Arc<dyn Fn(Value, &mut Window, &mut gpui_kit::App)>;
 
 /// A squarified treemap of a folder's children (and what was merged as "Other").
-fn treemap(node: &Value, open: Open, tk: &Tokens) -> Div {
+fn treemap(node: &Value, open: Open, tk: &Tokens) -> gpui_kit::Stateful<Div> {
     let mut entries: Vec<(f64, Option<&Value>)> = node
         .a("children")
         .iter()
@@ -835,6 +835,9 @@ fn treemap(node: &Value, open: Open, tk: &Tokens) -> Div {
     }
     entries.sort_by(|a, b| b.0.total_cmp(&a.0));
     let frame = div()
+        .id("treemap")
+        .role(Role::Group)
+        .aria_label(t("storage.tabSpace"))
         .relative()
         .w_full()
         .h(px(360.))

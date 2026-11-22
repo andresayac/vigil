@@ -7,7 +7,8 @@ use std::sync::Arc;
 
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AnyElement, Context, Div, ElementId, FontWeight, IntoElement, ParentElement, Render, Styled, Window, div, px,
+    AnyElement, Context, Div, ElementId, FontWeight, InteractiveElement as _, IntoElement, ParentElement, Render,
+    StatefulInteractiveElement as _, Styled, Window, div, px,
 };
 use serde_json::{Value, json};
 use vigil_core::state::AppState;
@@ -643,7 +644,13 @@ impl AccountsPage {
                 label,
             })
             .collect();
-        panel = panel.child(kit::bar_chart("ac-chart", columns, top, 120., None, None, tk));
+        panel = panel.child(
+            div()
+                .id("ac-chart-group")
+                .role(gpui_kit::Role::Group)
+                .aria_label(t("accounts.activityTitle"))
+                .child(kit::bar_chart("ac-chart", columns, top, 120., None, None, tk)),
+        );
 
         // Sources of failures and remote sign-ins.
         let mut sources = div()

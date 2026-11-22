@@ -179,6 +179,8 @@ fn main() {
             shell.update(cx, |shell, cx| {
                 shell.live.update(cx, |live, cx| live.set_visible(false, cx))
             });
+        } else {
+            let _ = handle.update(cx, |_, window, _| win::restore_if_minimized(window));
         }
         // The close button: to the tray when this copy watches and the settings say so.
         let closing = shell.clone();
