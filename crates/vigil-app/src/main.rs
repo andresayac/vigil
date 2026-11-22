@@ -155,6 +155,8 @@ fn main() {
         let watcher = Arc::new(Watcher::new(store, core.admin, owner));
         // A state saved before a language was ever chosen takes this copy's language.
         watcher.adopt_language(vigil_i18n::language());
+        // Automatic scans save their reports with this copy's other scans.
+        watcher.set_scans_dir(core.scans_dir());
         watcher
     });
     if tray_start && !watcher.as_ref().is_some_and(|w| w.owner()) {

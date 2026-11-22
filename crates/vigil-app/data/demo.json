@@ -8121,7 +8121,7 @@
   "owner": true,
   "watching": true,
   "lastCheck": 1795322547374,
-  "unread": 6,
+  "unread": 7,
   "notifyPausedUntil": null,
   "tasksWatched": false,
   "logsHidden": [
@@ -8137,10 +8137,23 @@
    "notifyPorts": true,
    "notifyHooks": true,
    "notifyEvents": true,
-   "trayNoticeShown": true
+   "trayNoticeShown": true,
+   "scanSchedule": "daily",
+   "scanDay": 1,
+   "scanTime": "12:30"
   },
   "autostart": false,
   "recent": [
+   {
+    "id": 10,
+    "time": 1795322487374,
+    "kind": "scan",
+    "severity": "critical",
+    "target": "findings",
+    "read": false,
+    "title": "New since the last scan: winupd.exe",
+    "detail": "It is not signed, lives in a user folder and starts at sign-in."
+   },
    {
     "id": 9,
     "time": 1795322512374,
@@ -8180,21 +8193,31 @@
     "read": false,
     "title": "New startup entry: OddHelper",
     "detail": "C:\\Users\\jdoe\\AppData\\Roaming\\OddHelper\\helper.exe --hidden (in HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run)"
-   },
-   {
-    "id": 5,
-    "time": 1795320052374,
-    "kind": "port",
-    "severity": "warning",
-    "target": "network",
-    "read": false,
-    "title": "Port 5900 (VNC) is open to the network",
-    "detail": "winvnc.exe accepts connections on every network interface."
    }
   ],
-  "error": null
+  "error": null,
+  "autoScan": {
+   "schedule": "daily",
+   "next": 1795394547374,
+   "lastRun": 1795322427374,
+   "status": "done",
+   "found": 1,
+   "partial": true,
+   "report": true,
+   "running": false
+  }
  },
  "watchAlerts": [
+  {
+   "id": 10,
+   "time": 1795322487374,
+   "kind": "scan",
+   "severity": "critical",
+   "target": "findings",
+   "read": false,
+   "title": "New since the last scan: winupd.exe",
+   "detail": "It is not signed, lives in a user folder and starts at sign-in."
+  },
   {
    "id": 9,
    "time": 1795322512374,

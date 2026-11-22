@@ -27,6 +27,7 @@ pub mod vt;
 
 mod analyze;
 mod collect;
+mod com;
 mod engine;
 mod error;
 mod firewall;
@@ -36,6 +37,8 @@ mod lenient;
 mod ntpath;
 mod persist;
 mod posture;
+mod rmm;
+mod secrets;
 mod svcsec;
 mod winreg;
 

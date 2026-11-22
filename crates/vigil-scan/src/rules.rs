@@ -246,9 +246,11 @@ pub(crate) static OBSOLETE_SOFTWARE: LazyLock<Rx> = LazyLock::new(|| {
 });
 
 /// A remote access, remote control or tunnelling tool named in the text (a program's name,
-/// publisher or paths), from the same list the scan uses.
+/// publisher or paths), from the same lists the scan uses: the broad name pattern above and the
+/// table of remote management agents (`crate::rmm::AGENTS`), which also gives each agent's
+/// expected signer.
 pub fn is_remote_access_tool(text: &str) -> bool {
-    REMOTE_TOOLS.is_match(text)
+    REMOTE_TOOLS.is_match(text) || crate::rmm::agent_for(text).is_some()
 }
 
 /// Signals based on names (program, service, task, path).
@@ -270,7 +272,7 @@ pub fn label_flags(names: &[&str]) -> Vec<Flag> {
             tr!("name associated with activators or cracks (a very common infection route)"),
         ));
     }
-    if REMOTE_TOOLS.is_match(&text) {
+    if is_remote_access_tool(&text) {
         flags.push(Flag::new(
             "remote_access",
             15,

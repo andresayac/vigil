@@ -18,8 +18,8 @@ use crate::theme::tokens;
 use crate::ui;
 use crate::ui::kit::{self, J as _};
 
-const KINDS: [&str; 9] = [
-    "startup", "service", "task", "security", "port", "hook", "driver", "hosts", "event",
+const KINDS: [&str; 10] = [
+    "startup", "service", "task", "security", "port", "hook", "driver", "hosts", "event", "scan",
 ];
 
 pub struct AlertsPage {
@@ -106,6 +106,9 @@ impl Render for AlertsPage {
             page = page.child(row);
             if s.has("error") {
                 page = page.child(kit::colored(s.s("error").to_string(), tk.warn).text_size(px(12.)));
+            }
+            if let Some(auto) = crate::pages::watchui::auto_scan_row(&self.ctx, s, "al-auto-open", &tk) {
+                page = page.child(auto);
             }
         }
 
@@ -224,6 +227,7 @@ impl Render for AlertsPage {
             }
             let target = a.s("target").to_string();
             let id = a.at("id").as_u64();
+            let scan = a.s("kind") == "scan";
             let label = target_label(&target);
             let action: Option<String> = match label {
                 Some(l) => Some(tf("alerts.open", &[("page", &t(l))])),
@@ -284,7 +288,9 @@ impl Render for AlertsPage {
                                 if unread && let Some(id) = id {
                                     c.mark_read(Some(vec![id]), cx);
                                 }
-                                if label.is_some() {
+                                if scan {
+                                    crate::pages::watchui::open_auto_report(&c, window, cx);
+                                } else if label.is_some() {
                                     c.go(&target, window, cx);
                                 }
                             },

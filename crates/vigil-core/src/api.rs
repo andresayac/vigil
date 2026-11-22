@@ -434,3 +434,21 @@ pub fn process_icons(paths: Vec<String>) -> HashMap<String, String> {
         .filter_map(|path| vigil_sys::apps::icon_data_url(&path).map(|url| (path, url)))
         .collect()
 }
+
+/// Opens the report of the last automatic scan and makes it the current report (`None`: there is
+/// none). The path comes from the watch's own state and is checked first: the right name, directly
+/// in this copy's scans folder or the user's, a plain file in a plain folder.
+pub fn open_auto_report(st: &AppState, watcher: &crate::watch::Watcher) -> Result<Option<Value>, String> {
+    let report = watcher.store.load().auto_scan.report;
+    if report.is_empty() {
+        return Ok(None);
+    }
+    let path = PathBuf::from(report);
+    let mut folders = vec![st.scans_dir()];
+    if let Some(local) = std::env::var_os("LOCALAPPDATA").filter(|v| !v.is_empty()) {
+        folders.push(PathBuf::from(local).join("Vigil").join("scans"));
+    }
+    crate::autoscan::check_report_path(&path, &folders)?;
+    st.open_report(&path)?;
+    Ok(st.lock().analysis_json.clone())
+}

@@ -479,6 +479,65 @@ fn hook_label(source: &str, name: &str, location: &str) -> (String, String) {
     }
 }
 
+// Folders no program installs into, anywhere in the path.
+rx!(
+    COM_ODD_FOLDER,
+    r"(?i)\\(temp|tmp|downloads|desktop|documents)\\|^[a-z]:\\users\\public\\"
+);
+// A file put straight into AppData or ProgramData, outside any program's own folder.
+rx!(
+    COM_ODD_ROOT,
+    r"(?i)^[a-z]:\\programdata\\[^\\]+$|\\appdata\\(roaming|local|locallow)\\[^\\]+$"
+);
+
+/// The signal of a per-user COM class that shadows one Windows registers, once its file is known.
+/// A signed vendor server in its own folder gives none (per-user installs of signed apps register
+/// COM classes too); an unsigned file, a signed file in a folder no program installs into, or a
+/// missing file does. Classes Explorer or a Windows task load (`crate::com::KNOWN_TARGETS`) weigh
+/// more.
+fn com_hijack_flag(refs: &[Ref], info: Option<&Map<String, Value>>, path: &str, signed: bool) -> Option<Flag> {
+    let r = refs
+        .iter()
+        .find(|r| r.role.detail.get("source").and_then(Value::as_str) == Some("com_hijack"))?;
+    let target = text(r.role.detail.at("target"));
+    let known = !target.is_empty();
+    if !file_exists(info) {
+        return Some(Flag::new(
+            "com_hijack",
+            if known { 45 } else { 30 },
+            tr!(
+                "replaces a class Windows registers with a file that does not exist: the object no longer works, and any file put there later would be loaded"
+            ),
+        ));
+    }
+    if !signed {
+        return Some(Flag::new(
+            "com_hijack",
+            if known { 70 } else { 50 },
+            if known {
+                tr!("unsigned file loaded in place of {0} for your account", target)
+            } else {
+                tr!("unsigned file loaded in place of a class Windows registers, for your account")
+            },
+        ));
+    }
+    if COM_ODD_FOLDER.is_match(path) || COM_ODD_ROOT.is_match(path) {
+        return Some(Flag::new(
+            "com_hijack",
+            if known { 45 } else { 30 },
+            tr!("loaded in place of a class Windows registers, from a folder no program installs into"),
+        ));
+    }
+    if known && !is_microsoft_signed(info) {
+        return Some(Flag::new(
+            "com_hijack",
+            20,
+            tr!("signed file loaded in place of {0} for your account", target),
+        ));
+    }
+    None
+}
+
 /// Startup-entry references and configuration findings (modified BootExecute...).
 /// The command of Vigil's own sign-in entry (Settings > Start with Windows): this very program,
 /// started hidden in the tray. The same text as `vigil_sys::startup::own_command`.
@@ -821,6 +880,53 @@ fn autorun_refs(raw: &Value) -> (Vec<Ref>, Vec<Map<String, Value>>) {
                         None,
                     );
                 }
+            }
+            "com_hijack" => {
+                let kind = text(entry.at("kind"));
+                let target = text(entry.at("target"));
+                let detail = map(vec![
+                    ("source", source_value.clone()),
+                    ("reg_key", json!(location)),
+                    ("value", or_empty(entry.at("name"))),
+                    ("kind", json!(kind)),
+                    ("target", json!(target)),
+                    ("machine", entry.at("machine").clone()),
+                ]);
+                if kind == "scriptlet" {
+                    // A scriptlet runs script code (often fetched from the internet) every time a
+                    // program creates the object: no file to judge, always worth a look.
+                    config.push(map(vec![
+                        ("topic", json!("com_scriptlet")),
+                        ("title", json!(tr!("Per-user COM class runs a script: {0}", name))),
+                        ("score", json!(70)),
+                        ("detail", Value::Object(detail)),
+                        (
+                            "text",
+                            json!(tr!(
+                                "a per-user registration replaces a class Windows registers and makes it run the script {0} whenever a program uses it",
+                                command
+                            )),
+                        ),
+                    ]));
+                    continue;
+                }
+                let file = text(entry.at("file"));
+                if file.is_empty() {
+                    continue;
+                }
+                let label = if target.is_empty() {
+                    tr!("per-user COM class {0} ({1})", name, location)
+                } else {
+                    tr!("per-user COM class {0}, {1} ({2})", name, target, location)
+                };
+                // Signed or not, and where the file lives, is judged with the file
+                // (`evaluate_file`): per-user installs of signed apps register COM classes too.
+                let parsed = ParsedCommand {
+                    program: Some(file),
+                    certain: true,
+                    ..ParsedCommand::new(&command)
+                };
+                add(&command, label, vec![], Some(detail), Some(parsed));
             }
             "print_monitor" | "print_processor" | "time_provider" | "netsh_helper" | "network_provider"
             | "winsock_provider" | "known_dll" | "ifeo_verifier" | "clr_profiler" => {
@@ -1587,6 +1693,9 @@ fn evaluate_file(entity: &Entity, files: &Files, ctx: &Ctx) -> Item {
             };
             item.add_flag(flag);
         }
+    }
+    if let Some(flag) = com_hijack_flag(&entity.refs, info, &path, valid || package_signed) {
+        item.add_flag(flag);
     }
     if let Some(flag) = crate::svcsec::hidden_flag(&entity.refs, info, &path) {
         item.add_flag(flag);

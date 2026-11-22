@@ -384,6 +384,8 @@ impl Shell {
             }
             Command::Quit => {
                 crate::platform::remove_icon();
+                // A running automatic scan stops at its next step.
+                vigil_core::autoscan::cancel();
                 cx.quit();
             }
             Command::Refresh => self.report.update(cx, |r, cx| {
@@ -409,6 +411,7 @@ impl Shell {
         let settings = watcher.settings();
         if !watcher.owner() || !settings.close_to_tray {
             crate::platform::remove_icon();
+            vigil_core::autoscan::cancel();
             return true;
         }
         crate::win::hide(window);
@@ -498,6 +501,8 @@ impl Shell {
         match vigil_sys::elevation::relaunch_elevated(&["--elevated"]) {
             Ok(true) => {
                 crate::platform::remove_icon();
+                // A running automatic scan stops at its next step.
+                vigil_core::autoscan::cancel();
                 cx.quit();
             }
             Ok(false) => {}

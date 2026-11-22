@@ -53,6 +53,8 @@ pub struct SettingsView {
     endpoint: Entity<InputState>,
     model: Entity<InputState>,
     keys: HashMap<String, Entity<InputState>>,
+    /// The time of the automatic scan ("HH:MM").
+    scan_time: Entity<InputState>,
     modes: HashMap<String, Secret>,
     models: Vec<String>,
     models_note: Option<String>,
@@ -79,6 +81,7 @@ impl SettingsView {
     fn new(ctx: Ctx, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let endpoint = cx.new(|cx| InputState::new(window, cx));
         let model = cx.new(|cx| InputState::new(window, cx));
+        let scan_time = cx.new(|cx| InputState::new(window, cx).placeholder("12:30"));
         let keys = ["openai-compatible", "anthropic-compatible", "virustotal"]
             .iter()
             .map(|id| {
@@ -99,6 +102,7 @@ impl SettingsView {
             endpoint,
             model,
             keys,
+            scan_time,
             modes: HashMap::new(),
             models: Vec::new(),
             models_note: None,
@@ -108,6 +112,9 @@ impl SettingsView {
             acting: Acting::default(),
         };
         view.read_watch();
+        if let Some(time) = view.watch.as_ref().map(|w| w.scan_time.clone()) {
+            view.scan_time.update(cx, |s, cx| s.set_value(time, window, cx));
+        }
         let core = view.ctx.core.clone();
         let weak = cx.entity().downgrade();
         let task = cx.background_spawn(async move {
@@ -252,6 +259,12 @@ impl SettingsView {
             },
             None => vigil_i18n::set_language(&draft.language).to_string(),
         };
+        if let Some(settings) = &mut self.watch {
+            let typed = self.scan_time.read(cx).value().trim().to_string();
+            if valid_time(&typed) {
+                settings.scan_time = typed;
+            }
+        }
         if let (Some(watcher), Some(settings)) = (&self.ctx.watcher, self.watch.clone()) {
             watcher.set_language(&language);
             let resumed = watcher.store.update(|file| {
@@ -791,6 +804,7 @@ impl Render for SettingsView {
                     &tk,
                 ),
             );
+            body = body.child(self.schedule_row(&w, cx, &tk));
             let on = self.autostart;
             let busy = self.acting.busy;
             let auto = ui::toggle_switch(
@@ -1007,4 +1021,107 @@ pub fn open(ctx: Ctx, window: &mut Window, cx: &mut gpui_kit::App) {
             .w(px(720.))
             .child(view.clone())
     });
+}
+
+/// "HH:MM" with a real hour and minute.
+fn valid_time(text: &str) -> bool {
+    let Some((h, m)) = text.split_once(':') else {
+        return false;
+    };
+    h.len() <= 2 && m.len() == 2 && h.parse::<u8>().is_ok_and(|h| h < 24) && m.parse::<u8>().is_ok_and(|m| m < 60)
+}
+
+impl SettingsView {
+    /// Automatic scans: off, every day or every week, the day and the time.
+    fn schedule_row(&self, w: &WatchSettings, cx: &mut Context<Self>, tk: &Tokens) -> Div {
+        let weak = cx.entity().downgrade();
+        let schedule: &'static str = match w.scan_schedule.as_str() {
+            "daily" => "daily",
+            "weekly" => "weekly",
+            _ => "off",
+        };
+        let mut control = div().flex().flex_col().gap_2().child(ui::segmented(
+            "se-w-scan",
+            t("settings.watch.scan"),
+            vec![
+                ("off", t("settings.watch.scanOff")),
+                ("daily", t("settings.watch.scanDaily")),
+                ("weekly", t("settings.watch.scanWeekly")),
+            ],
+            schedule,
+            move |v: &'static str, _, cx| {
+                let _ = weak.update(cx, |this, cx| {
+                    if let Some(s) = &mut this.watch {
+                        s.scan_schedule = v.to_string();
+                    }
+                    cx.notify();
+                });
+            },
+            tk,
+        ));
+        if schedule == "weekly" {
+            const DAYS: [&str; 7] = [
+                "monday",
+                "tuesday",
+                "wednesday",
+                "thursday",
+                "friday",
+                "saturday",
+                "sunday",
+            ];
+            let day = w.scan_day.clamp(1, 7);
+            let weak = cx.entity().downgrade();
+            control = control.child(
+                FButton::new("se-w-day", Kind::Standard)
+                    .label(crate::pages::dates::weekday(DAYS[usize::from(day) - 1], false))
+                    .accessible_name(t("settings.watch.scanDay"))
+                    .chevron()
+                    .dropdown_menu(move |menu, _, _| {
+                        let mut menu = menu;
+                        for (i, key) in DAYS.iter().enumerate() {
+                            let weak = weak.clone();
+                            let value = i as u8 + 1;
+                            menu = menu.item(
+                                PopupMenuItem::new(crate::pages::dates::weekday(key, false))
+                                    .checked(value == day)
+                                    .on_click(move |_, _, cx| {
+                                        let _ = weak.update(cx, |this, cx| {
+                                            if let Some(s) = &mut this.watch {
+                                                s.scan_day = value;
+                                            }
+                                            cx.notify();
+                                        });
+                                    }),
+                            );
+                        }
+                        menu
+                    }),
+            );
+        }
+        if schedule != "off" {
+            control = control.child(
+                kit::row()
+                    .child(kit::faint(t("settings.watch.scanTime"), tk))
+                    .child(div().w(px(90.)).child(Input::new(&self.scan_time))),
+            );
+        }
+        self.row(
+            t("settings.watch.scan"),
+            Some(t("settings.watch.scanNote")),
+            control.into_any_element(),
+            tk,
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn times() {
+        assert!(super::valid_time("07:05"));
+        assert!(super::valid_time("23:59"));
+        assert!(!super::valid_time("24:00"));
+        assert!(!super::valid_time("7:5"));
+        assert!(!super::valid_time("noon"));
+    }
 }

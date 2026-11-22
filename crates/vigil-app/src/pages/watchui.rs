@@ -85,6 +85,7 @@ pub fn target_label(target: &str) -> Option<&'static str> {
         "posture" => "page.posture",
         "firewall" => "page.firewall",
         "accounts" => "page.accounts",
+        "findings" => "page.findings",
         _ => return None,
     })
 }
@@ -136,6 +137,7 @@ pub fn watch_card(ctx: &Ctx, status: &Value, tk: &Tokens) -> impl IntoElement {
         let c = ctx.clone();
         let id = alert.at("id").as_u64();
         let target = alert.s("target").to_string();
+        let scan = alert.s("kind") == "scan";
         card = card.child(
             kit::list_row(
                 ElementId::NamedInteger("wc-alert".into(), i as u64),
@@ -144,6 +146,10 @@ pub fn watch_card(ctx: &Ctx, status: &Value, tk: &Tokens) -> impl IntoElement {
                 move |window: &mut Window, cx: &mut App| {
                     if unread && let Some(id) = id {
                         c.mark_read(Some(vec![id]), cx);
+                    }
+                    if scan {
+                        open_auto_report(&c, window, cx);
+                        return;
                     }
                     let page = if target_label(&target).is_some() {
                         target.as_str()
@@ -167,6 +173,9 @@ pub fn watch_card(ctx: &Ctx, status: &Value, tk: &Tokens) -> impl IntoElement {
             )
             .child(kit::faint(since(alert.i("time")), &tk)),
         );
+    }
+    if let Some(row) = auto_scan_row(ctx, status, "wc-auto-open", &tk) {
+        card = card.child(row);
     }
     if !status.b("tasksWatched") {
         card = card.child(kit::faint(t("watch.tasksNeedAdmin"), &tk));
@@ -204,4 +213,82 @@ pub fn watch_card(ctx: &Ctx, status: &Value, tk: &Tokens) -> impl IntoElement {
             }),
     )
     .min_w(px(0.))
+}
+
+/// One line about automatic scans (Overview card, Alerts page); "" when they are off and never ran.
+pub fn auto_scan_line(status: &Value) -> String {
+    let auto = status.at("autoScan");
+    if !auto.is_object() {
+        return String::new();
+    }
+    let state = auto.s("status");
+    let mut line = if auto.b("running") || state == "running" {
+        t("watch.auto.running")
+    } else if let Some(reason) = state.strip_prefix("postponed:") {
+        let key = match reason {
+            "battery" | "fullscreen" | "busy" => format!("watch.auto.reason.{reason}"),
+            _ => "watch.auto.reason.other".to_string(),
+        };
+        tf("watch.auto.waiting", &[("reason", &t(&key))])
+    } else {
+        let when = if auto.has("lastRun") {
+            since(auto.i("lastRun"))
+        } else {
+            String::new()
+        };
+        match state {
+            "failed" => tf("watch.auto.failed", &[("when", &when)]),
+            "interrupted" => t("watch.auto.interrupted"),
+            "done" if auto.n("found") > 0.0 => tn("watch.auto.found", auto.n("found") as u64, &[("when", &when)]),
+            "done" => tf("watch.auto.clean", &[("when", &when)]),
+            _ if auto.s("schedule") != "off" && auto.has("next") => {
+                tf("watch.auto.next", &[("when", &clock(auto.i("next")))])
+            }
+            _ => String::new(),
+        }
+    };
+    if !line.is_empty() && state == "done" && auto.b("partial") {
+        line = format!("{line} {}", t("watch.auto.partial"));
+    }
+    line
+}
+
+/// Opens the report of the last automatic scan (checked by the core) and shows its findings.
+pub fn open_auto_report(ctx: &Ctx, window: &mut Window, cx: &mut App) {
+    if let (Some(core), Some(watcher)) = (&ctx.core, &ctx.watcher) {
+        match vigil_core::api::open_auto_report(core, watcher) {
+            Ok(Some(analysis)) => ctx.report.update(cx, |r, cx| {
+                r.analysis = Some(analysis);
+                cx.notify();
+            }),
+            Ok(None) => {}
+            Err(error) => ctx.report.update(cx, |r, cx| {
+                r.error = Some(error);
+                cx.notify();
+            }),
+        }
+    }
+    ctx.go("findings", window, cx);
+}
+
+/// The automatic-scan line with its Open report link, if there is something to say.
+pub fn auto_scan_row(ctx: &Ctx, status: &Value, id: &'static str, tk: &Tokens) -> Option<gpui_kit::Div> {
+    let line = auto_scan_line(status);
+    if line.is_empty() {
+        return None;
+    }
+    let c = ctx.clone();
+    Some(
+        kit::row()
+            .gap_1()
+            .child(kit::faint(line, tk))
+            .when(status.at("autoScan").b("report"), |this| {
+                this.child(kit::link(
+                    id,
+                    t("watch.auto.open"),
+                    move |window, cx| open_auto_report(&c, window, cx),
+                    tk,
+                ))
+            }),
+    )
 }

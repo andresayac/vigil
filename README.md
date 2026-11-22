@@ -184,6 +184,14 @@ your account's startup apps, without administrator rights; you confirm it and Hi
 you can open Vigil, start a scan, pause notifications for an hour or pause the watch. Only one copy of Vigil watches
 at a time.
 
+The watch can also run an **automatic scan** every day or every week at the time you choose (off by default). It uses
+the local rules only (never the AI or VirusTotal), runs at low priority, and waits while the computer runs on battery,
+a full-screen program or presentation is on, or the processor is busy; a missed time is caught up as soon as possible.
+Findings rated Remove or Disable that are new or changed since the previous scan, and security settings that changed,
+become alerts with one notification, and the Overview card and the Alerts page open the report. Started in the tray
+without administrator rights, the scan sees less, and says so. The reports are saved with the other scans; Vigil
+keeps the last ten automatic ones and deletes older ones, its own files only.
+
 ### Actions
 
 What is offered depends on how the item is present on the system:
@@ -283,7 +291,26 @@ are never "optimizations").
      products that restrict who sees their services count as information only. Tasks need administrator rights;
    - services standard users could use to gain SYSTEM rights, from the real permissions (no guessing from folder
      names): who may change the service itself, its program or DLL, the folder it runs from and its registry key,
-     and unquoted paths with spaces where Windows would run a program from a folder anyone can write to first.
+     and unquoted paths with spaces where Windows would run a program from a folder anyone can write to first;
+   - secrets left in the clear: passwords and keys typed into PowerShell (its history), Windows setup answer files
+     and Group Policy files that keep a password (readable by every user), the password of automatic sign-in, VNC
+     and PuTTY passwords in the registry, and files in your own folders (Desktop, Documents, Downloads, `.ssh`,
+     `.aws`, `.azure`, `.config`, `.docker`, two levels deep, files up to 1 MB): `.env` files, cloud and package
+     tokens, Git credentials, connection strings, private keys without a passphrase, Remote Desktop files with a
+     saved password and files named like a password list. Links are not followed and OneDrive files that are not
+     on the computer are not downloaded. **Only where a secret is and what kind it is are kept (`sk-…`, `AKIA…`);
+     its value never enters the report, the HTML page, the data sent to the AI or the MCP tools.**
+   - per-user COM classes that take the place of one Windows registers for the whole computer (COM hijacking):
+     in-process and local servers, `TreatAs` and ProgID redirections, and scriptlets. The file is judged by its
+     signature and folder, so signed apps installed for one user stay quiet; classes Explorer or a Windows task
+     load weigh more;
+   - remote access and remote management agents (AnyDesk, TeamViewer, RustDesk, ScreenConnect, Splashtop, Atera,
+     NinjaOne, Kaseya, N-able, Action1, MeshCentral, Tactical RMM, Remote Utilities, Chrome Remote Desktop,
+     Parsec, LogMeIn, GoTo, Zoho Assist, DWService, Supremo, AeroAdmin, NetSupport), recognized by service,
+     program, folder and version data rather than by name, so a renamed copy is still found. Reported when they
+     start with Windows (information) or when something deserves a look: not signed by their maker, renamed, a
+     relay server that is not their maker's, installed in the last 7 days, or a copy running from a folder
+     anyone can change. Whether unattended access is set up is read as yes or no; a password never is;
 2. **Grouping**: every reference is resolved to the file that really decides what runs (the DLL behind `rundll32`,
    the script behind `wscript`, the payload of an encoded PowerShell command...), so each file is judged once.
 3. **Local rules**: digital signatures, locations, names that imitate Windows, command-line patterns (miners,
