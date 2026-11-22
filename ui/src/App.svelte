@@ -161,7 +161,7 @@
                   onopenverdict={(verdict) => { findingsFocus = { verdict }; page = "findings"; }}
                   onscan={() => (scanOpen = true)} onpage={go} />
       {:else if page === "findings"}
-        <Findings focus={findingsFocus} {elevated} />
+        <Findings focus={findingsFocus} {elevated} onnavigate={(key) => go(key)} />
       {:else if page === "firewall"}
         <Firewall {elevated} />
       {:else if page === "accounts"}

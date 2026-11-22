@@ -1637,6 +1637,8 @@ pub(crate) fn config_items(raw: &Value, aux: &Aux) -> (Vec<Item>, Map<String, Va
         ));
     }
 
+    items.extend(hook_items(raw, other_av_active));
+
     // --- pathless processes and findings from the registry
     let odd: BTreeSet<&String> = aux
         .pathless
@@ -1667,6 +1669,280 @@ pub(crate) fn config_items(raw: &Value, aux: &Aux) -> (Vec<Item>, Map<String, Va
         ));
     }
     (items, posture)
+}
+
+/// Programs whose copy in place of an accessibility program gives a way in without a password.
+const BACKDOOR_PROGRAMS: &[&str] = &[
+    "cmd.exe",
+    "powershell.exe",
+    "pwsh.exe",
+    "explorer.exe",
+    "taskmgr.exe",
+    "regedit.exe",
+    "mmc.exe",
+    "wscript.exe",
+    "cscript.exe",
+    "mshta.exe",
+    "rundll32.exe",
+];
+
+/// Persistence tricks and defence-evasion settings (`sysconfig.hooks`, `sysconfig.evasion`, the
+/// extra Defender preferences, two services and the accessibility programs). Every check looks
+/// for an explicit change: what Windows ships with never scores.
+fn hook_items(raw: &Value, other_av_active: bool) -> Vec<Item> {
+    let mut items = Vec::new();
+    let system = raw.at("system");
+    let cfg = raw.at("sysconfig");
+
+    // --- accessibility programs replaced (sticky keys backdoor)
+    let files = raw.at("files");
+    for (name, originals) in crate::hooks::ACCESSIBILITY {
+        let path = crate::ntpath::join(&crate::ntpath::SYSTEM32, &[name]);
+        let info = files.at(&lower(&path));
+        if !crate::lenient::is_true(info.at("exists")) {
+            continue;
+        }
+        let original = lower(&text(info.at("original")));
+        let original = original.trim_end_matches(".mui").to_string();
+        let detail = facts(vec![
+            ("path", json!(path)),
+            ("original_name", json!(original)),
+            ("signer", info.at("signer").clone()),
+        ]);
+        if !original.is_empty() && !originals.contains(&original.as_str()) {
+            let shell = BACKDOOR_PROGRAMS.contains(&original.as_str());
+            items.push(config(
+                "accessibility_replaced",
+                tr!("Accessibility program replaced: {0}", name),
+                // A shell there is a sign-in screen backdoor; another program is still wrong.
+                if shell { 85 } else { 55 },
+                tr!(
+                    "\"{0}\" is really \"{1}\": Windows starts it from the sign-in screen with SYSTEM rights, so anyone at the computer could use it without a password",
+                    name,
+                    original
+                ),
+                Some(&detail),
+                vec![],
+            ));
+        } else if info.at("sig_status").as_str().is_some_and(|s| !s.is_empty())
+            && !crate::rules::is_microsoft_signed(info.as_object())
+        {
+            items.push(config(
+                "accessibility_replaced",
+                tr!("Accessibility program replaced: {0}", name),
+                70,
+                tr!(
+                    "\"{0}\" is not signed by Microsoft: Windows starts it from the sign-in screen with SYSTEM rights",
+                    name
+                ),
+                Some(&detail),
+                vec![],
+            ));
+        }
+    }
+
+    // --- one-value tricks
+    let hooks = cfg.at("hooks");
+    let overrides = hooks.at("env_override");
+    if overrides.as_object().is_some_and(|o| !o.is_empty()) {
+        items.push(config(
+            "env_override",
+            tr!("Windows folder variable redefined for your account"),
+            70,
+            tr!(
+                "%windir% or %SystemRoot% points elsewhere for your account: Windows' own tasks and programs that elevate without asking would run files from there"
+            ),
+            overrides.as_object(),
+            vec![],
+        ));
+    }
+    let shell = strip(&text(hooks.at("alternate_shell"))).to_string();
+    if !shell.is_empty() && lower(&shell) != "cmd.exe" {
+        items.push(config(
+            "safeboot_shell",
+            tr!("Safe mode shell changed"),
+            60,
+            tr!("Safe mode with command prompt starts \"{0}\" instead of cmd.exe", shell),
+            Some(&facts(vec![("alternate_shell", json!(shell))])),
+            vec![],
+        ));
+    }
+    // Programs register hidden service accounts too; only a hidden administrator is a finding.
+    let admins: BTreeSet<String> = list(system.at("admins"))
+        .iter()
+        .map(|a| lower(text(a.at("name")).rsplit('\\').next().unwrap_or("")))
+        .collect();
+    let hidden_admins: Vec<String> = list(hooks.at("hidden_accounts"))
+        .iter()
+        .map(text)
+        .filter(|n| admins.contains(&lower(n)))
+        .collect();
+    if !hidden_admins.is_empty() {
+        items.push(config(
+            "hidden_administrator",
+            tr!("Administrator hidden from the sign-in screen"),
+            60,
+            tr!("an account with administrator rights does not appear on the sign-in screen: a way back in that is easy to miss"),
+            Some(&facts(vec![("accounts", json!(hidden_admins))])),
+            vec![],
+        ));
+    }
+    let before = list(hooks.at("path_before_system32"));
+    if !before.is_empty() {
+        items.push(config(
+            "path_hijack",
+            tr!("Folders outside Program Files come before System32 in PATH"),
+            // Common on developer computers (tool folders at the root of the drive): a minor
+            // signal. The folder may still be protected by its own permissions.
+            10,
+            tr!("if a standard user can write to one of these folders, a program placed there can take the place of a Windows command for every user"),
+            Some(&facts(vec![("folders", json!(before))])),
+            vec![],
+        ));
+    }
+
+    // --- logging and protection switched off explicitly
+    let evasion = cfg.at("evasion");
+    let channels = list(evasion.at("channels_off"));
+    if !channels.is_empty() {
+        items.push(config(
+            "event_channels_off",
+            tr!("Security event logs turned off"),
+            50,
+            tr!("these event logs are turned off, so actions an attacker takes there leave no record"),
+            Some(&facts(vec![("logs", json!(channels))])),
+            vec![],
+        ));
+    }
+    let loggers = list(evasion.at("autologgers_off"));
+    if !loggers.is_empty() {
+        items.push(config(
+            "event_logging_off",
+            tr!("Windows event logging turned off"),
+            60,
+            tr!("the Security, System or Application log does not start with Windows: nothing is recorded"),
+            Some(&facts(vec![("loggers", json!(loggers))])),
+            vec![],
+        ));
+    }
+    if eq_num(evasion.at("run_as_ppl"), 0.0) {
+        items.push(config(
+            "lsa_protection_off",
+            tr!("LSA protection turned off explicitly"),
+            25,
+            tr!("RunAsPPL is set to 0: other programs can read the process that holds sign-in secrets"),
+            None,
+            vec![],
+        ));
+    }
+    if eq_num(evasion.at("driver_blocklist"), 0.0) {
+        items.push(config(
+            "driver_blocklist_off",
+            tr!("Vulnerable driver blocklist turned off"),
+            30,
+            tr!("drivers with known flaws, which attackers load to switch security software off, are allowed again"),
+            None,
+            vec![],
+        ));
+    }
+
+    // --- event logging service and Defender service
+    let services = list(raw.at("services"));
+    let find = |name: &str| services.iter().find(|s| text(s.at("name")).eq_ignore_ascii_case(name));
+    let stopped =
+        |svc: &Value| lower(&text(svc.at("start"))) == "disabled" || lower(&text(svc.at("state"))) == "stopped";
+    if let Some(svc) = find("EventLog").filter(|s| stopped(s)) {
+        items.push(config(
+            "eventlog_stopped",
+            tr!("Windows Event Log service stopped"),
+            60,
+            tr!("no event is recorded while the Windows Event Log service is stopped or disabled"),
+            Some(&facts(vec![
+                ("state", svc.at("state").clone()),
+                ("start", svc.at("start").clone()),
+            ])),
+            vec![],
+        ));
+    }
+
+    if other_av_active {
+        return items;
+    }
+    if let Some(svc) = find("WinDefend").filter(|s| stopped(s)) {
+        items.push(config(
+            "defender_service_stopped",
+            tr!("Microsoft Defender service stopped"),
+            55,
+            tr!("the antivirus service is stopped or disabled and no other antivirus is active"),
+            Some(&facts(vec![
+                ("state", svc.at("state").clone()),
+                ("start", svc.at("start").clone()),
+            ])),
+            vec![],
+        ));
+    }
+    let pref = system.at("defender_pref");
+    let allowed: Vec<Value> = list(pref.at("threat_default_actions"))
+        .iter()
+        .filter(|t| matches!(as_int(t.at("action")), Some(6 | 9)))
+        .cloned()
+        .collect();
+    if !allowed.is_empty() {
+        items.push(config(
+            "defender_allowed_threats",
+            tr!("Defender told to leave threats alone"),
+            55,
+            tr!("Defender is set to allow, or to take no action on, specific threats when it finds them"),
+            Some(&facts(vec![("threats", json!(allowed))])),
+            vec![],
+        ));
+    }
+    if pref.get("maps_reporting").is_some() && eq_num(pref.at("maps_reporting"), 0.0) {
+        items.push(config(
+            "cloud_protection_off",
+            tr!("Cloud-delivered protection turned off"),
+            30,
+            tr!("Defender does not ask Microsoft's cloud about new files, so new threats are caught later"),
+            None,
+            vec![],
+        ));
+    }
+    if truthy(pref.at("disable_block_at_first_seen")) {
+        items.push(config(
+            "block_at_first_seen_off",
+            tr!("Block at first sight turned off"),
+            20,
+            tr!("new suspicious files are not held back while the cloud checks them"),
+            None,
+            vec![],
+        ));
+    }
+    let ips: Vec<&Value> = list(pref.at("exclusion_ip"))
+        .iter()
+        .filter(|v| !str_of(v).starts_with("N/A"))
+        .collect();
+    if !ips.is_empty() {
+        items.push(config(
+            "defender_ip_exclusions",
+            tr!("Network addresses excluded from Defender"),
+            30,
+            tr!("Defender's network protection does not inspect traffic to these addresses"),
+            Some(&facts(vec![("addresses", json!(ips))])),
+            vec![],
+        ));
+    }
+    let asr = list(pref.at("asr_disabled"));
+    if !asr.is_empty() {
+        items.push(config(
+            "asr_rules_off",
+            tr!("Attack surface reduction rules turned off"),
+            15,
+            tr!("some attack surface reduction rules are set to off explicitly"),
+            Some(&facts(vec![("rules", json!(asr))])),
+            vec![],
+        ));
+    }
+    items
 }
 
 #[cfg(test)]

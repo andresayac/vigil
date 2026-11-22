@@ -13,6 +13,8 @@ import type { InstalledProgram } from "./types";
 import type { BrowserExtensions } from "./types";
 import type { Reliability } from "./types";
 import type { AccountsView } from "./types";
+import type { InvestigationProgress, InvestigationView } from "./types";
+import { investigation as mockInvestigation } from "./mock-investigate";
 
 export const inApp = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -310,3 +312,18 @@ export const onWatch = (handler: (status: WatchStatus) => void) => onEvent<Watch
 /** The tray or a notification asks for a page (scan: open the New scan dialog). */
 export const onOpenPage = (handler: (request: { page: string; scan: boolean }) => void) =>
   onEvent<{ page: string; scan: boolean }>("open", handler);
+
+// ---------------------------------------------------------------- AI investigation
+// The AI agent reads with Vigil's read-only tools; it never changes anything. A native dialog says
+// where the data goes before anything is sent; `null` means the person did not go ahead.
+
+export async function investigateFinding(id: string): Promise<InvestigationView | null> {
+  if (inApp) return call<InvestigationView | null>("investigate_finding", { id });
+  await new Promise((resolve) => setTimeout(resolve, 900));
+  return mockInvestigation(id);
+}
+export async function investigateCancel(): Promise<void> {
+  if (inApp) await call<void>("investigate_cancel");
+}
+export const onInvestigate = (handler: (p: InvestigationProgress) => void) =>
+  onEvent<InvestigationProgress>("investigate", handler);

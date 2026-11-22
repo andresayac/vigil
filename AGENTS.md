@@ -44,9 +44,11 @@ crates/
                   tuning state, insights
   vigil-core/     the service layer every frontend shares: app state, planner (actions per finding),
                   requests (UI request -> trusted ActionSpec), native confirmation, the action path
-                  (service::run_action), settings, secrets, the command lines
+                  (service::run_action), settings, secrets, the background watch and its
+                  notifications, the AI investigation, the MCP tool registry and `vigil mcp`, the
+                  command lines
   vigil-app/      the Tauri app: commands for the UI (thin wrappers over vigil-core), live sampler,
-                  background watch (tray, notifications, alerts)
+                  tray icon
   vigil-gpui/     prototype of a native GPUI window over vigil-core (docs/GPUI-MIGRATION.md); it never
                   depends on vigil-actions and only sends requests to vigil_core::service::run_action
 ui/               Svelte 5 + TypeScript: pages, components, lib/api.ts (the only module that calls Rust)
@@ -92,6 +94,10 @@ Each crate has its tests next to the code (`#[cfg(test)]`) or in `tests/`; recor
    endpoints must be HTTPS (plain HTTP only for localhost). Ollama cloud models are never used, since they would
    send the data off the computer. API keys live in Windows Credential Manager (`vigil-core/src/secrets.rs`),
    never in settings, reports, logs or the UI. Tests reach no real AI service: fake probes and local servers.
+   **AI tools only read.** The tool registry (`vigil-core/src/mcp/registry.rs`), shared by `vigil mcp` and the
+   in-app investigation, never changes the computer, never opens a dialog and never builds an `ActionSpec`. Results
+   are capped, paged and anonymizable, and their text is data inside a JSON envelope, never instructions. A model
+   may only suggest; actions go through `requests.rs` and the native confirmation like any other.
 8. **Never follow links when deleting.** Skip reparse points (junctions, symlinks); open files without
    following links, check the final path is inside the expected root (see `vigil-maint::storage`).
 9. **Honest wording.** Explanations say what really happens (for example: trimming memory is temporary).

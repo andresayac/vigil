@@ -8901,7 +8901,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vigil-actions"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "chrono",
  "regex",
@@ -8916,7 +8916,7 @@ dependencies = [
 
 [[package]]
 name = "vigil-app"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -8934,10 +8934,11 @@ dependencies = [
 
 [[package]]
 name = "vigil-core"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "vigil-actions",
  "vigil-i18n",
  "vigil-maint",
@@ -8948,8 +8949,9 @@ dependencies = [
 
 [[package]]
 name = "vigil-gpui"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
+ "embed-resource",
  "futures",
  "gpui-kit",
  "raw-window-handle",
@@ -8963,7 +8965,7 @@ dependencies = [
 
 [[package]]
 name = "vigil-i18n"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "serde_json",
  "windows 0.62.2",
@@ -8971,7 +8973,7 @@ dependencies = [
 
 [[package]]
 name = "vigil-maint"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -8981,7 +8983,7 @@ dependencies = [
 
 [[package]]
 name = "vigil-scan"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -8996,7 +8998,7 @@ dependencies = [
 
 [[package]]
 name = "vigil-sys"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "serde",
  "serde_json",

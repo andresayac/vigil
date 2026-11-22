@@ -11,6 +11,10 @@ fn main() {
     if args.first().map(String::as_str) == Some("scan") {
         std::process::exit(vigil_app::scan_cli(&args[1..]));
     }
+    // `vigil mcp`: the read-only tools for AI clients over stdio (no window, no UAC).
+    if args.first().map(String::as_str) == Some("mcp") {
+        std::process::exit(vigil_app::mcp_cli(&args[1..]));
+    }
     // `vigil list | ports | services | --help`: read-only views for a terminal or a script.
     if let Some(command) = args.first()
         && let Some(code) = vigil_app::tool_cli(command, &args[1..])

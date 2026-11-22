@@ -858,3 +858,285 @@ fn item_payload_is_compact() {
     assert!(payload["signals"].as_array().is_some_and(|s| !s.is_empty()));
     assert!(payload.get("decoded").is_none(), "empty fields are left out");
 }
+
+// --------------------------------------------------------------------------- hooks and evasion
+
+/// An inventory with only what a test sets (the rest of the analysis sees an empty computer).
+fn mini(extra: Value) -> Value {
+    let mut raw = json!({"meta": {"is_admin": true}, "system": {"defender": {"realtime": true, "antivirus": true}}});
+    if let (Some(base), Some(add)) = (raw.as_object_mut(), extra.as_object()) {
+        for (k, v) in add {
+            base.insert(k.clone(), v.clone());
+        }
+    }
+    raw
+}
+
+fn with_flag<'a>(analysis: &'a Analysis, code: &str) -> Vec<&'a Item> {
+    analysis.items.iter().filter(|i| has(&i.flags, code)).collect()
+}
+
+fn ms_file() -> Value {
+    json!({"exists": true, "sig_status": "Valid", "signer": "Microsoft Windows",
+           "issuer": "Microsoft Windows Production PCA 2011", "os_binary": true})
+}
+
+fn unsigned_file() -> Value {
+    json!({"exists": true, "sig_status": "NotSigned"})
+}
+
+#[test]
+fn per_user_class_handlers_are_uac_bypasses() {
+    let raw = mini(json!({"autoruns": [
+        {"source": "class_hijack", "location": r"HKCU\Software\Classes\ms-settings\shell\open\command",
+         "name": "ms-settings", "command": r"C:\Users\jdoe\AppData\Local\Temp\x.exe", "delegate": "", "enabled": true},
+        {"source": "class_hijack", "location": r"HKCU\Software\Classes\Folder\shell\open\command",
+         "name": "Folder", "command": r"C:\Program Files\Contoso Files\files.exe", "delegate": "", "enabled": true},
+        {"source": "class_hijack", "location": r"HKCU\Software\Classes\mscfile\shell\open\command",
+         "name": "mscfile", "command": "", "delegate": "{00000000-0000-0000-0000-000000000000}", "enabled": true},
+    ]}));
+    let analysis = run_analysis(&raw, false);
+    let hits = with_flag(&analysis, "uac_bypass");
+    assert_eq!(hits.len(), 3, "two commands and one DelegateExecute");
+    let weight = |item: &Item| {
+        item.flags
+            .iter()
+            .find(|f| f.code == "uac_bypass")
+            .map_or(0, |f| f.weight)
+    };
+    let by_path = |needle: &str| {
+        hits.iter()
+            .find(|i| i.path.as_deref().is_some_and(|p| p.to_lowercase().ends_with(needle)))
+            .copied()
+    };
+    assert_eq!(by_path("x.exe").map(weight), Some(70));
+    assert_eq!(by_path("files.exe").map(weight), Some(40));
+    assert!(hits.iter().any(|i| i.kind == "config" && i.score >= 60));
+}
+
+#[test]
+fn hook_dlls_are_judged_by_place_and_signature() {
+    let sys = system32();
+    let windows_dll = format!(r"{sys}\localspl.dll");
+    let unsigned_dll = format!(r"{sys}\contosomon.dll");
+    let outside = r"C:\ProgramData\Contoso\np.dll".to_string();
+    let mut files = serde_json::Map::new();
+    files.insert(windows_dll.to_lowercase(), ms_file());
+    files.insert(unsigned_dll.to_lowercase(), unsigned_file());
+    files.insert(outside.to_lowercase(), unsigned_file());
+    let vendor = r"C:\Program Files\Fabrikam VPN\fabnp.dll".to_string();
+    files.insert(
+        vendor.to_lowercase(),
+        json!({"exists": true, "sig_status": "Valid", "signer": "Fabrikam, Inc.", "issuer": "DigiCert"}),
+    );
+    let raw = mini(json!({
+        "autoruns": [
+            {"source": "print_monitor", "location": r"HKLM\SYSTEM\x", "name": "Local Port",
+             "command": "localspl.dll", "file": windows_dll, "enabled": true},
+            {"source": "print_monitor", "location": r"HKLM\SYSTEM\x", "name": "Contoso",
+             "command": "contosomon.dll", "file": unsigned_dll, "enabled": true},
+            {"source": "network_provider", "location": r"HKLM\SYSTEM\y", "name": "ContosoNP",
+             "command": outside, "file": outside, "enabled": true},
+            {"source": "network_provider", "location": r"HKLM\SYSTEM\v", "name": "FabrikamNP",
+             "command": vendor, "file": vendor, "enabled": true},
+        ],
+        "files": files,
+    }));
+    let analysis = run_analysis(&raw, false);
+    let item = |path: &str| {
+        analysis
+            .items
+            .iter()
+            .find(|i| i.path.as_deref().is_some_and(|p| p.eq_ignore_ascii_case(path)))
+    };
+    assert!(
+        item(&windows_dll).is_some_and(|i| i.trusted),
+        "Microsoft DLL in System32"
+    );
+    assert!(item(&unsigned_dll).is_some_and(|i| has(&i.flags, "unsigned_hook_dll") && !i.trusted));
+    let provider = item(&outside).expect("network provider");
+    assert!(
+        provider
+            .flags
+            .iter()
+            .any(|f| f.code == "hook_user_folder" && f.weight == 60)
+    );
+    assert!(provider.score >= 70, "{}", provider.score);
+    // A signed vendor DLL in Program Files (VPN, virtual machine shared folders): no signal.
+    let signed = item(&vendor).expect("vendor provider");
+    assert_eq!(signed.score, 0, "{:?}", signed.flags);
+}
+
+#[test]
+fn accessibility_programs_replaced_by_a_shell() {
+    let sys = system32();
+    let mut files = serde_json::Map::new();
+    let mut fake = ms_file();
+    fake["original"] = json!("Cmd.Exe.MUI");
+    files.insert(format!(r"{sys}\sethc.exe").to_lowercase(), fake);
+    let mut real = ms_file();
+    real["original"] = json!("utilman2.exe.mui");
+    files.insert(format!(r"{sys}\utilman.exe").to_lowercase(), real);
+    let mut odd = unsigned_file();
+    odd["original"] = json!("osk.exe");
+    files.insert(format!(r"{sys}\osk.exe").to_lowercase(), odd);
+    let analysis = run_analysis(&mini(json!({"files": files})), false);
+    let hits = with_flag(&analysis, "accessibility_replaced");
+    assert_eq!(hits.len(), 2, "sethc (a shell) and osk (not signed by Microsoft)");
+    assert!(hits.iter().any(|i| i.title.contains("sethc.exe") && i.score == 85));
+    assert!(hits.iter().any(|i| i.title.contains("osk.exe") && i.score == 70));
+}
+
+#[test]
+fn ifeo_debugger_on_an_accessibility_program_weighs_more() {
+    let ifeo = r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options";
+    let raw = mini(json!({"autoruns": [
+        {"source": "ifeo_debugger", "location": format!(r"{ifeo}\Utilman.exe"),
+         "name": "Utilman.exe", "command": r"C:\ProgramData\shell.exe", "enabled": true},
+        {"source": "ifeo_debugger", "location": format!(r"{ifeo}\notepad.exe"),
+         "name": "notepad.exe", "command": r"C:\Program Files\Contoso\editor.exe", "enabled": true},
+    ]}));
+    let analysis = run_analysis(&raw, false);
+    let weights: BTreeSet<i64> = with_flag(&analysis, "debugger_hook")
+        .iter()
+        .flat_map(|i| i.flags.iter().filter(|f| f.code == "debugger_hook").map(|f| f.weight))
+        .collect();
+    assert_eq!(weights, BTreeSet::from([50, 75]));
+}
+
+#[test]
+fn one_value_tricks_and_boot_values() {
+    let session = r"HKLM\SYSTEM\CurrentControlSet\Control\Session Manager";
+    let raw = mini(json!({
+        "autoruns": [
+            {"source": "boot_execute", "location": session, "name": "BootExecute",
+             "command": "autocheck autochk *", "enabled": true},
+            {"source": "boot_execute", "location": session, "name": "SetupExecute",
+             "command": r"\??\C:\ProgramData\n.exe", "enabled": true},
+            {"source": "rdp_initial_program", "location": r"HKLM\SYSTEM\z", "name": "InitialProgram",
+             "command": r"C:\ProgramData\rdp.exe", "enabled": true},
+            {"source": "service_failure", "location": r"HKLM\SYSTEM\CurrentControlSet\Services\ContosoSvc",
+             "name": "ContosoSvc", "command": r"C:\ProgramData\again.exe", "enabled": true},
+            {"source": "runonceex", "location": r"HKLM\SOFTWARE\x", "name": "Load",
+             "command": r"C:\ProgramData\a.dll|DllRegisterServer", "enabled": true},
+            {"source": "screensaver", "location": r"HKCU\Control Panel\Desktop", "name": "SCRNSAVE.EXE",
+             "command": r"C:\Users\jdoe\saver.exe", "file": r"C:\Users\jdoe\saver.exe", "enabled": true},
+            {"source": "clr_profiler", "location": r"HKCU\Environment", "name": "environment",
+             "command": r"C:\Users\jdoe\p.dll", "file": r"C:\Users\jdoe\p.dll", "enabled": true},
+            {"source": "ifeo_verifier", "location": r"HKLM\SOFTWARE\x", "name": "lsass.exe",
+             "command": "v.dll", "file": r"C:\Users\jdoe\v.dll", "enabled": true},
+        ],
+        "sysconfig": {
+            "hooks": {
+                "env_override": {"windir": r"C:\Users\jdoe\fake"},
+                "alternate_shell": "explorer.exe",
+                "hidden_accounts": ["support", "ContosoSvcAccount"],
+                "path_before_system32": [r"C:\Tools"],
+            },
+        },
+        "system": {
+            "defender": {"realtime": true, "antivirus": true},
+            "admins": [{"name": r"PC-VICTIM\support"}, {"name": r"PC-VICTIM\jdoe"}],
+        },
+    }));
+    let analysis = run_analysis(&raw, false);
+    let boot = with_flag(&analysis, "boot_execute");
+    assert_eq!(boot.len(), 1, "the Windows default BootExecute is not a finding");
+    assert!(boot[0].title.contains("SetupExecute"));
+    for code in [
+        "rdp_initial_program",
+        "runonceex",
+        "screensaver_not_scr",
+        "clr_profiler",
+        "verifier_dll",
+        "env_override",
+        "safeboot_shell",
+        "path_hijack",
+    ] {
+        assert_eq!(with_flag(&analysis, code).len(), 1, "{code}");
+    }
+    let hidden = with_flag(&analysis, "hidden_administrator");
+    assert_eq!(hidden.len(), 1);
+    assert_eq!(
+        hidden[0].facts["accounts"],
+        json!(["support"]),
+        "only the hidden administrator"
+    );
+}
+
+#[test]
+fn defence_evasion_settings_only_when_explicit() {
+    let quiet = mini(json!({
+        "sysconfig": {
+            "hooks": {"alternate_shell": "cmd.exe"},
+            "evasion": {"channels_off": [], "autologgers_off": [], "run_as_ppl": null, "driver_blocklist": 1},
+        },
+        "services": [
+            {"name": "EventLog", "state": "Running", "start": "Auto"},
+            {"name": "WinDefend", "state": "Running", "start": "Auto"},
+        ],
+        "system": {"defender": {"realtime": true, "antivirus": true}, "defender_pref": {
+            "maps_reporting": null,
+            "exclusion_ip": ["N/A: Must be an administrator to view exclusions"],
+            "threat_default_actions": [{"id": "2147519003", "action": 2}],
+        }},
+    }));
+    let analysis = run_analysis(&quiet, false);
+    for code in [
+        "safeboot_shell",
+        "event_channels_off",
+        "driver_blocklist_off",
+        "lsa_protection_off",
+        "eventlog_stopped",
+        "defender_service_stopped",
+        "cloud_protection_off",
+        "defender_ip_exclusions",
+        "defender_allowed_threats",
+    ] {
+        assert!(with_flag(&analysis, code).is_empty(), "{code} with Windows defaults");
+    }
+
+    let loud = mini(json!({
+        "sysconfig": {"evasion": {
+            "channels_off": ["Microsoft-Windows-PowerShell/Operational"],
+            "autologgers_off": ["EventLog-Security"],
+            "run_as_ppl": 0,
+            "driver_blocklist": 0,
+        }},
+        "services": [
+            {"name": "EventLog", "state": "Stopped", "start": "Disabled"},
+            {"name": "WinDefend", "state": "Stopped", "start": "Disabled"},
+        ],
+        "system": {"defender": {"realtime": true, "antivirus": true}, "defender_pref": {
+            "maps_reporting": 0,
+            "disable_block_at_first_seen": true,
+            "exclusion_ip": ["203.0.113.5"],
+            "threat_default_actions": [{"id": "2147519003", "action": 6}],
+            "asr_disabled": ["d4f940ab-401b-4efc-aadc-ad5f3c50688a"],
+        }},
+    }));
+    let analysis = run_analysis(&loud, false);
+    for code in [
+        "event_channels_off",
+        "event_logging_off",
+        "lsa_protection_off",
+        "driver_blocklist_off",
+        "eventlog_stopped",
+        "defender_service_stopped",
+        "cloud_protection_off",
+        "block_at_first_seen_off",
+        "defender_ip_exclusions",
+        "defender_allowed_threats",
+        "asr_rules_off",
+    ] {
+        assert_eq!(with_flag(&analysis, code).len(), 1, "{code}");
+    }
+
+    // Another antivirus is active: Defender's own settings do not count, the event log does.
+    let mut other = loud.clone();
+    other["system"]["av_products"] = json!([{"name": "Contoso Antivirus", "state": 4096}]);
+    let analysis = run_analysis(&other, false);
+    assert!(with_flag(&analysis, "defender_allowed_threats").is_empty());
+    assert!(with_flag(&analysis, "defender_service_stopped").is_empty());
+    assert_eq!(with_flag(&analysis, "eventlog_stopped").len(), 1);
+}

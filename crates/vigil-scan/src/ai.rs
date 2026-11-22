@@ -13,6 +13,7 @@
 //! too: verdicts outside the allowed set are ignored, and an item the local rules rate critical is
 //! never downgraded to "safe".
 
+pub mod agent;
 mod anthropic;
 mod cli;
 pub mod net;
@@ -36,7 +37,7 @@ use crate::privacy::{Redactor, clip};
 use vigil_i18n::tr;
 
 pub use anthropic::{API_BASE, DEFAULT_MODEL};
-pub use cli::{Launcher, node_script_of_shim};
+pub use cli::{Launcher, node_script_of_shim, toml_string};
 pub use net::{check_endpoint, is_loopback_url};
 pub use ollama::is_cloud_name;
 pub use openai::DEFAULT_BASE as OPENAI_BASE;

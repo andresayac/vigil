@@ -13,6 +13,8 @@ pub mod confirm;
 pub mod extensions;
 pub mod firewall;
 pub mod inspect;
+pub mod investigate;
+pub mod mcp;
 pub mod notify;
 pub mod planner;
 pub mod posture;

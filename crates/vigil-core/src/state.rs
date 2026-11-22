@@ -155,6 +155,25 @@ impl AppState {
         Ok((vigil_scan::report::render_html(analysis), name))
     }
 
+    /// The AI provider `settings` ask for (the error says why there is none). Blocking: it may
+    /// start a CLI to read its options or ask a local server for its models.
+    pub fn pick_ai(&self, settings: &Stored) -> Result<vigil_scan::ai::Provider, String> {
+        let keys = |id: &str| crate::secrets::lookup(&*self.secrets, id);
+        let probe = vigil_scan::ai::SystemProbe { keys: &keys };
+        vigil_scan::ai::pick_provider(&settings.ai.config(), &probe)
+    }
+
+    /// What an AI investigation needs: the settings, the loaded report (with its file) and the
+    /// data folder.
+    pub fn investigation_inputs(&self) -> (Stored, Option<(Analysis, PathBuf)>, PathBuf) {
+        let inner = self.lock();
+        let report = match (&inner.analysis, &inner.report_path) {
+            (Some(analysis), Some(path)) => Some((analysis.clone(), path.clone())),
+            _ => None,
+        };
+        (inner.settings.clone(), report, self.root.clone())
+    }
+
     /// The hardware facts, read once and kept (`force` reads them again). Slow the first time:
     /// call it off the UI thread.
     pub fn hardware(&self, force: bool) -> Result<Hardware, String> {

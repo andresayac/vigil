@@ -28,7 +28,7 @@
     return api.subscribe(api.onWatch(() => void load()));
   });
 
-  const KINDS: AlertKind[] = ["startup", "service", "task", "security", "port"];
+  const KINDS: AlertKind[] = ["startup", "service", "task", "security", "port", "hook", "driver", "hosts", "event"];
   const SEVERITY: Record<WatchAlert["severity"], Key> = {
     info: "alerts.severity.info", warning: "alerts.severity.warning", critical: "alerts.severity.critical",
   };

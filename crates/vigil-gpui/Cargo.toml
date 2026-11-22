@@ -13,6 +13,10 @@ publish = false
 name = "vigil-gpui"
 path = "src/main.rs"
 
+[build-dependencies]
+# Already built for GPUI's own manifest.
+embed-resource = "3"
+
 [dependencies]
 # Pinned: GPUI moves fast and gpui-kit pins its GPUI snapshot (gpui-pre =0.3.12) exactly.
 gpui-kit = "=0.10.0"

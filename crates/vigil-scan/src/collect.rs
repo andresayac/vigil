@@ -548,16 +548,18 @@ pub(crate) fn collect_autoruns() -> Vec<Value> {
     }
 
     let session = r"SYSTEM\CurrentControlSet\Control\Session Manager";
-    for line in list_values(winreg::value(Hive::Hklm, session, "BootExecute", View::V64)) {
-        let line = strip(&line.as_text()).to_string();
-        if !line.is_empty() {
-            entries.push(entry(vec![
-                ("source", json!("boot_execute")),
-                ("location", json!(format!("HKLM\\{session}"))),
-                ("name", json!("BootExecute")),
-                ("command", json!(line)),
-                ("enabled", json!(true)),
-            ]));
+    for name in crate::hooks::BOOT_VALUES {
+        for line in list_values(winreg::value(Hive::Hklm, session, name, View::V64)) {
+            let line = strip(&line.as_text()).to_string();
+            if !line.is_empty() {
+                entries.push(entry(vec![
+                    ("source", json!("boot_execute")),
+                    ("location", json!(format!("HKLM\\{session}"))),
+                    ("name", json!(name)),
+                    ("command", json!(line)),
+                    ("enabled", json!(true)),
+                ]));
+            }
         }
     }
     for (name, data) in winreg::values(Hive::Hklm, &format!("{session}\\AppCertDlls"), View::V64) {
@@ -620,6 +622,7 @@ pub(crate) fn collect_autoruns() -> Vec<Value> {
             ("enabled", json!(enabled)),
         ]));
     }
+    entries.extend(crate::hooks::collect_autoruns());
     entries
 }
 
@@ -1161,6 +1164,8 @@ pub(crate) fn collect_sysconfig() -> Value {
             "EnableSmartScreen",
         ),
     );
+    cfg.insert("hooks".into(), crate::hooks::collect_config());
+    cfg.insert("evasion".into(), crate::hooks::collect_evasion());
     Value::Object(cfg)
 }
 

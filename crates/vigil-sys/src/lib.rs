@@ -17,6 +17,7 @@ pub mod cpusets;
 pub mod defender;
 pub mod elevation;
 pub mod firewall;
+pub mod hooks;
 pub mod inspect;
 pub mod metrics;
 pub mod net;
@@ -28,5 +29,6 @@ pub mod services;
 pub mod signins;
 pub mod startup;
 pub mod tasks;
+pub mod watchlog;
 
 pub use error::SysError;

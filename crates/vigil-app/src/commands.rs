@@ -188,11 +188,8 @@ pub async fn scan_collect(app: AppHandle, days: u32, virustotal: bool) -> CmdRes
 
 /// The provider the settings ask for (the error says why there is none). Blocking: it may start
 /// a CLI to read its options or ask a local server for its models.
-fn pick_ai(app: &AppHandle, settings: &Stored) -> Result<vigil_scan::ai::Provider, String> {
-    let st = state(app);
-    let keys = |id: &str| secrets::lookup(&*st.secrets, id);
-    let probe = vigil_scan::ai::SystemProbe { keys: &keys };
-    vigil_scan::ai::pick_provider(&settings.ai.config(), &probe)
+pub(crate) fn pick_ai(app: &AppHandle, settings: &Stored) -> Result<vigil_scan::ai::Provider, String> {
+    state(app).pick_ai(settings)
 }
 
 fn file_name(path: &Path) -> String {
@@ -632,6 +629,20 @@ pub async fn run_action(app: AppHandle, window: WebviewWindow, request: Request)
     .await?
 }
 
+/// Asks on the main thread (the dialog's owner window lives there) and waits for the answer.
+/// Blocking: call it from a worker thread.
+pub(crate) fn ask_on_main(app: &AppHandle, hwnd: isize, prompt: Prompt) -> Answer {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let sent = app.run_on_main_thread(move || {
+        let parent = windows::Win32::Foundation::HWND(hwnd as *mut core::ffi::c_void);
+        let _ = tx.send(confirm::ask(parent, &prompt));
+    });
+    if sent.is_err() {
+        return Answer::Cancel;
+    }
+    rx.recv().unwrap_or(Answer::Cancel)
+}
+
 /// The Tauri side of the action path: the dialog on the main thread, progress as events.
 struct TauriUi<'a> {
     app: &'a AppHandle,
@@ -643,18 +654,8 @@ impl service::Ui for TauriUi<'_> {
         self.hwnd
     }
 
-    /// Asks on the main thread (the dialog's owner window lives there) and waits for the answer.
     fn ask(&self, prompt: Prompt) -> Answer {
-        let (tx, rx) = std::sync::mpsc::channel();
-        let hwnd = self.hwnd;
-        let sent = self.app.run_on_main_thread(move || {
-            let parent = windows::Win32::Foundation::HWND(hwnd as *mut core::ffi::c_void);
-            let _ = tx.send(confirm::ask(parent, &prompt));
-        });
-        if sent.is_err() {
-            return Answer::Cancel;
-        }
-        rx.recv().unwrap_or(Answer::Cancel)
+        ask_on_main(self.app, self.hwnd, prompt)
     }
 
     fn progress(&self, text: &str) {

@@ -6,12 +6,19 @@ const minutes = (n: number) => now - n * 60_000;
 
 let settings: WatchSettings = {
   watching: true, closeToTray: true, notifyStartup: true, notifyServices: true, notifyTasks: true, notifySecurity: true,
-  notifyPorts: true, trayNoticeShown: true,
+  notifyPorts: true, notifyHooks: true, notifyEvents: true, trayNoticeShown: true,
 };
 let pausedUntil: number | null = null;
 let autostart = false;
 
 let alerts: WatchAlert[] = [
+  { id: 9, time: minutes(1), kind: "hook", severity: "critical", target: "alerts", read: false,
+    title: "A program now starts instead of sethc.exe",
+    detail: "Windows runs C:\\Windows\\System32\\cmd.exe whenever sethc.exe is started (in HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options)." },
+  { id: 8, time: minutes(2), kind: "event", severity: "critical", target: "protection", read: false,
+    title: "Microsoft Defender found a threat: Trojan:Win32/Contoso.A", detail: "C:\\Users\\jdoe\\Downloads\\invoice.pdf.exe" },
+  { id: 7, time: minutes(2), kind: "driver", severity: "warning", target: "alerts", read: false,
+    title: "New driver outside the Windows driver folders: fabrikamfs", detail: "\\??\\D:\\Tools\\Fabrikam\\fabrikamfs.sys" },
   { id: 6, time: minutes(3), kind: "startup", severity: "warning", target: "startup", read: false,
     title: "New startup entry: OddHelper",
     detail: "C:\\Users\\jdoe\\AppData\\Roaming\\OddHelper\\helper.exe --hidden (in HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run)" },
@@ -31,7 +38,7 @@ let alerts: WatchAlert[] = [
 export function watchStatus(): WatchStatus {
   return {
     owner: true, watching: settings.watching, lastCheck: now - 25_000, unread: alerts.filter((a) => !a.read).length,
-    notifyPausedUntil: pausedUntil && pausedUntil > Date.now() ? pausedUntil : null, tasksWatched: false, settings: { ...settings },
+    notifyPausedUntil: pausedUntil && pausedUntil > Date.now() ? pausedUntil : null, tasksWatched: false, logsHidden: ["Security"], settings: { ...settings },
     autostart, recent: alerts.slice(0, 5), error: null,
   };
 }

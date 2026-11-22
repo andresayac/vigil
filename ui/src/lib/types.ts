@@ -756,11 +756,16 @@ export interface WatchSettings {
   notifyTasks: boolean;
   notifySecurity: boolean;
   notifyPorts: boolean;
+  /** Registry hooks, drivers and the hosts file. */
+  notifyHooks: boolean;
+  /** Events read from the Windows logs. */
+  notifyEvents: boolean;
   trayNoticeShown: boolean;
 }
 
 /** "watch": about the background watch itself (its saved state was damaged and reset). */
-export type AlertKind = "startup" | "service" | "task" | "security" | "port" | "watch";
+export type AlertKind =
+  | "startup" | "service" | "task" | "security" | "port" | "hook" | "driver" | "hosts" | "event" | "watch";
 
 /** One change the background watch noticed. Title and detail are plain text from Rust. */
 export interface WatchAlert {
@@ -771,7 +776,8 @@ export interface WatchAlert {
   title: string;
   detail: string;
   severity: "info" | "warning" | "critical";
-  /** The page that shows it: "startup", "services", "tasks", "network" or "alerts". */
+  /** The page that shows it: "startup", "services", "tasks", "network", "protection", "posture",
+   *  "firewall", "accounts" or "alerts". */
   target: string;
   read: boolean;
 }
@@ -785,6 +791,8 @@ export interface WatchStatus {
   notifyPausedUntil: number | null;
   /** Scheduled tasks are watched only when Vigil runs as administrator. */
   tasksWatched: boolean;
+  /** Windows logs the last check could not read (the Security log without administrator rights). */
+  logsHidden: string[];
   settings: WatchSettings;
   /** Vigil starts in the tray at sign-in. */
   autostart: boolean;
@@ -968,3 +976,19 @@ export interface AccountsView {
   signins: Signins | null; signinsError: string; warnings: AccountWarning[];
   disabledByVigil: VigilAccountChange[]; removedByVigil: VigilAccountChange[];
 }
+
+// ---------------------------------------------------------------- AI investigation
+
+/** One read-only tool call the AI agent made (shown afterwards, saved with the investigation). */
+export interface InvestigationCall {
+  step: number; name: string; input: unknown; ok: boolean; bytes: number; ms: number; note: string;
+}
+export interface InvestigationEvidence { text: string; page: string }
+/** The validated result of "Investigate with AI" (the model never acts; actions stay Vigil's own). */
+export interface InvestigationView {
+  findingId: string; verdict: string; confidence: "low" | "medium" | "high"; conclusion: string;
+  evidence: InvestigationEvidence[]; suggestedAction: string; openQuestions: string[]; guardNote: string;
+  calls: InvestigationCall[]; steps: number; limit: string; destination: string; local: boolean;
+  anonymized: boolean; saved: string;
+}
+export interface InvestigationProgress { phase: "tool" | "done"; text: string }

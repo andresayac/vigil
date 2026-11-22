@@ -1,0 +1,3 @@
+// Vigil's icon (the same file as the Tauri app's): the executable's icon and, as resource 1,
+// the icon GPUI gives its windows. No manifest here: GPUI embeds its own.
+1 ICON "../../vigil-app/icons/icon.ico"

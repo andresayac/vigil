@@ -14,7 +14,7 @@ use crate::privacy::clip;
 
 pub const DEFAULT_MODEL: &str = "claude-opus-5-5";
 pub const API_BASE: &str = "https://api.anthropic.com";
-const API_VERSION: &str = "2026-10-21";
+pub(super) const API_VERSION: &str = "2026-10-21";
 /// Models that accept the `fallbacks` parameter (automatic retry on another model when a
 /// safety classifier rejects the request).
 const FALLBACK_MODELS: &[&str] = &[

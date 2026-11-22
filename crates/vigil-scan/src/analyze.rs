@@ -443,6 +443,42 @@ fn split_list(value: &str) -> Vec<String> {
         .collect()
 }
 
+/// The label of a DLL hook and the program that loads it.
+fn hook_label(source: &str, name: &str, location: &str) -> (String, String) {
+    match source {
+        "print_monitor" => (
+            tr!("print monitor \"{0}\" ({1})", name, location),
+            tr!("the Print Spooler"),
+        ),
+        "print_processor" => (
+            tr!("print processor \"{0}\" ({1})", name, location),
+            tr!("the Print Spooler"),
+        ),
+        "time_provider" => (
+            tr!("time provider \"{0}\" ({1})", name, location),
+            tr!("the Windows Time service"),
+        ),
+        "netsh_helper" => (tr!("netsh helper \"{0}\" ({1})", name, location), "netsh".to_string()),
+        "network_provider" => (
+            tr!("network provider \"{0}\" ({1})", name, location),
+            tr!("the sign-in process"),
+        ),
+        "winsock_provider" => (
+            tr!("Winsock provider {0} ({1})", name, location),
+            tr!("every program that uses the network"),
+        ),
+        "known_dll" => (
+            tr!("KnownDLLs entry \"{0}\" ({1})", name, location),
+            tr!("every program"),
+        ),
+        "ifeo_verifier" => (
+            tr!("verifier DLL attached to \"{0}\" ({1})", name, location),
+            name.to_string(),
+        ),
+        _ => (tr!(".NET profiler \"{0}\" ({1})", name, location), tr!(".NET programs")),
+    }
+}
+
 /// Startup-entry references and configuration findings (modified BootExecute...).
 /// The command of Vigil's own sign-in entry (Settings > Start with Windows): this very program,
 /// started hidden in the tray. The same text as `vigil_sys::startup::own_command`.
@@ -476,11 +512,18 @@ fn autorun_refs(raw: &Value) -> (Vec<Ref>, Vec<Map<String, Value>>) {
         let location = text(entry.at("location"));
         let enabled = entry.get("enabled").is_none_or(truthy);
         let off = if enabled { String::new() } else { tr!(" (disabled)") };
-        let privileged = location.starts_with("HKLM")
-            && matches!(
+        let privileged = (location.starts_with("HKLM")
+            && (matches!(
                 source,
-                "winlogon" | "appinit_dlls" | "boot_execute" | "lsa_package" | "appcert_dlls"
-            );
+                "winlogon"
+                    | "appinit_dlls"
+                    | "boot_execute"
+                    | "lsa_package"
+                    | "appcert_dlls"
+                    | "service_failure"
+                    | "rdp_initial_program"
+            ) || crate::hooks::HOOK_SOURCES.contains(&source)))
+            || source == "class_hijack";
 
         let mut add = |cmd: &str,
                        label: String,
@@ -657,22 +700,47 @@ fn autorun_refs(raw: &Value) -> (Vec<Ref>, Vec<Map<String, Value>>) {
                     Some(parsed),
                 );
             }
-            "ifeo_debugger" => add(
-                &command,
-                tr!("debugger attached to \"{0}\" ({1})", name, location),
-                vec![Flag::new(
-                    "debugger_hook",
-                    50,
-                    tr!("runs instead of \"{0}\" every time that program is opened", name),
-                )],
-                None,
-                None,
-            ),
+            "ifeo_debugger" => {
+                // On an accessibility program it is the classic sign-in screen backdoor: it runs
+                // with SYSTEM rights before anyone signs in.
+                let backdoor = crate::hooks::ACCESSIBILITY
+                    .iter()
+                    .any(|(program, _)| lower(&name) == *program);
+                add(
+                    &command,
+                    tr!("debugger attached to \"{0}\" ({1})", name, location),
+                    vec![if backdoor {
+                        Flag::new(
+                            "debugger_hook",
+                            75,
+                            tr!(
+                                "runs instead of \"{0}\", which Windows starts from the sign-in screen with SYSTEM rights",
+                                name
+                            ),
+                        )
+                    } else {
+                        Flag::new(
+                            "debugger_hook",
+                            50,
+                            tr!("runs instead of \"{0}\" every time that program is opened", name),
+                        )
+                    }],
+                    None,
+                    None,
+                );
+            }
             "boot_execute" => {
-                if !lower(&command).starts_with("autocheck autochk") {
+                // BootExecute holds "autocheck autochk *" on every Windows; SetupExecute and
+                // Execute are empty.
+                if !(name == "BootExecute" && lower(&command).starts_with("autocheck autochk")) {
+                    let title = if name == "BootExecute" {
+                        tr!("BootExecute modified")
+                    } else {
+                        tr!("Session Manager value \"{0}\" set", name)
+                    };
                     config.push(map(vec![
                         ("topic", json!("boot_execute")),
-                        ("title", json!(tr!("BootExecute modified"))),
+                        ("title", json!(title)),
                         ("score", json!(50)),
                         ("detail", json!({"value": command, "key": location})),
                         ("text", json!(tr!("a native program runs before Windows starts"))),
@@ -713,6 +781,144 @@ fn autorun_refs(raw: &Value) -> (Vec<Ref>, Vec<Map<String, Value>>) {
                     "legacy_autostart",
                     40,
                     tr!("old and unusual startup mechanism, used for persistence"),
+                )],
+                None,
+                None,
+            ),
+            "class_hijack" => {
+                if command.is_empty() {
+                    // Only DelegateExecute: a COM object takes over the handler.
+                    config.push(map(vec![
+                        ("topic", json!("uac_bypass")),
+                        ("title", json!(tr!("Per-user handler for \"{0}\"", name))),
+                        ("score", json!(60)),
+                        (
+                            "detail",
+                            json!({"key": location, "delegate_execute": text(entry.at("delegate"))}),
+                        ),
+                        (
+                            "text",
+                            json!(tr!(
+                                "Windows programs that elevate without asking open this handler: a known way to bypass UAC"
+                            )),
+                        ),
+                    ]));
+                } else {
+                    // File managers can register Folder for the user; the other classes are never
+                    // set per user by normal software.
+                    let weight = if name.eq_ignore_ascii_case("Folder") { 40 } else { 70 };
+                    add(
+                        &command,
+                        tr!("per-user handler for \"{0}\" ({1})", name, location),
+                        vec![Flag::new(
+                            "uac_bypass",
+                            weight,
+                            tr!(
+                                "Windows programs that elevate without asking run it with administrator rights: a known way to bypass UAC"
+                            ),
+                        )],
+                        None,
+                        None,
+                    );
+                }
+            }
+            "print_monitor" | "print_processor" | "time_provider" | "netsh_helper" | "network_provider"
+            | "winsock_provider" | "known_dll" | "ifeo_verifier" | "clr_profiler" => {
+                let file = text(entry.at("file"));
+                if file.is_empty() {
+                    continue;
+                }
+                let (label, _) = hook_label(source, &name, &location);
+                // Where the DLL lives and whether it is signed are judged with the file
+                // (`evaluate_file`): Windows keeps these in System32, vendors in Program Files.
+                let mut flags = Vec::new();
+                match source {
+                    "ifeo_verifier" => flags.push(Flag::new(
+                        "verifier_dll",
+                        60,
+                        tr!(
+                            "DLL loaded into \"{0}\" every time it starts (Application Verifier hook)",
+                            name
+                        ),
+                    )),
+                    "clr_profiler" => flags.push(Flag::new(
+                        "clr_profiler",
+                        // Disabled (COR_ENABLE_PROFILING is not 1): only a leftover.
+                        if enabled { 35 } else { 10 },
+                        tr!("DLL loaded into .NET programs as a profiler"),
+                    )),
+                    _ => {}
+                }
+                let parsed = ParsedCommand {
+                    program: Some(file.clone()),
+                    certain: true,
+                    ..ParsedCommand::new(&command)
+                };
+                add(&command, label, flags, None, Some(parsed));
+            }
+            "screensaver" => {
+                let file = text(entry.at("file"));
+                let flags = if lower(ext(&file)) == ".scr" {
+                    vec![]
+                } else {
+                    vec![Flag::new(
+                        "screensaver_not_scr",
+                        40,
+                        tr!(
+                            "the screensaver is not a .scr file: Windows starts this program whenever the computer is idle"
+                        ),
+                    )]
+                };
+                add(&command, tr!("screensaver ({0})", location), flags, None, None);
+            }
+            "runonceex" => {
+                // "C:\x.dll|Function|args" loads a DLL; anything else is a command.
+                let parsed = command.split_once('|').map(|(dll, _)| ParsedCommand {
+                    program: Some(normalize_path(dll)),
+                    certain: true,
+                    ..ParsedCommand::new(&command)
+                });
+                add(
+                    &command,
+                    tr!("RunOnceEx \"{0}\" ({1})", name, location),
+                    // Some installers use it for a step after a restart; it deletes itself once run.
+                    vec![Flag::new(
+                        "runonceex",
+                        25,
+                        tr!("runs once at the next sign-in through RunOnceEx, an old mechanism abused to load DLLs"),
+                    )],
+                    None,
+                    parsed,
+                );
+            }
+            // Several Windows services set one: the program is judged like any other file.
+            "service_failure" => add(
+                &command,
+                tr!("recovery program of the service \"{0}\"", name),
+                vec![],
+                None,
+                None,
+            ),
+            "aedebug" => {
+                let auto = truthy(entry.at("auto"));
+                let flags = if auto {
+                    vec![Flag::new(
+                        "aedebug_auto",
+                        20,
+                        tr!("starts on its own every time a program crashes"),
+                    )]
+                } else {
+                    vec![]
+                };
+                add(&command, tr!("crash debugger ({0})", location), flags, None, None);
+            }
+            "rdp_initial_program" => add(
+                &command,
+                tr!("Remote Desktop start program ({0})", location),
+                vec![Flag::new(
+                    "rdp_initial_program",
+                    50,
+                    tr!("runs instead of the desktop whenever someone signs in with Remote Desktop"),
                 )],
                 None,
                 None,
@@ -1293,6 +1499,44 @@ fn evaluate_file(entity: &Entity, files: &Files, ctx: &Ctx) -> Item {
                 10,
                 tr!("starts automatically, is unsigned and lives in a user folder"),
             ));
+        }
+    }
+    // A DLL registered in a Windows hook (spooler, LSA, Winsock, profilers...) runs inside a
+    // Windows process: there an unsigned file matters wherever it lives, and a folder standard
+    // users can change matters even when it is signed (the file can be swapped).
+    let hook = entity.refs.iter().find_map(|r| {
+        let source = r.role.detail.get("source").and_then(Value::as_str)?;
+        crate::hooks::HOOK_SOURCES.contains(&source).then_some((source, r))
+    });
+    if let Some((source, r)) = hook
+        && file_exists(info)
+    {
+        if !valid && !package_signed {
+            item.add_flag(Flag::new(
+                "unsigned_hook_dll",
+                40,
+                tr!("DLL without a valid signature loaded into a Windows process"),
+            ));
+        }
+        if is_user_writable(&path) && !matches!(source, "ifeo_verifier" | "clr_profiler") {
+            let flag = if source == "network_provider" {
+                Flag::new(
+                    "hook_user_folder",
+                    60,
+                    tr!(
+                        "receives your password in clear text every time you sign in, from a folder standard users can change"
+                    ),
+                )
+            } else {
+                let name = text(r.role.detail.at("value"));
+                let (_, host) = hook_label(source, &name, "");
+                Flag::new(
+                    "hook_user_folder",
+                    45,
+                    tr!("DLL loaded by {0} from a folder standard users can change", host),
+                )
+            };
+            item.add_flag(flag);
         }
     }
     if !valid && truthy(item.network.at("exposed")) {
