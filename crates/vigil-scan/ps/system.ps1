@@ -1,9 +1,6 @@
 # System security state: Defender, antivirus, firewall, users, shared folders,
 # WMI subscriptions, startup shortcuts and packaged apps (read-only).
-param(
-    [Parameter(Mandatory = $true)][string]$OutPath,
-    [string]$LnkListPath = ''
-)
+# The shortcuts of the Startup folders arrive in $global:VigilInput, one per line.
 . "$PSScriptRoot\_common.ps1"
 
 $r = @{}
@@ -183,10 +180,10 @@ try {
 
 # --- Targets of the shortcuts in the Startup folders ---
 $shortcuts = New-Object System.Collections.ArrayList
-if ($LnkListPath -and (Test-Path -LiteralPath $LnkListPath)) {
+if (@($global:VigilInput).Count -gt 0) {
     try {
         $shell = New-Object -ComObject WScript.Shell
-        foreach ($p in [System.IO.File]::ReadAllLines($LnkListPath, [System.Text.Encoding]::UTF8)) {
+        foreach ($p in @($global:VigilInput)) {
             if ([string]::IsNullOrWhiteSpace($p)) { continue }
             try {
                 # CreateShortcut on an existing .lnk only loads it; Save() is never called.
@@ -218,4 +215,4 @@ try {
 } catch { Add-Note 'appx' $_.Exception.Message }
 
 $r.notes = @($script:Notes)
-Write-JsonFile $OutPath $r
+Write-Result $r

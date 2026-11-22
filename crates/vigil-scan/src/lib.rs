@@ -18,6 +18,7 @@ pub mod browsers;
 pub mod cmdline;
 pub mod diff;
 pub mod export;
+pub mod limits;
 pub mod model;
 pub mod pipeline;
 pub mod privacy;
@@ -91,14 +92,11 @@ pub fn collect_and_analyze_cached(
     progress: &dyn Fn(&str),
     cancel: &AtomicBool,
 ) -> Result<(Value, model::Analysis), ScanError> {
-    let workdir = collect::WorkDir::create()
-        .map_err(|e| ScanError::Collector(format!("could not create a temporary folder: {e}")))?;
-    let mut raw = collect::collect_all(workdir.path(), days, progress, cancel);
+    let mut raw = collect::collect_all(days, progress, cancel);
     if cancel.load(Ordering::Relaxed) {
         return Err(ScanError::Cancelled);
     }
     let live = engine::Live {
-        workdir: Some(workdir.path()),
         vt_key,
         vt_limit: 25,
         progress,
@@ -120,7 +118,6 @@ pub fn run_analysis(raw: &Value, live: bool) -> model::Analysis {
         let cancel = AtomicBool::new(false);
         let quiet = |_: &str| {};
         let options = engine::Live {
-            workdir: None,
             vt_key: None,
             vt_limit: 25,
             progress: &quiet,

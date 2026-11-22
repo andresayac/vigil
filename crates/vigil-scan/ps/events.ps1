@@ -2,9 +2,11 @@
 # Looks for traces of persistence, antivirus detections, suspicious PowerShell,
 # remote access and account changes over the last $Days days.
 param(
-    [Parameter(Mandatory = $true)][string]$OutPath,
     [int]$Days = 30,
-    [string]$SelfDir = ''
+    # The collectors' own PowerShell activity is left out: SelfDir is where earlier versions ran
+    # them from (a folder), SelfMark is the mark this version's command line and scripts carry.
+    [string]$SelfDir = '',
+    [string]$SelfMark = ''
 )
 . "$PSScriptRoot\_common.ps1"
 
@@ -127,6 +129,7 @@ foreach ($e in @(Get-EventList -Filter @{ LogName = 'Windows PowerShell'; Id = 4
     $cmd = $m.Groups[1].Value.Trim()
     if (-not $cmd) { continue }
     if ($SelfDir -and ($cmd.IndexOf($SelfDir, [StringComparison]::OrdinalIgnoreCase) -ge 0)) { continue }
+    if ($SelfMark -and ($cmd.IndexOf($SelfMark, [StringComparison]::Ordinal) -ge 0)) { continue }
     $cmd = Limit-Text $cmd 8000
     if ($cmds.ContainsKey($cmd)) {
         $cmds[$cmd]['n'] = $cmds[$cmd]['n'] + 1
@@ -145,6 +148,7 @@ $r.ps_scriptblocks = @(Get-EventList -Filter @{ LogName = 'Microsoft-Windows-Pow
     $path = [string]$f['Path']
     if ($SelfDir -and $path -and $path.StartsWith($SelfDir, [StringComparison]::OrdinalIgnoreCase)) { return }
     $text = [string]$f['ScriptBlockText']
+    if ($SelfMark -and ($text.IndexOf($SelfMark, [StringComparison]::Ordinal) -ge 0)) { return }
     $key = $path + '|' + (Limit-Text $text 200)
     if ($seen.ContainsKey($key)) { return }
     $seen[$key] = 1
@@ -258,4 +262,4 @@ if (Test-IsAdmin) {
 }
 
 $r.notes = @($script:Notes)
-Write-JsonFile $OutPath $r
+Write-Result $r

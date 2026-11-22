@@ -9,6 +9,13 @@ fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
     }
+    // The DLLs vigil.exe imports are looked up in System32 only (LOAD_LIBRARY_SEARCH_SYSTEM32),
+    // never next to the executable: a portable copy in a folder anyone can write to must not load
+    // a planted version.dll or similar when it runs as administrator. The C runtime is linked
+    // statically (.cargo/config.toml), so no runtime DLL is needed beside it.
+    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+        println!("cargo:rustc-link-arg-bins=/DEPENDENTLOADFLAG:0x800");
+    }
     let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap_or_default());
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap_or_default());
     let version = std::env::var("CARGO_PKG_VERSION").unwrap_or_default();

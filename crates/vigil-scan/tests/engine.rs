@@ -719,6 +719,13 @@ fn reports_with_unknown_verdicts_and_other_files_are_refused() {
         pipeline::load_report(&other).expect_err("refused").to_string(),
         "not a Vigil report"
     );
+    // Over 64 MB: refused before anything is read (only its length is set, no data is written).
+    let huge = tmp.0.join("huge-report.json");
+    std::fs::File::create(&huge)
+        .and_then(|f| f.set_len(vigil_scan::limits::MAX_REPORT_BYTES + 1))
+        .expect("huge");
+    let error = pipeline::load_report(&huge).expect_err("refused").to_string();
+    assert!(error.contains("larger than 64 MB"), "{error}");
 }
 
 // --------------------------------------------------------------------------- AI

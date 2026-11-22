@@ -333,7 +333,8 @@ pub(crate) fn plan_for(op: &str, program: Option<&Program>) -> Result<Plan, Stri
                     "Starts the program's own uninstaller, as Settings does; follow its window to finish. Vigil cannot undo an uninstall: to get the program back, install it again."
                 ),
             )
-            .params(json!({ "registry_key": program.id, "name": program.name }))
+            // The command shown is pinned: the uninstall refuses to start a different one.
+            .params(json!({ "registry_key": program.id, "name": program.name, "command": program.uninstall.trim() }))
             .group("remove")
             .destructive()
             .irreversible()

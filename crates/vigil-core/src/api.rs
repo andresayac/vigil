@@ -497,8 +497,8 @@ pub fn open_auto_report(st: &AppState, watcher: &crate::watch::Watcher) -> Resul
     let path = PathBuf::from(report);
     let own = st.scans_dir();
     let mut folders = vec![own.clone()];
-    if let Some(local) = std::env::var_os("LOCALAPPDATA").filter(|v| !v.is_empty()) {
-        folders.push(PathBuf::from(local).join("Vigil").join("scans"));
+    if let Some(local) = vigil_sys::paths::local_app_data() {
+        folders.push(local.join("Vigil").join("scans"));
     }
     crate::autoscan::check_report_path(&path, &folders)?;
     // An elevated copy reads a report the standard-user tray copy wrote in a folder any program of

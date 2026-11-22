@@ -1,5 +1,4 @@
 # Registered services and drivers (read-only).
-param([Parameter(Mandatory = $true)][string]$OutPath)
 . "$PSScriptRoot\_common.ps1"
 
 $services = @()
@@ -40,4 +39,4 @@ try {
     })
 } catch { Add-Note 'drivers' $_.Exception.Message }
 
-Write-JsonFile $OutPath @{ services = $services; drivers = $drivers; notes = @($script:Notes) }
+Write-Result @{ services = $services; drivers = $drivers; notes = @($script:Notes) }

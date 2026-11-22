@@ -93,6 +93,24 @@ pub struct View {
     pub secrets: HashMap<String, bool>,
 }
 
+/// A state file (`settings.json`, `ignored.json`), at most 8 MB; `None` when it cannot be read.
+fn read_state(path: &Path) -> Option<Vec<u8>> {
+    vigil_scan::limits::read_capped(path, vigil_scan::limits::MAX_STATE_BYTES).ok()
+}
+
+/// What the window says about a state file too large to read: it is left as it is and the
+/// defaults are used.
+pub fn oversized_state(path: &Path) -> Option<String> {
+    let len = std::fs::metadata(path).ok()?.len();
+    (len > vigil_scan::limits::MAX_STATE_BYTES).then(|| {
+        tr!(
+            "{0} is larger than {1} MB, more than Vigil ever writes there, so it was not read and the defaults are used.",
+            path.display(),
+            vigil_scan::limits::MAX_STATE_BYTES / (1024 * 1024)
+        )
+    })
+}
+
 fn pick(value: &str, allowed: &[&str], fallback: &str) -> String {
     if allowed.contains(&value) {
         value.to_string()
@@ -103,9 +121,8 @@ fn pick(value: &str, allowed: &[&str], fallback: &str) -> String {
 
 impl Stored {
     pub fn load(path: &Path) -> Self {
-        std::fs::read_to_string(path)
-            .ok()
-            .and_then(|text| serde_json::from_str::<Stored>(&text).ok())
+        read_state(path)
+            .and_then(|bytes| serde_json::from_slice::<Stored>(&bytes).ok())
             .map(Stored::sanitized)
             .unwrap_or_default()
     }
@@ -190,9 +207,8 @@ pub fn item_key(kind: &str, path: Option<&str>, title: &str) -> String {
 
 impl Ignored {
     pub fn load(path: PathBuf) -> Self {
-        let entries = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        let entries = read_state(&path)
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
             .and_then(|v| v.as_object().cloned())
             .unwrap_or_default();
         Self { path, entries }
@@ -251,6 +267,30 @@ mod tests {
         // Provider ids that are not offered any more fall back to "auto".
         std::fs::write(&path, r#"{"ai": {"provider": "ollama"}}"#).ok();
         assert_eq!(Stored::load(&path).ai.provider, "auto");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn state_files_over_8_mb_are_not_read() {
+        let dir = temp_dir("oversized");
+        let settings = dir.join("settings.json");
+        let ignored = dir.join("ignored.json");
+        // Valid JSON, padded past the cap.
+        let mut big = br#"{"theme": "dark", "k|x": {"title": "x"}}"#.to_vec();
+        big.resize(vigil_scan::limits::MAX_STATE_BYTES as usize + 1, b' ');
+        std::fs::write(&settings, &big).ok();
+        std::fs::write(&ignored, &big).ok();
+        assert_eq!(Stored::load(&settings).theme, "system");
+        assert!(!Ignored::load(ignored.clone()).contains("k|x"));
+        let note = oversized_state(&settings).unwrap_or_default();
+        assert!(note.contains("larger than 8 MB"), "{note}");
+        // At the cap it is read.
+        big.truncate(vigil_scan::limits::MAX_STATE_BYTES as usize);
+        std::fs::write(&settings, &big).ok();
+        std::fs::write(&ignored, &big).ok();
+        assert_eq!(Stored::load(&settings).theme, "dark");
+        assert!(Ignored::load(ignored).contains("k|x"));
+        assert_eq!(oversized_state(&settings), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

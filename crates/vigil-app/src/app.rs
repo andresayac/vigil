@@ -136,7 +136,7 @@ impl Ctx {
     /// Every alert kept, newest first.
     pub fn watch_alerts(&self) -> Value {
         match &self.watcher {
-            Some(w) => serde_json::to_value(w.store.load().alerts).unwrap_or(json!([])),
+            Some(w) => serde_json::to_value(w.alerts()).unwrap_or(json!([])),
             None if self.demo() => data::demo("watchAlerts"),
             None => json!([]),
         }
@@ -162,18 +162,7 @@ impl Ctx {
 
     /// Marks alerts read (`None`: all).
     pub fn mark_read(&self, ids: Option<Vec<u64>>, cx: &mut App) {
-        let _ = self.watch_change(
-            |w| {
-                w.store.update(|file| {
-                    for alert in &mut file.alerts {
-                        if ids.as_ref().is_none_or(|ids| ids.contains(&alert.id)) {
-                            alert.read = true;
-                        }
-                    }
-                })
-            },
-            cx,
-        );
+        let _ = self.watch_change(|w| w.mark_read(ids.as_deref()), cx);
     }
 
     pub fn set_watching(&self, on: bool, cx: &mut App) {

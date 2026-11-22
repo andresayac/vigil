@@ -19,6 +19,7 @@ use crate::collect::{ChildError, Finished, run_child};
 use crate::lenient::{Get, as_number, int_of, last, strip, text, truthy};
 use crate::ntpath::isabs;
 use crate::privacy::clip;
+use vigil_i18n::tr;
 
 /// How long one answer may take.
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(1500);
@@ -164,7 +165,53 @@ impl Drop for TempDir {
     }
 }
 
+// --------------------------------------------------------------------------- administrator rights
+
+thread_local! {
+    /// Stands in for "Vigil runs as administrator" in the tests (`None`: ask Windows).
+    static ELEVATED: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// Whether Vigil runs with administrator rights.
+pub fn running_elevated() -> bool {
+    ELEVATED.with(|e| e.get()).unwrap_or_else(|| {
+        #[cfg(windows)]
+        {
+            vigil_sys::elevation::is_elevated()
+        }
+        #[cfg(not(windows))]
+        {
+            false
+        }
+    })
+}
+
+/// Pretends Vigil runs (or does not run) as administrator, on this thread only (tests).
+#[cfg(test)]
+pub(crate) fn set_elevated(value: Option<bool>) {
+    ELEVATED.with(|e| e.set(value));
+}
+
+/// Why a local agent is not started now. The agents are programs and scripts in the user's own
+/// folders, with settings any program the user runs can change: started by an elevated Vigil, they
+/// would run that program's code with administrator rights.
+pub fn elevated_refusal(name: &str) -> String {
+    tr!(
+        "{0} is not started while Vigil runs as administrator: it would get administrator rights, and its program and settings can be changed by any program you run. Use an OpenAI- or Anthropic-compatible API, or start Vigil without administrator rights.",
+        name
+    )
+}
+
+/// Refuses to start a local agent while Vigil runs as administrator.
+fn not_elevated(name: &str) -> Result<(), AiError> {
+    if running_elevated() {
+        return Err(failed(elevated_refusal(name)));
+    }
+    Ok(())
+}
+
 fn run(name: &str, command: Command, stdin: Option<&str>, timeout: Duration) -> Result<Finished, AiError> {
+    not_elevated(name)?;
     match run_child(command, stdin, timeout, &AtomicBool::new(false)) {
         Ok(finished) => Ok(finished),
         Err(ChildError::Timeout | ChildError::Cancelled) => Err(failed(format!("{name} did not respond in time"))),
@@ -185,6 +232,9 @@ fn unexpected(name: &str, finished: &Finished) -> AiError {
 
 /// The help text of a command (stdout and stderr), for detecting supported options.
 fn help_text(launcher: &Launcher, args: &[&str], name: &str) -> Result<String, String> {
+    if running_elevated() {
+        return Err(elevated_refusal(name));
+    }
     let mut command = launcher.command();
     command.args(args);
     clean_env(&mut command);
@@ -637,6 +687,7 @@ fn write_in(dir: &Path, name: &str, text: &str) -> Result<PathBuf, AiError> {
 }
 
 fn run_cancellable(name: &str, command: Command, stdin: &str, cancel: &AtomicBool) -> Result<Finished, AiError> {
+    not_elevated(name)?;
     match run_child(command, Some(stdin), ANSWER_TIMEOUT, cancel) {
         Ok(finished) => Ok(finished),
         Err(ChildError::Cancelled) => Err(failed("the investigation was cancelled")),

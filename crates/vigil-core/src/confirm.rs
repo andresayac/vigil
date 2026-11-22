@@ -155,6 +155,33 @@ fn ask_message_box(parent: HWND, prompt: &Prompt) -> Answer {
     }
 }
 
+/// The warning shown when Vigil itself sits in a folder programs without administrator rights can
+/// change (`folder`, from `vigil_sys::location`). True when the user chooses to go on as
+/// administrator anyway; Cancel (the default) keeps read-only mode, or closes Vigil when it was
+/// already started elevated.
+pub fn unsafe_location(folder: &str, elevated: bool) -> bool {
+    let body = if elevated {
+        vigil_i18n::tr!(
+            "{0}\n\nAny program you run can put a DLL next to vigil.exe or replace it, and as administrator it would run with full rights. Install Vigil, or move it to a folder only administrators can change.\n\nCancel closes Vigil.",
+            folder
+        )
+    } else {
+        vigil_i18n::tr!(
+            "{0}\n\nAny program you run can put a DLL next to vigil.exe or replace it, and as administrator it would run with full rights. Install Vigil, or move it to a folder only administrators can change.\n\nCancel keeps Vigil in read-only mode.",
+            folder
+        )
+    };
+    let prompt = Prompt {
+        title: vigil_i18n::tr!("Running Vigil as administrator from this folder is unsafe"),
+        body,
+        warning: String::new(),
+        confirm: vigil_i18n::tr!("Continue as administrator"),
+        destructive: true,
+        restore_point: None,
+    };
+    matches!(ask(HWND(std::ptr::null_mut()), &prompt), Answer::Confirm { .. })
+}
+
 /// A plain information or error message (results that need attention).
 pub fn tell(parent: HWND, title: &str, text: &str) {
     let text = wide(&crate::display::shown(&format!("{title}\n\n{text}")));

@@ -65,6 +65,15 @@ fn arg(args: &[String], name: &str) -> Option<String> {
 }
 
 fn main() {
+    // DLLs loaded from now on come from System32 only, never from vigil.exe's folder or the
+    // current directory (the static imports are already limited the same way by the
+    // /DEPENDENTLOADFLAG link flag in build.rs).
+    // SAFETY: plain call with a documented flag; it only changes this process's DLL search.
+    unsafe {
+        let _ = windows::Win32::System::LibraryLoader::SetDefaultDllDirectories(
+            windows::Win32::System::LibraryLoader::LOAD_LIBRARY_SEARCH_SYSTEM32,
+        );
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     let has = |flag: &str| args.iter().any(|a| a == flag);
 
@@ -95,13 +104,30 @@ fn main() {
     } else {
         !has("--no-elevate") && !has("--tray")
     };
-    if ask
-        && !demo
-        && !has("--elevated")
-        && !vigil_sys::elevation::is_elevated()
-        && let Ok(true) = vigil_sys::elevation::relaunch_elevated(&["--elevated"])
+    // A copy in a folder programs without administrator rights can change (a portable vigil.exe in
+    // Downloads) would load any DLL put next to it: the user is warned before rights are asked for,
+    // and again when it was started elevated directly. `--location-accepted` carries the answer to
+    // the elevated copy, so the question is asked once.
+    let accepted = has("--location-accepted");
+    if ask && !demo && !has("--elevated") && !vigil_sys::elevation::is_elevated() {
+        let go = match vigil_sys::location::unsafe_own_folder() {
+            Some(folder) if !accepted => vigil_core::confirm::unsafe_location(&folder, false)
+                .then_some(&["--elevated", "--location-accepted"][..]),
+            _ => Some(&["--elevated"][..]),
+        };
+        if let Some(arguments) = go
+            && let Ok(true) = vigil_sys::elevation::relaunch_elevated(arguments)
+        {
+            return; // the elevated copy takes over
+        }
+    }
+    if !demo
+        && !accepted
+        && vigil_sys::elevation::is_elevated()
+        && let Some(folder) = vigil_sys::location::unsafe_own_folder()
+        && !vigil_core::confirm::unsafe_location(&folder, true)
     {
-        return; // the elevated copy takes over
+        return;
     }
 
     let page = arg(&args, "--page")
@@ -165,6 +191,9 @@ fn main() {
         let owner = watch::claim_watch();
         let store = Store::in_profile().unwrap_or_else(|| Store::new(core.root.join("watch")));
         let watcher = Arc::new(Watcher::new(store, core.admin, owner));
+        // An elevated copy keeps its own baseline and the alerts that quote what only
+        // administrators can read in its data folder, out of the user's profile.
+        watcher.set_private_store(core.root.join("watch"));
         // A state saved before a language was ever chosen takes this copy's language.
         watcher.adopt_language(vigil_i18n::language());
         // Automatic scans save their reports with this copy's other scans.

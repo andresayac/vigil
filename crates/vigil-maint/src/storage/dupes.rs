@@ -150,21 +150,15 @@ fn lower(path: &Path) -> String {
     path.to_string_lossy().trim_end_matches('\\').to_lowercase()
 }
 
-/// Windows' folder, the program folders and ProgramData (from the environment; the usual
-/// locations when it is missing).
+/// Windows' folder, the program folders and ProgramData, from Windows itself: the environment
+/// variables could be changed by the user to make a system folder look like any other.
 pub fn system_folders() -> Vec<PathBuf> {
-    let var = |name: &str, fallback: &str| -> PathBuf {
-        std::env::var_os(name)
-            .map(PathBuf::from)
-            .filter(|p| p.is_absolute())
-            .unwrap_or_else(|| PathBuf::from(fallback))
-    };
+    use vigil_sys::paths;
     let mut out = vec![
-        var("SystemRoot", r"C:\Windows"),
-        var("ProgramFiles", r"C:\Program Files"),
-        var("ProgramFiles(x86)", r"C:\Program Files (x86)"),
-        var("ProgramW6432", r"C:\Program Files"),
-        var("ProgramData", r"C:\ProgramData"),
+        paths::windows_dir(),
+        paths::program_files(),
+        paths::program_files_x86(),
+        paths::program_data(),
     ];
     out.sort();
     out.dedup();
@@ -237,14 +231,9 @@ pub fn resolved_path(path: &Path) -> Option<PathBuf> {
 /// real paths in lower case; empty strings when they cannot be told.
 fn profile_folders() -> (String, String) {
     let real = |path: PathBuf| resolved_path(&path).map(|p| lower(&p)).unwrap_or_else(|| lower(&path));
-    let own = std::env::var_os("USERPROFILE")
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute());
-    let all = std::env::var_os("PUBLIC")
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute())
-        .and_then(|p| p.parent().map(Path::to_path_buf))
-        .or_else(|| own.as_ref().and_then(|p| p.parent().map(Path::to_path_buf)));
+    // From Windows, not the environment (which the user controls).
+    let own = vigil_sys::paths::profile();
+    let all = own.as_ref().and_then(|p| p.parent().map(Path::to_path_buf));
     (all.map(real).unwrap_or_default(), own.map(real).unwrap_or_default())
 }
 

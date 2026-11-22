@@ -230,14 +230,19 @@ impl Shell {
                 })
             },
         ];
+        // The demo shows the administrator view (its actions still never run). An elevated copy
+        // whose data folder could not be made private is read-only: the standard view.
+        let elevated = demo
+            || core
+                .as_ref()
+                .map_or_else(vigil_sys::elevation::is_elevated, |c| c.admin);
         let mut shell = Self {
             page,
             compact: false,
             live,
             core,
             demo,
-            // The demo shows the administrator view (its actions still never run).
-            elevated: demo || vigil_sys::elevation::is_elevated(),
+            elevated,
             choice,
             mica,
             watcher,

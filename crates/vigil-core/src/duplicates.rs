@@ -29,15 +29,20 @@ const MIB: u64 = 1 << 20;
 
 /// Where a search starts when the page has not chosen a folder: the user's profile.
 pub fn default_folder() -> String {
-    std::env::var("USERPROFILE").unwrap_or_default()
+    vigil_sys::paths::profile()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// This user's own Vigil folder (`AppData\Local\Vigil`), from Windows, not the environment.
+fn local_vigil() -> Option<PathBuf> {
+    vigil_sys::paths::local_app_data().map(|local| local.join("Vigil"))
 }
 
 /// Folders a search never enters: Vigil's own data folders.
 fn own_folders(st: &AppState) -> Vec<PathBuf> {
     let mut out = vec![st.root.clone()];
-    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-        out.push(PathBuf::from(local).join("Vigil"));
-    }
+    out.extend(local_vigil());
     out
 }
 
@@ -179,9 +184,7 @@ fn inside(path: &str, folder: &Path) -> bool {
 /// Vigil's data folders, as written and as their real paths.
 fn vigil_folders(store: &Store) -> Vec<PathBuf> {
     let mut out = vec![store.root().to_path_buf()];
-    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-        out.push(PathBuf::from(local).join("Vigil"));
-    }
+    out.extend(local_vigil());
     let real: Vec<PathBuf> = out.iter().filter_map(|f| storage::resolved_path(f)).collect();
     out.extend(real);
     out
@@ -223,7 +226,7 @@ fn checked(path: &str, store: &Store) -> Result<String, ActionError> {
     if !file.is_absolute() || path.starts_with(r"\\") || file.parent().is_none() || path.len() <= 3 {
         return Err(ActionError::new(tr!("not a full local path: {0}", path)));
     }
-    let local_vigil = std::env::var_os("LOCALAPPDATA").map(|l| PathBuf::from(l).join("Vigil"));
+    let local_vigil = local_vigil();
     if storage::in_system_folder(file)
         || inside(&path, store.root())
         || local_vigil.is_some_and(|folder| inside(&path, &folder))

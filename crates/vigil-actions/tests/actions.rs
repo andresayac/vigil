@@ -69,6 +69,76 @@ fn quarantine_and_restore_round_trip() {
     assert!(vigil_actions::restore_quarantined(&qid, &fx.store).is_err());
 }
 
+fn quarantined_id(outcome: &vigil_actions::Outcome) -> String {
+    outcome
+        .undo
+        .as_ref()
+        .and_then(|u| u["quarantine_id"].as_str())
+        .expect("id")
+        .to_string()
+}
+
+#[test]
+fn restore_never_writes_through_a_link_and_recreates_missing_folders() {
+    let fx = Fixture::new();
+    let place = fx.tmp.path().join("place").join("deep");
+    fs::create_dir_all(&place).expect("folder");
+    let path = place.join("evil.exe");
+    fs::write(&path, b"MZ payload").expect("file");
+    let path = path.to_string_lossy().into_owned();
+    let qid = quarantined_id(&vigil_actions::quarantine_file(&path, &fx.store, "", false, false).expect("quarantine"));
+
+    // The original folder swapped for a junction to somewhere else: nothing is written there.
+    fs::remove_dir_all(fx.tmp.path().join("place")).expect("clear");
+    let elsewhere = fx.tmp.path().join("elsewhere");
+    fs::create_dir_all(elsewhere.join("deep")).expect("elsewhere");
+    common::junction(&fx.tmp.path().join("place"), &elsewhere);
+    let refused = vigil_actions::restore_quarantined(&qid, &fx.store).expect_err("through a link");
+    assert!(refused.message().contains("link"), "{refused}");
+    assert!(
+        !elsewhere.join("deep").join("evil.exe").exists(),
+        "nothing written through the junction"
+    );
+    assert!(
+        fx.store.quarantined().iter().any(|e| e.original_path == path),
+        "still in quarantine"
+    );
+
+    // The junction gone and the folders missing: they are created again and the file comes back.
+    fs::remove_dir(fx.tmp.path().join("place")).expect("remove the junction");
+    vigil_actions::restore_quarantined(&qid, &fx.store).expect("restore");
+    assert_eq!(fs::read(&path).expect("restored"), b"MZ payload");
+    assert!(
+        fs::read_dir(elsewhere.join("deep"))
+            .expect("elsewhere")
+            .next()
+            .is_none()
+    );
+}
+
+#[test]
+fn restore_refuses_places_a_quarantined_file_never_came_from() {
+    let fx = Fixture::new();
+    let path = victim(&fx, "evil.exe", b"payload");
+    let qid = quarantined_id(&vigil_actions::quarantine_file(&path, &fx.store, "", false, false).expect("quarantine"));
+    let record = fx.store.quarantine_dir().join(format!("{qid}.json"));
+    let original = fs::read_to_string(&record).expect("record");
+    let windows = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+    for forged in [
+        format!(r"{windows}\System32\evil.dll"),
+        r"\\203.0.113.5\share\evil.exe".to_string(),
+        r"relative\evil.exe".to_string(),
+    ] {
+        let mut meta: Value = serde_json::from_str(&original).expect("json");
+        meta["original_path"] = json!(forged);
+        fs::write(&record, meta.to_string()).expect("forge");
+        assert!(
+            vigil_actions::restore_quarantined(&qid, &fx.store).is_err(),
+            "{forged} must be refused"
+        );
+    }
+}
+
 #[test]
 fn restore_refuses_to_overwrite_and_detects_damage() {
     let fx = Fixture::new();
@@ -1002,14 +1072,87 @@ fn data_folder_files_stay_usable_across_restarts() {
 }
 
 #[test]
+fn a_new_data_folder_is_created_private_in_one_step() {
+    let sid = common::current_user_sid();
+    let tmp = TempDir::new("vigil-data-");
+    let root = tmp.path().join("Vigil");
+    assert_eq!(
+        testing::prepare_private_dir_as(&root, &sid, &[&sid, "S-1-5-18"]).expect("prepare"),
+        ""
+    );
+    let descriptor = vigil_sys::svcsec::file_descriptor(&root).expect("descriptor");
+    assert!(descriptor.owner.eq_ignore_ascii_case(&sid), "{descriptor:?}");
+    let vigil_sys::svcsec::Dacl::Aces(aces) = &descriptor.dacl else {
+        panic!("no DACL: {descriptor:?}")
+    };
+    let mut who: Vec<String> = aces.iter().map(|a| a.sid.to_uppercase()).collect();
+    who.sort();
+    let mut expected = vec![sid.to_uppercase(), "S-1-5-18".to_string()];
+    expected.sort();
+    assert_eq!(who, expected, "nothing inherited from the parent: {descriptor:?}");
+    assert!(aces.iter().all(|a| a.allow && !a.inherit_only && a.mask == 0x001F_01FF));
+}
+
+#[test]
+fn an_untrusted_data_folder_is_moved_aside_and_a_private_one_created() {
+    let sid = common::current_user_sid();
+    let tmp = TempDir::new("vigil-data-");
+    let root = tmp.path().join("Vigil");
+    let prepare = || testing::prepare_private_dir_as(&root, &sid, &[&sid, "S-1-5-18"]);
+    let aside = || -> Vec<std::path::PathBuf> {
+        let mut found: Vec<_> = fs::read_dir(tmp.path())
+            .expect("list")
+            .filter_map(Result::ok)
+            .filter(|e| e.file_name().to_string_lossy().starts_with("Vigil.untrusted-"))
+            .map(|e| e.path())
+            .collect();
+        found.sort();
+        found
+    };
+    // A folder Users may modify, with a journal planted in it: not Vigil's.
+    testing::create_dir_with_sddl(&root, &format!("O:{sid}D:P(A;OICI;FA;;;{sid})(A;OICI;0x1301bf;;;BU)"))
+        .expect("untrusted folder");
+    fs::write(root.join("journal.jsonl"), "{\"id\": \"planted\"}\n").expect("planted");
+    let notice = prepare().expect("prepare");
+    assert!(notice.contains("S-1-5-32-545"), "{notice}");
+    let moved = aside();
+    assert_eq!(moved.len(), 1, "{moved:?}");
+    assert!(notice.contains(&*moved[0].to_string_lossy()), "{notice}");
+    assert_eq!(
+        fs::read_to_string(moved[0].join("journal.jsonl")).expect("kept"),
+        "{\"id\": \"planted\"}\n",
+        "nothing is deleted"
+    );
+    assert_eq!(fs::read_dir(&root).expect("new folder").count(), 0);
+    let descriptor = vigil_sys::svcsec::file_descriptor(&root).expect("descriptor");
+    let vigil_sys::svcsec::Dacl::Aces(aces) = &descriptor.dacl else {
+        panic!("no DACL")
+    };
+    assert!(aces.iter().all(|a| a.sid != "S-1-5-32-545"), "{descriptor:?}");
+    // The new folder is trusted: starting again moves nothing.
+    assert_eq!(prepare().expect("again"), "");
+    assert_eq!(aside().len(), 1);
+
+    // A file in place of the folder is moved aside too.
+    fs::remove_dir(&root).expect("remove the empty folder");
+    fs::write(&root, "not a folder").expect("file");
+    let notice = prepare().expect("prepare over a file");
+    assert!(notice.contains("file"), "{notice}");
+    assert!(root.is_dir());
+    assert_eq!(aside().len(), 2);
+}
+
+#[test]
 fn junction_inside_the_data_folder_is_refused() {
     let tmp = TempDir::new("vigil-data-");
     let root = tmp.path().join("Vigil");
-    fs::create_dir_all(&root).expect("root");
+    // A folder this account owns and controls (trusted here), so the lock-down reaches the junction.
+    let sid = common::current_user_sid();
+    testing::create_dir_with_sddl(&root, &format!("O:{sid}D:P(A;OICI;FA;;;{sid})(A;OICI;FA;;;SY)")).expect("root");
     let target = tmp.path().join("elsewhere");
     fs::create_dir_all(&target).expect("target");
     common::junction(&root.join("backups"), &target);
-    let error = testing::prepare_private_dir_as(&root, "S-1-5-32-544", &["S-1-5-32-544"]).expect_err("refused");
+    let error = testing::prepare_private_dir_as(&root, &sid, &[&sid, "S-1-5-18"]).expect_err("refused");
     assert!(
         error
             .message()

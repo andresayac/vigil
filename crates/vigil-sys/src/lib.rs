@@ -28,6 +28,7 @@ pub mod elevation;
 pub mod firewall;
 pub mod hooks;
 pub mod inspect;
+pub mod location;
 pub mod metrics;
 pub mod net;
 pub mod netcfg;

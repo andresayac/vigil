@@ -2,6 +2,18 @@
 
 Each release's full notes are on the repository's Releases page.
 
+## 2.6.0 — 2026-11-22
+
+- Security release: nothing a standard user's program controls runs with administrator rights. Settings links,
+  browser pages, per-user uninstallers and Run new task without "as administrator" run as the user through
+  Explorer; local AI agents are not used while Vigil is elevated.
+- Scan scripts go to PowerShell directly instead of through a temporary folder; PowerShell loads only Windows'
+  modules; system folders come from Windows itself, not from environment variables.
+- The portable vigil.exe needs no runtime DLL, loads system DLLs from System32 only, and warns before running as
+  administrator from a folder other programs can change.
+- The data folder is created with administrator-only permissions; one other programs could change is moved aside
+  and a clean one started. Quarantine restore never follows links; the watch keeps administrator-only data in it.
+
 ## 2.5.0 — 2026-11-22
 
 - The scan and the safety checks never open network paths: a startup entry, task or service pointing to

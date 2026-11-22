@@ -226,6 +226,12 @@ pub(crate) fn ps_command(script: &str, values: &[(&str, &str)]) -> (Vec<String>,
     let mut env: BTreeMap<String, String> = std::env::vars()
         .filter(|(key, _)| !key.to_uppercase().starts_with("PC_"))
         .collect();
+    // Windows' own module folder and folders, whatever the user's environment says: a module in
+    // the user's Documents could otherwise replace the cmdlets these snippets call, elevated.
+    for (name, value) in vigil_sys::paths::powershell_env() {
+        env.retain(|key, _| !key.eq_ignore_ascii_case(&name));
+        env.insert(name, value);
+    }
     for (name, value) in values {
         env.insert(format!("PC_{}", name.to_uppercase()), (*value).to_string());
     }
@@ -366,5 +372,25 @@ mod tests {
         let (args, env) = ps_command("Remove-MpPreference -ExclusionPath $env:PC_VALUE", &[("value", evil)]);
         assert!(!args.join(" ").contains("Remove-Item"));
         assert_eq!(env.get("PC_VALUE").map(String::as_str), Some(evil));
+    }
+
+    #[test]
+    fn powershell_never_loads_modules_from_the_users_folders() {
+        let (_, env) = ps_command("Get-Date", &[]);
+        let modules = vigil_sys::paths::powershell_modules().to_string_lossy().into_owned();
+        let found: Vec<&String> = env
+            .iter()
+            .filter(|(k, _)| k.eq_ignore_ascii_case("PSModulePath"))
+            .map(|(_, v)| v)
+            .collect();
+        assert_eq!(found, vec![&modules], "exactly one PSModulePath: Windows' own folder");
+        let files = env
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("ProgramFiles"))
+            .map(|(_, v)| v.clone());
+        assert_eq!(
+            files,
+            Some(vigil_sys::paths::program_files().to_string_lossy().into_owned())
+        );
     }
 }

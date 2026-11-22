@@ -159,6 +159,37 @@ Function RemoveOldLeftovers
   !insertmacro OLD_KEYS
 FunctionEnd
 
+; Vigil's data folder (%ProgramData%\Vigil), created when missing in one step with its
+; permissions: owner Administrators, full control for Administrators and SYSTEM only, nothing
+; inherited from ProgramData (where any user may create folders), so no program without
+; administrator rights can create it first. An existing folder is left as it is: the app checks it
+; at start and moves aside one it did not make. Needs SetShellVarContext all ($APPDATA is
+; ProgramData then).
+!define DATA_SDDL "O:BAD:P(A;OICI;FA;;;BA)(A;OICI;FA;;;SY)"
+Function CreateDataFolder
+  Push $0
+  Push $1
+  Push $2
+  IfFileExists "$APPDATA\${APP}\*.*" done
+  System::Call 'advapi32::ConvertStringSecurityDescriptorToSecurityDescriptorW(w "${DATA_SDDL}", i 1, *p .r0, p 0) i .r1'
+  ${If} $1 <> 0
+    ; SECURITY_ATTRIBUTES: nLength, lpSecurityDescriptor, bInheritHandle (with the padding of a
+    ; 64-bit build).
+    !if ${NSIS_PTR_SIZE} > 4
+      System::Call '*(i 24, i 0, p r0, i 0, i 0) p .r2'
+    !else
+      System::Call '*(i 12, p r0, i 0) p .r2'
+    !endif
+    System::Call 'kernel32::CreateDirectoryW(w "$APPDATA\${APP}", p r2) i .r1'
+    System::Free $2
+    System::Call 'kernel32::LocalFree(p r0) p .r1'
+  ${EndIf}
+  done:
+  Pop $2
+  Pop $1
+  Pop $0
+FunctionEnd
+
 Function un.RemoveOldLeftovers
   !insertmacro OLD_KEYS
   SetShellVarContext current
@@ -216,6 +247,8 @@ Section "Vigil" Main
 
   ; Earlier installers' leftovers, by exact name.
   Call RemoveOldLeftovers
+
+  Call CreateDataFolder
 SectionEnd
 
 Function un.onInit

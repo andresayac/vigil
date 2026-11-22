@@ -52,9 +52,7 @@ impl AlertsPage {
     }
 
     fn clear(&mut self, cx: &mut Context<Self>) {
-        let _ = self
-            .ctx
-            .watch_change(|w| w.store.update(|file| file.alerts.clear()), cx);
+        let _ = self.ctx.watch_change(|w| w.clear_alerts(), cx);
         self.confirm_clear = false;
         self.load(cx);
     }

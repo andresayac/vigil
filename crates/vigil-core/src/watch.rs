@@ -216,6 +216,11 @@ pub struct Alert {
     pub target: String,
     #[serde(default)]
     pub read: bool,
+    /// It quotes what only administrators can read (scheduled tasks, Defender exclusions, the
+    /// Security log): an elevated copy keeps it in its administrators-only state, never in the
+    /// user's `watch.json` (see [`split_private`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub private: bool,
 }
 
 pub(crate) fn alert(kind: &str, severity: &str, target: &str, title: String, detail: String) -> Alert {
@@ -228,6 +233,7 @@ pub(crate) fn alert(kind: &str, severity: &str, target: &str, title: String, det
         severity: severity.into(),
         target: target.into(),
         read: false,
+        private: false,
     }
 }
 
@@ -579,14 +585,18 @@ pub fn forget(baseline: &mut Fingerprint, names: &[String]) -> usize {
     marked.len()
 }
 
-/// [`forget`] in the saved state of this account (the watch reads it at its next check).
-pub fn forget_removed(records: &[vigil_actions::Record]) {
+/// [`forget`] in the saved state of this account (the watch reads it at its next check), and in an
+/// elevated copy's own state in `private` (its data folder's `watch`).
+pub fn forget_removed(records: &[vigil_actions::Record], private: Option<&Path>) {
     let names = removed_names(records);
     if names.is_empty() {
         return;
     }
     if let Some(store) = Store::in_profile() {
         let _ = store.update(|file| forget(&mut file.baseline, &names));
+    }
+    if let Some(dir) = private {
+        let _ = Store::new(dir.to_path_buf()).update(|file| forget(&mut file.baseline, &names));
     }
 }
 
@@ -2403,13 +2413,14 @@ impl Store {
 
     /// `%LOCALAPPDATA%\Vigil\watch`, shared by elevated and standard runs; `None` without a profile.
     pub fn in_profile() -> Option<Self> {
-        let base = std::env::var_os("LOCALAPPDATA").filter(|v| !v.is_empty())?;
-        let profile = std::env::var_os("USERPROFILE").filter(|v| !v.is_empty())?;
+        // From Windows, not the environment (which the user controls).
+        let base = vigil_sys::paths::local_app_data()?;
+        let profile = vigil_sys::paths::profile()?;
         Some(Self {
             location: Location {
-                base: PathBuf::from(base),
+                base,
                 parts: vec!["Vigil".into(), "watch".into()],
-                inside: Some(PathBuf::from(profile)),
+                inside: Some(profile),
             },
             lock: Mutex::new(()),
         })
@@ -2592,37 +2603,247 @@ pub fn in_language<R>(language: &str, f: impl FnOnce() -> R) -> R {
     }
 }
 
+// ------------------------------------------------------------------------------- elevated-only state
+
+/// Hook sources only administrators can read: Microsoft Defender's exclusions.
+fn private_hook(source: &str) -> bool {
+    source.starts_with("exclusions")
+}
+
+/// Logs only administrators can read.
+fn private_log(log: &str) -> bool {
+    log.eq_ignore_ascii_case(SECURITY_LOG)
+}
+
+/// `section|key` entries of [`Fingerprint::absent`] that belong to the elevated-only part.
+fn private_absent(key: &str) -> bool {
+    key.starts_with("task|") || key.starts_with("taskfile|") || key.starts_with("hook:exclusions")
+}
+
+/// Splits a fingerprint into what a copy of Vigil without administrator rights reads too (kept in
+/// the user's `watch.json`, which any program of the user can read and change) and what only an
+/// elevated copy reads: scheduled tasks and their files, Defender's exclusions and the Security
+/// log. The second part never leaves the administrators-only data folder.
+pub fn split_private(fingerprint: &Fingerprint) -> (Fingerprint, Fingerprint) {
+    let mut shared = fingerprint.clone();
+    let mut private = Fingerprint {
+        version: fingerprint.version,
+        tasks: shared.tasks.take(),
+        task_files: shared.task_files.take(),
+        ..Default::default()
+    };
+    let hooks = std::mem::take(&mut shared.hooks);
+    for (source, values) in hooks {
+        if private_hook(&source) {
+            private.hooks.insert(source, values);
+        } else {
+            shared.hooks.insert(source, values);
+        }
+    }
+    let events = std::mem::take(&mut shared.events);
+    for (log, mark) in events {
+        if private_log(&log) {
+            private.events.insert(log, mark);
+        } else {
+            shared.events.insert(log, mark);
+        }
+    }
+    let (secret, open): (Vec<LogEvent>, Vec<LogEvent>) = std::mem::take(&mut shared.event_hits)
+        .into_iter()
+        .partition(|hit| private_log(&hit.log));
+    shared.event_hits = open;
+    private.event_hits = secret;
+    let absent = std::mem::take(&mut shared.absent);
+    for (key, since) in absent {
+        if private_absent(&key) {
+            private.absent.insert(key, since);
+        } else {
+            shared.absent.insert(key, since);
+        }
+    }
+    (shared, private)
+}
+
+/// Alerts of older `watch.json` files (before [`Alert::private`]) that quote what only
+/// administrators can read: tasks, Defender exclusions, and the Security log's accounts and tasks.
+fn quotes_private(alert: &Alert) -> bool {
+    alert.private
+        || alert.kind == "task"
+        || (alert.kind == "hook" && alert.target == "protection")
+        || (alert.kind == "event" && matches!(alert.target.as_str(), "accounts" | "tasks"))
+}
+
+/// Ids of the administrators-only alerts start here, so they never meet the shared file's ids.
+const PRIVATE_IDS: u64 = 1 << 40;
+
+/// Newest first (time, then id), the order both files keep.
+fn newest_first(alerts: &mut [Alert]) {
+    alerts.sort_by(|a, b| b.time.cmp(&a.time).then(b.id.cmp(&a.id)));
+}
+
+/// What an elevated check saves (see `Watcher::check_elevated`): `previous` is its own baseline
+/// from the administrators-only `private` state, `current` what it read now. Returns the new alerts
+/// (most severe first) and the problem to show, if a state could not be saved.
+pub(crate) fn record_elevated(
+    shared: &Store,
+    private: &Store,
+    previous: Fingerprint,
+    current: Fingerprint,
+    now: i64,
+) -> (Vec<Alert>, Option<String>) {
+    let (old_shared, old_private) = split_private(&previous);
+    let (new_shared, new_private) = split_private(&current);
+    let shared_alerts = diff(&old_shared, &new_shared);
+    let mut private_alerts = diff(&old_private, &new_private);
+    for alert in &mut private_alerts {
+        alert.private = true;
+    }
+    let next = merged(&previous, current);
+    let (next_shared, _) = split_private(&next);
+    let saved = shared.update(|file| {
+        file.baseline = next_shared;
+        // Alerts an older Vigil left in the user's file that quote secrets move to the data folder.
+        let (moved, kept): (Vec<Alert>, Vec<Alert>) =
+            std::mem::take(&mut file.alerts).into_iter().partition(quotes_private);
+        file.alerts = kept;
+        (file.add_alerts(shared_alerts.clone(), now), moved)
+    });
+    let (mut out, moved, mut problem) = match saved {
+        Ok((added, moved)) => (added, moved, None),
+        Err(problem) => (Vec::new(), Vec::new(), Some(problem)),
+    };
+    let unsaved = if problem.is_some() { shared_alerts } else { Vec::new() };
+    let result = private.update(|file| {
+        file.baseline = next;
+        file.next_id = file.next_id.max(PRIVATE_IDS);
+        for mut alert in moved {
+            alert.private = true;
+            file.alerts.push(alert);
+        }
+        newest_first(&mut file.alerts);
+        let mut all = private_alerts;
+        all.extend(unsaved);
+        file.add_alerts(all, now)
+    });
+    match result {
+        Ok(added) => out.extend(added),
+        Err(error) => problem = Some(problem.map_or(error.clone(), |p| format!("{p}; {error}"))),
+    }
+    out.sort_by_key(|a| std::cmp::Reverse(severity_rank(&a.severity)));
+    (out, problem)
+}
+
 // ------------------------------------------------------------------------------------ one copy watches
 
+/// What happened when this copy asked for the watch's named mutex.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Claim {
+    /// It was free: this copy watches.
+    Created,
+    /// Another program holds the name (or it can't be opened).
+    Taken,
+}
+
+/// Whether a copy that found the mutex taken watches anyway, under the fallback name: only when no
+/// other copy of this Vigil is running, i.e. the name is held by some other program (squatting it
+/// would otherwise silence the watch for good).
+pub fn watch_anyway(claim: Claim, another_vigil: bool) -> bool {
+    claim == Claim::Taken && !another_vigil
+}
+
 /// Holds the named mutex that makes this copy the one that watches (and shows the tray icon).
-/// Another copy of Vigil (elevated or not) finds it taken.
+/// Another copy of Vigil (elevated or not) finds it taken. The mutex grants access to SYSTEM,
+/// Administrators and this user only. When the name is taken but no other copy of this Vigil is
+/// running, another program holds it: this copy says so and watches under a fallback name for its
+/// integrity level, so a squatter cannot stop the watch.
 pub fn claim_watch() -> bool {
-    use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError};
-    use windows::Win32::System::Threading::CreateMutexW;
     use windows::core::w;
     static HELD: AtomicBool = AtomicBool::new(false);
     if HELD.load(Ordering::Acquire) {
         return true;
     }
-    // SAFETY: plain Win32 call with a static name; the handle is kept open for the life of the
-    // process on purpose (closing it would let another copy start watching).
-    let handle = unsafe { CreateMutexW(None, false, w!("Local\\Vigil.Watch")) };
-    match handle {
-        // SAFETY: GetLastError reads this thread's last error, set by CreateMutexW above.
-        Ok(handle) if !handle.is_invalid() && unsafe { GetLastError() } != ERROR_ALREADY_EXISTS => {
-            HELD.store(true, Ordering::Release);
-            true
+    if create_watch_mutex(w!("Local\\Vigil.Watch")) == Claim::Created {
+        HELD.store(true, Ordering::Release);
+        return true;
+    }
+    if !watch_anyway(Claim::Taken, another_vigil_running()) {
+        return false;
+    }
+    eprintln!("the watch's name is held by a program that is not Vigil; watching under a fallback name");
+    let fallback = if vigil_sys::elevation::is_elevated() {
+        w!("Local\\Vigil.Watch.Elevated")
+    } else {
+        w!("Local\\Vigil.Watch.Standard")
+    };
+    let created = create_watch_mutex(fallback) == Claim::Created;
+    if created {
+        HELD.store(true, Ordering::Release);
+    }
+    created
+}
+
+/// Creates the named mutex with a DACL for SYSTEM, Administrators and this user; the handle is
+/// kept open for the life of the process on purpose (closing it would let another copy watch).
+fn create_watch_mutex(name: windows::core::PCWSTR) -> Claim {
+    use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError, HLOCAL, LocalFree};
+    use windows::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
+    use windows::Win32::Security::{PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES};
+    use windows::Win32::System::Threading::CreateMutexW;
+    let user = vigil_sys::accounts::token_user_sid().unwrap_or_default();
+    let sddl = if user.starts_with("S-1-") {
+        format!("D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;{user})")
+    } else {
+        "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;IU)".to_string()
+    };
+    let text: Vec<u16> = sddl.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut sd = PSECURITY_DESCRIPTOR::default();
+    // SAFETY: `text` is NUL-terminated; the descriptor is LocalAlloc'd and freed below.
+    let converted = unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(windows::core::PCWSTR(text.as_ptr()), 1, &mut sd, None)
+    };
+    let attributes = SECURITY_ATTRIBUTES {
+        nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: sd.0,
+        bInheritHandle: false.into(),
+    };
+    // SAFETY: the name is a static NUL-terminated string; `attributes` (and its descriptor) live
+    // for the call. The handle is deliberately never closed when the mutex is created.
+    let handle = unsafe {
+        CreateMutexW(
+            converted.is_ok().then_some(std::ptr::from_ref(&attributes)),
+            false,
+            name,
+        )
+    };
+    // SAFETY: GetLastError reads this thread's last error, set by CreateMutexW above.
+    let existed = unsafe { GetLastError() } == ERROR_ALREADY_EXISTS;
+    if converted.is_ok() {
+        // SAFETY: the descriptor came from the conversion above and is freed once.
+        unsafe {
+            let _ = LocalFree(Some(HLOCAL(sd.0)));
         }
+    }
+    match handle {
+        Ok(handle) if !handle.is_invalid() && !existed => Claim::Created,
         Ok(handle) => {
             if !handle.is_invalid() {
                 // SAFETY: the handle was just returned by CreateMutexW and is not used again.
                 let _ = unsafe { windows::Win32::Foundation::CloseHandle(handle) };
             }
-            false
+            Claim::Taken
         }
-        // Access denied: an elevated copy created it.
-        Err(_) => false,
+        // Access denied: a copy (or a program) with other rights created it.
+        Err(_) => Claim::Taken,
     }
+}
+
+/// Another process runs this same `vigil.exe` (same path).
+fn another_vigil_running() -> bool {
+    let Ok(exe) = std::env::current_exe() else { return true };
+    let own = std::process::id();
+    vigil_actions::find_processes(Some(&exe.to_string_lossy()), &[], &[], None)
+        .iter()
+        .any(|p| p.pid != own)
 }
 
 // ------------------------------------------------------------------------------------ the watcher
@@ -2686,6 +2907,9 @@ pub fn tray_texts(file: &WatchFile) -> (String, String) {
 
 pub struct Watcher {
     pub store: Store,
+    /// An elevated copy's own state in the administrators-only data folder: the whole baseline
+    /// it compares with, and the alerts that quote what only administrators can read.
+    private: OnceLock<Store>,
     elevated: bool,
     owner: AtomicBool,
     last_check: AtomicI64,
@@ -2708,6 +2932,7 @@ impl Watcher {
     pub fn new(store: Store, elevated: bool, owner: bool) -> Self {
         Self {
             store,
+            private: OnceLock::new(),
             elevated,
             owner: AtomicBool::new(owner),
             last_check: AtomicI64::new(0),
@@ -2720,6 +2945,55 @@ impl Watcher {
             scan_running: AtomicBool::new(false),
             conditions: crate::autoscan::SystemConditions::default(),
         }
+    }
+
+    /// An elevated copy's own state, in its administrators-only data folder (`dir`, not the
+    /// user's profile): see [`split_private`]. Ignored for a copy without administrator rights.
+    pub fn set_private_store(&self, dir: PathBuf) {
+        if self.elevated {
+            let store = Store::new(dir);
+            if store.path() != self.store.path() {
+                let _ = self.private.set(store);
+            }
+        }
+    }
+
+    fn private_store(&self) -> Option<&Store> {
+        self.private.get().filter(|_| self.elevated)
+    }
+
+    /// Every alert this copy may show, newest first: the shared ones, plus the administrators-only
+    /// ones for an elevated copy.
+    pub fn alerts(&self) -> Vec<Alert> {
+        let mut all = self.store.load().alerts;
+        if let Some(private) = self.private_store() {
+            all.extend(private.load().alerts);
+            newest_first(&mut all);
+        }
+        all
+    }
+
+    /// Marks alerts read (`None`: all of them), in both states.
+    pub fn mark_read(&self, ids: Option<&[u64]>) -> Result<(), String> {
+        let mark = |file: &mut WatchFile| {
+            for alert in &mut file.alerts {
+                if ids.is_none_or(|ids| ids.contains(&alert.id)) {
+                    alert.read = true;
+                }
+            }
+        };
+        if let Some(private) = self.private_store() {
+            private.update(mark)?;
+        }
+        self.store.update(mark)
+    }
+
+    /// Deletes every alert, in both states.
+    pub fn clear_alerts(&self) -> Result<(), String> {
+        if let Some(private) = self.private_store() {
+            private.update(|file| file.alerts.clear())?;
+        }
+        self.store.update(|file| file.alerts.clear())
     }
 
     /// Lets this copy run automatic scans, saving their reports in `dir`.
@@ -2756,12 +3030,13 @@ impl Watcher {
 
     pub fn status(&self) -> Status {
         let file = self.store.load();
+        let alerts = self.alerts();
         let last = self.last_check.load(Ordering::Acquire);
         Status {
             owner: self.owner(),
             watching: file.settings.watching,
             last_check: (last > 0).then_some(last),
-            unread: file.alerts.iter().filter(|a| !a.read).count(),
+            unread: alerts.iter().filter(|a| !a.read).count(),
             notify_paused_until: file.notify_paused_until.filter(|_| file.notifications_paused(now_ms())),
             // Another copy does the checks: whether it can read the tasks is not known here.
             tasks_watched: self.elevated && self.owner(),
@@ -2771,7 +3046,7 @@ impl Watcher {
                 Vec::new()
             },
             autostart: crate::autostart::enabled(),
-            recent: file.alerts.iter().take(5).cloned().collect(),
+            recent: alerts.iter().take(5).cloned().collect(),
             auto_scan: crate::autoscan::view(
                 &file.settings,
                 &file.auto_scan,
@@ -2829,6 +3104,9 @@ impl Watcher {
 
     /// One check: read, compare, store. Returns the new alerts.
     fn check(&self) -> Vec<Alert> {
+        if let Some(private) = self.private_store() {
+            return self.check_elevated(private);
+        }
         let previous = self.store.load().baseline;
         let current = read_fingerprint(self.elevated, &previous);
         *self.logs_hidden.lock().unwrap_or_else(PoisonError::into_inner) = current.logs_hidden.clone();
@@ -2850,6 +3128,24 @@ impl Watcher {
                 Vec::new()
             }
         }
+    }
+
+    /// [`check`](Self::check) for an elevated copy. It compares with its own baseline from the
+    /// administrators-only data folder, never with the user's `watch.json` (which any program of
+    /// the user can change, e.g. to slip its own persistence into the baseline): a first check
+    /// there only records what is there. The user's file gets what a copy without rights would
+    /// read too (for one that takes the watch over later) and the alerts that quote nothing secret;
+    /// tasks, Defender exclusions and the Security log stay in the data folder. When the user's
+    /// file can't be written (another program holds its lock), every alert is kept there instead.
+    fn check_elevated(&self, private: &Store) -> Vec<Alert> {
+        let previous = private.load().baseline;
+        let current = read_fingerprint(true, &previous);
+        *self.logs_hidden.lock().unwrap_or_else(PoisonError::into_inner) = current.logs_hidden.clone();
+        let now = now_ms();
+        let (out, problem) = record_elevated(&self.store, private, previous, current, now);
+        self.last_check.store(now, Ordering::Release);
+        *self.error.lock().unwrap_or_else(PoisonError::into_inner) = problem;
+        out
     }
 
     /// The alerts to show now as one notification, after the settings, the pause and the rate limit.
@@ -4717,5 +5013,145 @@ mod more_tests {
                     .starts_with("CommandLineEventConsumer=\"Updater\" (in //./root/subscription)")
             );
         });
+    }
+
+    // ------------------------------------------------------------------------- elevated-only state
+
+    fn svc(display: &str, start: &str, path: &str) -> ServicePrint {
+        ServicePrint {
+            display: display.into(),
+            start: start.into(),
+            path: path.into(),
+            dll: String::new(),
+        }
+    }
+
+    fn note(kind: &str, target: &str) -> Alert {
+        alert(kind, "warning", target, format!("{kind} title"), "detail".into())
+    }
+
+    fn private_fixture() -> Fingerprint {
+        let mut print = Fingerprint {
+            version: FINGERPRINT_VERSION,
+            tasks: Some(BTreeMap::from([(r"\updater".into(), r"\Updater".into())])),
+            task_files: Some(BTreeMap::new()),
+            services: Some(BTreeMap::from([(
+                "svc".into(),
+                svc("Svc", "auto", r"C:\Program Files\Contoso\svc.exe"),
+            )])),
+            ..Default::default()
+        };
+        print.hooks.insert(
+            "exclusions_paths".into(),
+            BTreeMap::from([(r"C:\Users\jdoe\x".into(), "0".into())]),
+        );
+        print.hooks.insert("ifeo".into(), BTreeMap::new());
+        print.events.insert(SECURITY_LOG.into(), LogMark::default());
+        print.events.insert(SYSTEM_LOG.into(), LogMark::default());
+        print.absent.insert(r"task|\old".into(), 5);
+        print.absent.insert("service|old".into(), 5);
+        print
+    }
+
+    #[test]
+    fn what_only_administrators_read_is_split_off() {
+        let (shared, private) = split_private(&private_fixture());
+        assert!(shared.tasks.is_none() && shared.task_files.is_none());
+        assert!(!shared.hooks.contains_key("exclusions_paths") && shared.hooks.contains_key("ifeo"));
+        assert!(!shared.events.contains_key(SECURITY_LOG) && shared.events.contains_key(SYSTEM_LOG));
+        assert!(shared.absent.contains_key("service|old") && !shared.absent.contains_key(r"task|\old"));
+        assert!(shared.services.is_some());
+        let text = serde_json::to_string(&shared).expect("json");
+        assert!(!text.contains("jdoe") && !text.contains("Updater"), "{text}");
+        assert!(private.tasks.is_some() && private.hooks.contains_key("exclusions_paths"));
+        assert!(private.events.contains_key(SECURITY_LOG) && private.absent.contains_key(r"task|\old"));
+        assert!(private.services.is_none());
+    }
+
+    fn temp_stores(name: &str) -> (std::path::PathBuf, Store, Store) {
+        let dir = std::env::temp_dir().join(format!("vigil-watch-split-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp");
+        (
+            dir.clone(),
+            Store::new(dir.join("shared")),
+            Store::new(dir.join("private")),
+        )
+    }
+
+    #[test]
+    fn an_elevated_check_keeps_secrets_out_of_the_users_file_and_its_own_baseline() {
+        let (dir, shared, private) = temp_stores("keep");
+        // An older Vigil left a task alert and the task list in the user's file.
+        shared
+            .update(|file| {
+                file.baseline = private_fixture();
+                file.add_alerts(vec![note("task", "tasks"), note("port", "network")], 1);
+            })
+            .expect("old file");
+        // Malware slips its own task into the user's baseline: the elevated copy never reads it.
+        let mut planted = private_fixture();
+        planted
+            .tasks
+            .as_mut()
+            .expect("tasks")
+            .insert(r"\evil".into(), r"\Evil".into());
+        shared.update(|file| file.baseline = planted).expect("plant");
+
+        // First elevated check: nothing to compare with yet, only recorded.
+        let (first, problem) = record_elevated(&shared, &private, Fingerprint::default(), private_fixture(), 100);
+        assert!(problem.is_none() && first.is_empty(), "{first:?}");
+        let user = shared.load();
+        assert!(user.baseline.tasks.is_none() && !user.baseline.hooks.contains_key("exclusions_paths"));
+        assert!(user.alerts.iter().all(|a| a.kind != "task"), "the old task alert moved");
+        let own = private.load();
+        assert!(own.baseline.tasks.as_ref().is_some_and(|t| !t.contains_key(r"\evil")));
+        assert!(own.alerts.iter().any(|a| a.kind == "task" && a.private));
+
+        // A new task: the alert stays in the data folder, flagged private, with a private id.
+        let mut now = private_fixture();
+        now.tasks
+            .as_mut()
+            .expect("tasks")
+            .insert(r"\evil".into(), r"\Evil".into());
+        let (alerts, _) = record_elevated(&shared, &private, private.load().baseline, now, 200);
+        assert!(
+            alerts
+                .iter()
+                .any(|a| a.kind == "task" && a.private && a.id >= PRIVATE_IDS),
+            "{alerts:?}"
+        );
+        assert!(shared.load().alerts.iter().all(|a| a.kind != "task"));
+        assert!(
+            !std::fs::read_to_string(shared.path())
+                .expect("user file")
+                .contains("Evil")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn alerts_are_kept_when_the_users_file_cannot_be_written() {
+        let (dir, _, private) = temp_stores("blocked");
+        // The user's watch folder is a file: its state can't be opened or written.
+        std::fs::write(dir.join("blocked"), b"not a folder").expect("block");
+        let shared = Store::new(dir.join("blocked").join("watch"));
+        let mut now = private_fixture();
+        now.services
+            .as_mut()
+            .expect("services")
+            .insert("new".into(), svc("New", "auto", r"C:\Users\jdoe\new.exe"));
+        let (alerts, problem) = record_elevated(&shared, &private, private_fixture(), now, 300);
+        assert!(problem.is_some());
+        assert!(alerts.iter().any(|a| a.kind == "service"), "{alerts:?}");
+        assert!(private.load().alerts.iter().any(|a| a.kind == "service"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_squatted_name_only_stops_the_watch_when_vigil_holds_it() {
+        assert!(!watch_anyway(Claim::Created, false));
+        assert!(!watch_anyway(Claim::Taken, true), "another copy of Vigil watches");
+        assert!(watch_anyway(Claim::Taken, false), "another program holds the name");
     }
 }

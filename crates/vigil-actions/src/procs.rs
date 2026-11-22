@@ -271,7 +271,7 @@ pub fn process_protection(proc: &Proc) -> Option<String> {
     if CRITICAL_PROCESSES.contains(&name.as_str()) && (exe.is_empty() || in_dir(&exe, &windir)) {
         return Some(tr!("{0} is a critical Windows process", proc.name));
     }
-    let program_data = std::env::var("ProgramData").unwrap_or_else(|_| r"C:\ProgramData".to_string());
+    let program_data = vigil_sys::paths::program_data().to_string_lossy().into_owned();
     if !exe.is_empty() && in_dir(&exe, &format!("{program_data}\\Microsoft\\Windows Defender")) {
         return Some(tr!("it is part of Microsoft Defender"));
     }

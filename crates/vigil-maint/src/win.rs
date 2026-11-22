@@ -404,6 +404,16 @@ pub(crate) fn run_hidden(
         .stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // PowerShell gets Windows' own module folder and folders, whatever the user's environment
+    // says: a module in the user's Documents could otherwise replace the cmdlets it calls.
+    let is_powershell = program
+        .file_name()
+        .is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case("powershell.exe"));
+    if is_powershell {
+        for (name, value) in vigil_sys::paths::powershell_env() {
+            command.env(name, value);
+        }
+    }
     for (name, value) in env {
         command.env(name, value);
     }

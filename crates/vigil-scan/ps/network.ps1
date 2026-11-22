@@ -1,5 +1,4 @@
 # Connections and ports per process, configured DNS servers and names in the DNS cache (read-only).
-param([Parameter(Mandatory = $true)][string]$OutPath)
 . "$PSScriptRoot\_common.ps1"
 
 $tcp = @()
@@ -41,6 +40,6 @@ try {
     $dnsCache = @(Get-DnsClientCache -ErrorAction Stop | ForEach-Object { $_.Entry } | Sort-Object -Unique)
 } catch { Add-Note 'network' ("DNS cache: " + $_.Exception.Message) }
 
-Write-JsonFile $OutPath @{
+Write-Result @{
     tcp = $tcp; udp = $udp; dns_servers = $dnsServers; dns_cache = $dnsCache; notes = @($script:Notes)
 }

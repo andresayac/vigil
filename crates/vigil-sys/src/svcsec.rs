@@ -22,7 +22,8 @@ use windows::Win32::Security::Authorization::{
     SE_FILE_OBJECT, SE_OBJECT_TYPE, SE_REGISTRY_KEY,
 };
 use windows::Win32::Security::{
-    ACE_HEADER, ACL, DACL_SECURITY_INFORMATION, GetAce, GetSecurityDescriptorDacl, PSECURITY_DESCRIPTOR, PSID,
+    ACE_HEADER, ACL, DACL_SECURITY_INFORMATION, GetAce, GetSecurityDescriptorDacl, GetSecurityDescriptorOwner,
+    OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
 };
 use windows::Win32::System::Registry::{HKEY_LOCAL_MACHINE, KEY_WOW64_64KEY, REG_BINARY, REG_DWORD};
 use windows::Win32::System::Services::{
@@ -298,6 +299,66 @@ pub fn parse_sddl(sddl: &str) -> Option<Dacl> {
     unsafe { ConvertStringSecurityDescriptorToSecurityDescriptorW(PCWSTR(text.as_ptr()), 1, &mut sd, None) }.ok()?;
     let owned = LocalSd(sd);
     sd_dacl(owned.0)
+}
+
+/// The owner (SID string) and DACL of an object.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Descriptor {
+    /// Empty when the descriptor has no owner.
+    pub owner: String,
+    pub dacl: Dacl,
+}
+
+fn sd_descriptor(sd: PSECURITY_DESCRIPTOR) -> Option<Descriptor> {
+    let mut owner = PSID::default();
+    let mut defaulted = BOOL(0);
+    // SAFETY: `sd` is a valid descriptor for the call; `owner` points inside it afterwards.
+    unsafe { GetSecurityDescriptorOwner(sd, &mut owner, &mut defaulted) }.ok()?;
+    let owner = if owner.is_invalid() {
+        String::new()
+    } else {
+        sid_string(owner)
+    };
+    Some(Descriptor {
+        owner,
+        dacl: sd_dacl(sd)?,
+    })
+}
+
+/// The owner and DACL described by an SDDL string (tests build their descriptors this way).
+pub fn parse_descriptor(sddl: &str) -> Option<Descriptor> {
+    let text = wide(sddl);
+    let mut sd = PSECURITY_DESCRIPTOR::default();
+    // SAFETY: `text` is NUL-terminated; `sd` receives a LocalAlloc'd descriptor owned by `LocalSd`.
+    unsafe { ConvertStringSecurityDescriptorToSecurityDescriptorW(PCWSTR(text.as_ptr()), 1, &mut sd, None) }.ok()?;
+    let owned = LocalSd(sd);
+    sd_descriptor(owned.0)
+}
+
+/// The owner and DACL of a file or folder; `None` when they cannot be read. Windows follows a
+/// junction at `path`, so callers that care refuse reparse points first.
+pub fn file_descriptor(path: &Path) -> Option<Descriptor> {
+    let text = wide(&path.to_string_lossy());
+    let mut sd = PSECURITY_DESCRIPTOR::default();
+    // SAFETY: `text` is NUL-terminated; the descriptor returned in `sd` is owned (and freed) by
+    // `LocalSd`. Reading a descriptor changes nothing.
+    let status = unsafe {
+        GetNamedSecurityInfoW(
+            PCWSTR(text.as_ptr()),
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+            None,
+            None,
+            None,
+            None,
+            &mut sd,
+        )
+    };
+    if status != ERROR_SUCCESS {
+        return None;
+    }
+    let owned = LocalSd(sd);
+    sd_descriptor(owned.0)
 }
 
 /// The DACL of a file, folder or registry key (`MACHINE\SYSTEM\...` for keys).

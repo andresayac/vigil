@@ -24,7 +24,7 @@ use super::registry::{
 /// Saved reports `get_file_history` reads at most (newest first).
 const HISTORY_REPORTS: usize = 12;
 /// Largest saved report `get_file_history` opens.
-const MAX_REPORT_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_REPORT_BYTES: u64 = vigil_scan::limits::MAX_REPORT_BYTES;
 /// Events read per log for `get_process_events`, before matching.
 const EVENTS_PER_LOG: usize = 400;
 /// Most findings `get_related` returns.
@@ -626,10 +626,9 @@ fn seen_in_scans(path: &str) -> Value {
     let checked: Vec<&PathBuf> = reports.iter().rev().take(HISTORY_REPORTS).collect();
     let mut sightings: Vec<Value> = Vec::new();
     for report_path in &checked {
-        let small = std::fs::metadata(report_path).is_ok_and(|m| m.len() <= MAX_REPORT_BYTES);
         // A cheap look first: a report that does not even hold the file name is skipped unopened.
-        let holds_name = small
-            && std::fs::read_to_string(report_path).is_ok_and(|text| name.is_empty() || lower(&text).contains(&name));
+        let holds_name = vigil_scan::limits::read_capped(report_path, MAX_REPORT_BYTES)
+            .is_ok_and(|bytes| name.is_empty() || lower(&String::from_utf8_lossy(&bytes)).contains(&name));
         if !holds_name {
             continue;
         }

@@ -76,6 +76,8 @@ impl AppState {
     pub fn new() -> Result<Self, String> {
         let root = vigil_actions::data_dir().map_err(|e| e.to_string())?;
         let store = Store::open(&root).map_err(|e| e.to_string())?;
+        // An untrusted data folder moved aside at start: History says so.
+        vigil_actions::record_data_dir_notice(&store);
         std::fs::create_dir_all(root.join("scans")).map_err(|e| format!("{}: {e}", root.display()))?;
         let inner = Inner {
             settings: Stored::load(&root.join("settings.json")),
@@ -84,8 +86,14 @@ impl AppState {
         };
         // Texts produced by the core (findings, actions, the AI's answers) follow the chosen language.
         vigil_i18n::set_language(&inner.settings.language);
+        // The data folder (moved aside, or read-only mode) and state files too large to read.
+        let notes: Vec<String> = vigil_actions::data_dir_warning()
+            .into_iter()
+            .chain(crate::settings::oversized_state(&root.join("settings.json")))
+            .chain(crate::settings::oversized_state(&root.join("ignored.json")))
+            .collect();
         let state = AppState {
-            warning: vigil_actions::data_dir_warning(),
+            warning: (!notes.is_empty()).then(|| notes.join("\n\n")),
             admin: vigil_actions::is_admin(),
             secrets: Box::new(CredentialStore::default()),
             root,

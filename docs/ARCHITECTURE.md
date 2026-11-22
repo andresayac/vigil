@@ -77,12 +77,47 @@ installer/              vigil.nsi (the per-machine installer, NSIS), build-setup
   entries, services, scheduled tasks, drivers, registry hooks, certificates, DNS and proxies, security switches and
   remote-access ports (plus BITS jobs every five minutes and new events from a few Windows logs) with the last one
   saved in
-  `%LOCALAPPDATA%\Vigil\watch\watch.json`, and turns each difference into an alert; a named mutex lets one copy of
+  `%LOCALAPPDATA%\Vigil\watch\watch.json`, and turns each difference into an alert. A named mutex lets one copy of
   Vigil watch at a time, and a second mutex keeps one window per session (a second start shows the first window).
+  The watch mutex's DACL allows only SYSTEM, Administrators and this user. When its name is already taken and no
+  Vigil runs, another program is squatting on it: Vigil watches under a fallback name rather than not at all.
   That folder is the user's, and an elevated Vigil writes there too, so `userdir.rs` opens it by handle
   (`NtCreateFile` relative to the parent, no reparse points) and replaces the file by a flushed temporary file and
-  a rename; a lock file shared by both copies serializes every change. Starting in the tray at sign-in is itself an
-  action (`vigil.autostart`): confirmed, journaled and undoable like any other change.
+  a rename. A lock file shared by both copies serializes every change.
+  - **What an elevated copy keeps to itself.** An elevated copy keeps its own state in
+    `%ProgramData%\Vigil\watch\watch.json` (administrators only): its full baseline, plus the alerts that quote what
+    only administrators can read. Those are scheduled tasks and their files, Defender exclusions, Security log
+    events, and the absent-entry marks for them (`watch::split_private`).
+  - **What it writes to the user's file.** Only the rest of the baseline and the other alerts. It moves alerts an
+    older version left there that quote such data, and it never takes its baseline from the user's file, which any
+    program of the user can change. Its first check records quietly.
+  - **Showing alerts.** The window shows both lists merged (`Watcher::alerts`); private alerts carry ids from
+    `1 << 40`, so the two never collide.
+
+  Starting in the tray at sign-in is itself an action (`vigil.autostart`): confirmed, journaled and undoable like
+  any other change.
+- **What runs as administrator.** Everything the elevated process loads or runs comes from where only
+  administrators can write:
+  - DLLs from System32 only: the C runtime is linked statically (`.cargo/config.toml`), the PE's
+    `DependentLoadFlags` is `LOAD_LIBRARY_SEARCH_SYSTEM32` (`/DEPENDENTLOADFLAG:0x800`, `vigil-app/build.rs`), and
+    `main()` calls `SetDefaultDllDirectories` with the same flag before anything else.
+  - The PowerShell collectors through standard input, with `PSModulePath` limited to Windows' own modules.
+  - Folders from `SHGetKnownFolderPath`, not from environment variables.
+  - The data folder owned by Administrators and closed to everyone but Administrators and SYSTEM. It is created
+    in one step with that security descriptor (`CreateDirectoryW`; the installer does the same). One that someone
+    else owns or may write to is moved aside to `Vigil.untrusted-<time>`, never deleted, and a new one is created
+    (the window and History say so). If it cannot be made private, the elevated copy runs read-only.
+  - Reports read back at most 64 MB, state files (`watch.json`, `settings.json`, `ignored.json`) at most 8 MB.
+
+  User-controlled programs (links, browsers, per-user uninstallers) start unelevated through Explorer
+  (`vigil_actions::desktop`). A `vigil.exe` in a folder a standard program can change (`vigil_sys::location`: an
+  `AccessCheck` of the folder and the file with the unelevated token) would load what is planted next to it, so
+  Vigil warns before asking for rights. Cancel keeps it in read-only mode; started elevated directly, Cancel closes
+  it. The installer's Program Files folder passes silently.
+- **Quarantine restore** writes only to a local folder that is not the Windows folder, System32 or the data folder
+  (`guard_file`). It holds every folder on the way open by handle, refusing reparse points and checking the final
+  path, and creates the file with `CREATE_NEW`, so it never overwrites and never follows a junction swapped in
+  meanwhile.
 - The AI agent's answer is data: validated against a schema, never executed, and it can never lower the verdict of
   an item the local rules rate critical. API keys live in Windows Credential Manager; Settings only learns whether
   one is stored.

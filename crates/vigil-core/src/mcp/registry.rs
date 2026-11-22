@@ -83,14 +83,13 @@ pub fn newest_report() -> Option<(Analysis, PathBuf)> {
 /// Every saved scan report this user can read, oldest first (the name holds the time).
 pub fn saved_reports() -> Vec<PathBuf> {
     let mut folders = Vec::new();
-    if let Some(data) = std::env::var_os("ProgramData") {
-        folders.push(PathBuf::from(data).join("Vigil").join("scans"));
+    // The folders come from Windows, not from the environment (which the user controls).
+    folders.push(vigil_sys::paths::program_data().join("Vigil").join("scans"));
+    if let Some(local) = vigil_sys::paths::local_app_data() {
+        folders.push(local.join("Vigil").join("scans"));
     }
-    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-        folders.push(PathBuf::from(local).join("Vigil").join("scans"));
-    }
-    if let Some(home) = std::env::var_os("USERPROFILE") {
-        folders.push(PathBuf::from(home).join("Vigil").join("reports"));
+    if let Some(home) = vigil_sys::paths::profile() {
+        folders.push(home.join("Vigil").join("reports"));
     }
     let mut reports: Vec<PathBuf> = folders
         .iter()

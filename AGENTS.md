@@ -94,6 +94,14 @@ Each crate has its tests next to the code (`#[cfg(test)]`) or in `tests/`; recor
 5. **No shell, no injection.** Run tools by absolute path (System32) with argument lists through the
    runner (`vigil_actions::runner`). Values for PowerShell travel as environment variables
    (`$env:PC_NAME`); never put a value inside script text. Child processes get no window.
+   **Vigil never starts user-controlled programs with administrator rights.** While elevated, links
+   and protocols (`ms-settings:`, `https://`…), browsers, per-user uninstallers and Run new task
+   without "as administrator" start through `vigil_actions::desktop` (Explorer, the user's normal
+   rights), and refuse rather than fall back to an elevated start. ShellExecute from the elevated
+   process is never used for them: it follows `HKCU\Software\Classes`, which any program can change.
+   With "as administrator", file types are pinned to System32 hosts (mmc.exe, cmd.exe) and shortcuts
+   to their checked target. Local AI agents (Claude Code, Codex, Gemini CLI) are refused while
+   elevated.
 6. **System data is untrusted.** Process names, paths, command lines and registry values may come from
    malware. The window draws them as plain text (never as markup or links); selectable text is plain text
    too. In the native dialogs text is plain (no hyperlinks). In AI prompts it is data, never instructions; the
@@ -113,13 +121,33 @@ Each crate has its tests next to the code (`#[cfg(test)]`) or in `tests/`; recor
    `vigil-scan/src/release.rs` asks GitHub's latest-release endpoint of this repository over HTTPS with a fixed
    User-Agent (the version only), validates the answer and never downloads or installs anything. Tests use a
    local server, never GitHub.
-8. **Never follow links when deleting.** Skip reparse points (junctions, symlinks); open files without
-   following links, check the final path is inside the expected root (see `vigil-maint::storage`).
+8. **Never follow links when deleting or writing.** Skip reparse points (junctions, symlinks); open files without
+   following links, check the final path is inside the expected root (see `vigil-maint::storage`). Restoring
+   from quarantine (`quarantine.rs`) holds every folder of the original place open by handle (no reparse points),
+   applies `guard_file`, creates the file with `CREATE_NEW` (never overwrites) and checks its final path.
 9. **Honest wording.** Explanations say what really happens (for example: trimming memory is temporary).
    Nothing may lower security for speed (memory integrity, Defender, firewall, UAC are never
    "optimizations").
 10. **No `unwrap`/`expect` in library code.** Errors become messages for the user. Every `unsafe` block is small
    and has a `// SAFETY:` comment.
+11. **The elevated process trusts nothing a standard program could write.**
+   - DLLs come from System32 only: `vigil.exe` links the C runtime statically (`.cargo/config.toml`), its imports
+     are limited by `/DEPENDENTLOADFLAG:0x800` (`vigil-app/build.rs`) and `main()` calls
+     `SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32)` first. Never load a DLL by a relative name or from
+     Vigil's folder.
+   - A copy in a folder a standard program can change (`vigil_sys::location`, an `AccessCheck` with the
+     unelevated token) warns before asking for rights: Cancel keeps it read-only. The installed Program Files
+     copy passes silently.
+   - The PowerShell collectors travel through standard input and their results through standard output, never
+     through a temporary folder. `PSModulePath` and the folder variables are reset (`vigil_sys::paths::powershell_env`).
+   - Folders come from Windows (`SHGetKnownFolderPath` in `vigil_sys::paths`), never from `%ProgramData%`,
+     `%LOCALAPPDATA%` or other variables the user's environment can change.
+   - The data folder `%ProgramData%\Vigil` is owned by Administrators, and only Administrators and SYSTEM may use
+     it. It is checked for junctions before every use.
+   - The watch keeps what only administrators can read (scheduled tasks, Defender exclusions, Security log
+     events, and the alerts that quote them) in `%ProgramData%\Vigil\watch\`. Its elevated baseline lives there
+     too, never taken from the user's `watch.json`. If another program holds the watch's mutex name, that does
+     not stop watching.
 
 ## Adding an action
 

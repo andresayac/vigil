@@ -18,6 +18,7 @@
 mod browser;
 mod cmdline;
 mod datadir;
+pub mod desktop;
 mod engine;
 mod error;
 mod firewall;
@@ -47,7 +48,7 @@ pub mod shell;
 #[doc(hidden)]
 pub mod testing;
 
-pub use datadir::{data_dir, data_dir_warning, is_admin, is_reparse_point};
+pub use datadir::{data_dir, data_dir_warning, is_admin, is_reparse_point, record_data_dir_notice};
 pub use engine::{
     ActionSpec, Outcome, RunFn, UndoFn, can_undo, execute, execute_plan, known_ops, register, undo, undo_batch,
 };

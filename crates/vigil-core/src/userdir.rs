@@ -17,7 +17,7 @@
 
 use std::ffi::c_void;
 use std::fs::File;
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::os::windows::io::{AsRawHandle, FromRawHandle};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -244,12 +244,17 @@ impl Dir {
         Ok(unsafe { File::from_raw_handle(raw.0) })
     }
 
-    /// The whole file (`NotFound` when it does not exist).
+    /// The whole file (`NotFound` when it does not exist). A file over 8 MB, more than any state
+    /// file Vigil keeps here, is refused unread (`InvalidData`).
     pub fn read(&self, name: &str) -> io::Result<Vec<u8>> {
-        let mut file = self.file(name, FILE_GENERIC_READ, FILE_OPEN)?;
-        let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes)?;
-        Ok(bytes)
+        let file = self.file(name, FILE_GENERIC_READ, FILE_OPEN)?;
+        vigil_scan::limits::read_open(file, vigil_scan::limits::MAX_STATE_BYTES).map_err(|error| {
+            if error.kind() == io::ErrorKind::InvalidData {
+                io::Error::new(error.kind(), format!("{}: {error}", self.shown.join(name).display()))
+            } else {
+                error
+            }
+        })
     }
 
     /// Replaces the file with `bytes`: a new temporary file, flushed, renamed over the old one.

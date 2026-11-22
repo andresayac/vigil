@@ -75,7 +75,6 @@ pub fn sort_for_report(analysis: &mut Analysis) {
 
 /// Options of a live analysis (the system is examined: signatures, hashes, VirusTotal).
 pub(crate) struct Live<'a> {
-    pub(crate) workdir: Option<&'a std::path::Path>,
     pub(crate) vt_key: Option<&'a str>,
     pub(crate) vt_limit: usize,
     pub(crate) progress: &'a dyn Fn(&str),
@@ -133,17 +132,8 @@ pub(crate) fn analyze(raw: &mut Value, live: Option<&Live>) -> Analysis {
         if !missing.is_empty() {
             say(&tr!("  verifying the digital signature of {0} files...", missing.len()));
         }
-        let own_dir;
-        let workdir = match live.workdir {
-            Some(dir) => Some(dir.to_path_buf()),
-            None => {
-                own_dir = crate::collect::WorkDir::create().ok();
-                own_dir.as_ref().map(|d| d.path().to_path_buf())
-            }
-        };
-        match workdir {
-            _ if missing.is_empty() => {}
-            Some(dir) => match crate::collect::collect_signatures(&missing, &dir, live.cancel) {
+        if !missing.is_empty() {
+            match crate::collect::collect_signatures(&missing, live.cancel) {
                 Ok(found) => {
                     if let Some(cache) = cache.as_mut() {
                         cache.put_many(found.values());
@@ -151,8 +141,7 @@ pub(crate) fn analyze(raw: &mut Value, live: Option<&Live>) -> Analysis {
                     files.extend(found);
                 }
                 Err(error) => push_note(raw, "signatures", &tr!("could not be verified: {0}", error)),
-            },
-            None => push_note(raw, "signatures", &tr!("could not be verified: no temporary folder")),
+            }
         }
         if let Some(cache) = cache
             && !live.cancel.load(Ordering::Relaxed)

@@ -303,6 +303,10 @@ pub struct AiConfig {
 pub trait Probe {
     /// How to start a local agent ("claude-code", "codex-cli", "gemini-cli"), if it is installed.
     fn launcher(&self, provider: &str) -> Option<Launcher>;
+    /// Whether Vigil runs as administrator: local agents are then never started.
+    fn elevated(&self) -> bool {
+        cli::running_elevated()
+    }
     /// A stored or environment secret.
     fn key(&self, secret: &str) -> Option<String>;
     /// Whether a model server answers at a local endpoint (only asked for loopback addresses).
@@ -418,6 +422,7 @@ fn status_of(info: &'static ProviderInfo, config: &AiConfig, probe: &dyn Probe) 
                 ),
             ),
         },
+        "claude-code" | "codex-cli" | "gemini-cli" if probe.elevated() => (false, cli::elevated_refusal(info.name)),
         "claude-code" | "codex-cli" | "gemini-cli" => match probe.launcher(info.id) {
             Some(_) => (true, tr!("Uses the {0} session signed in on this computer.", info.name)),
             None => (false, tr!("{0} is not installed on this computer.", info.name)),
@@ -1543,6 +1548,8 @@ mod tests {
         servers: Vec<&'static str>,
         /// The local server is Ollama, with these models installed on the computer.
         ollama: Option<Vec<&'static str>>,
+        /// Vigil runs as administrator (the CI runner does: never ask Windows here).
+        elevated: bool,
     }
 
     impl FakeProbe {
@@ -1552,11 +1559,15 @@ mod tests {
                 keys,
                 servers: vec![],
                 ollama: None,
+                elevated: false,
             }
         }
     }
 
     impl Probe for FakeProbe {
+        fn elevated(&self) -> bool {
+            self.elevated
+        }
         fn launcher(&self, provider: &str) -> Option<Launcher> {
             self.agents.contains(&provider).then(|| Launcher {
                 program: std::path::PathBuf::from(r"C:\nowhere\agent.exe"),
@@ -1615,6 +1626,29 @@ mod tests {
         for removed in ["openai", "anthropic", "gemini", "ollama"] {
             assert!(provider_info(removed).is_none(), "{removed}");
         }
+    }
+
+    #[test]
+    fn local_agents_are_never_used_while_vigil_runs_as_administrator() {
+        let mut probe = FakeProbe::new(vec!["claude-code", "codex-cli"], vec!["anthropic-compatible"]);
+        probe.elevated = true;
+        let all = statuses(&config("auto"), &probe);
+        for id in ["claude-code", "codex-cli", "gemini-cli"] {
+            let status = all.iter().find(|s| s.info.id == id).expect("status");
+            assert!(!status.available, "{id}");
+            assert!(status.note.contains("administrator"), "{}", status.note);
+        }
+        // "auto" skips them and takes the API that is set up.
+        let picked = pick_provider(&config("auto"), &probe).expect("an API");
+        assert_eq!(picked.id, "anthropic-compatible");
+        // Chosen explicitly, an agent is refused rather than started.
+        assert!(pick_provider(&config("claude-code"), &probe).is_err());
+        // The CLI layer refuses on its own too, whatever chose it.
+        cli::set_elevated(Some(true));
+        assert!(cli::running_elevated());
+        cli::set_elevated(Some(false));
+        assert!(!cli::running_elevated());
+        cli::set_elevated(None);
     }
 
     #[test]
@@ -1703,6 +1737,7 @@ mod tests {
             keys: vec![],
             servers: vec!["openai-compatible", "anthropic-compatible"],
             ollama: Some(vec!["llama3.1:8b", "qwen3:14b"]),
+            elevated: false,
         };
         let here = "http://localhost:11434/v1";
         let status = statuses(&configured("openai-compatible", "qwen3:14b", here), &ollama)

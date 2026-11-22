@@ -31,13 +31,9 @@ pub fn guard_file(path: &str, check_signature: bool) -> Result<()> {
             "files inside the Windows folder are never quarantined: disable what starts it instead"
         ));
     }
-    for name in ["ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"] {
-        let Ok(root) = std::env::var(name) else {
-            continue;
-        };
-        if root.is_empty() {
-            continue;
-        }
+    // The program folders from Windows, never from the environment (which the user controls).
+    for root in [vigil_sys::paths::program_files(), vigil_sys::paths::program_files_x86()] {
+        let root = root.to_string_lossy().into_owned();
         if in_dir(path, &format!("{root}\\WindowsApps")) {
             return fail(tr!("Store app files are managed by Windows: uninstall the app instead"));
         }

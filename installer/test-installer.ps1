@@ -127,6 +127,18 @@ function Test-Installed([string]$what) {
         Check ($entry.InstallLocation -eq $installDir) "$what`: uninstall entry location"
     }
     Check (-not (Test-Path $vendorKey)) "$what`: no vendor key left from an earlier installer"
+    # The data folder: owned by Administrators, full control for Administrators and SYSTEM only,
+    # nothing inherited.
+    $dataDir = Join-Path $env:ProgramData "Vigil"
+    Check (Test-Path $dataDir -PathType Container) "$what`: the data folder exists"
+    if (Test-Path $dataDir -PathType Container) {
+        $acl = Get-Acl $dataDir
+        $sids = @($acl.Access | ForEach-Object {
+                $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value
+            } | Sort-Object -Unique) -join ","
+        $private = $acl.Sddl -match "^O:BA" -and $acl.AreAccessRulesProtected -and $sids -eq "S-1-5-18,S-1-5-32-544"
+        Check $private "$what`: the data folder is private to administrators ($($acl.Sddl))"
+    }
     if (Test-Path $exe) { Test-CommandLines $exe }
 }
 

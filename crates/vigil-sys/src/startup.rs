@@ -185,21 +185,18 @@ pub fn default_sources() -> (Vec<RegistrySource>, Vec<FolderSource>) {
         run(Hive::LocalMachine, POLICY_RUN, None, "policy"),
     ];
     let mut folders = Vec::new();
-    let startup = |base: &str, leaf: &str| {
-        std::env::var_os(base).filter(|v| !v.is_empty()).map(|v| {
-            PathBuf::from(v)
-                .join(r"Microsoft\Windows\Start Menu\Programs")
-                .join(leaf)
-        })
-    };
-    if let Some(folder) = startup("APPDATA", "Startup") {
+    // The folders from Windows, not the environment: a redirected `%ProgramData%` would hide the
+    // computer's Startup folder from an elevated copy.
+    let startup =
+        |base: Option<PathBuf>, leaf: &str| base.map(|v| v.join(r"Microsoft\Windows\Start Menu\Programs").join(leaf));
+    if let Some(folder) = startup(crate::paths::roaming_app_data(), "Startup") {
         folders.push(FolderSource {
             folder,
             approved_hive: Hive::CurrentUser,
             approved: format!(r"{APPROVED}\StartupFolder"),
         });
     }
-    if let Some(folder) = startup("ProgramData", "StartUp") {
+    if let Some(folder) = startup(Some(crate::paths::program_data()), "StartUp") {
         folders.push(FolderSource {
             folder,
             approved_hive: Hive::LocalMachine,

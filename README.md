@@ -100,6 +100,8 @@ The local rules decide first; the agent reviews what is left and explains it in 
 
 A server on this computer (`localhost`) keeps everything here: nothing leaves the PC, and Settings says so in green.
 
+- **Local agents only without administrator rights.** They are programs and settings in your own folders, which any
+  program you run can change, so an elevated Vigil never starts them: it uses an API provider instead.
 - **Automatic** tries the local agents first (Claude Code, Codex CLI, Gemini CLI), then the Anthropic-compatible
   and the OpenAI-compatible API when it knows which model to use (Anthropic's own address, or an Ollama server on
   this computer). **Off** keeps the review to the local rules.
@@ -306,9 +308,17 @@ are never "optimizations").
   restored. Before the first destructive action of a session the app offers a System Restore point.
 - **No shell, no injection.** Tools are called by absolute path with argument lists; values that reach PowerShell
   travel in environment variables, never inside the script text.
+- **Never your programs with administrator rights.** While Vigil runs as administrator, anything your own account
+  controls starts with your normal rights, through Explorer: links and Settings pages, browsers, uninstallers
+  registered for your account, and Run new task without "as administrator". If Explorer does not answer, nothing
+  starts. With "as administrator", consoles and batch files run through Windows' own programs and a shortcut
+  through its target, exactly as the confirmation shows. Local AI agents (Claude Code, Codex CLI, Gemini CLI) are
+  not used while Vigil runs as administrator; use an OpenAI- or Anthropic-compatible API, or run Vigil without
+  administrator rights.
 - **Protected data folder.** When elevated, the journal, backups, quarantine and scans live in `%ProgramData%\Vigil`,
   readable only by Administrators and SYSTEM, so malware running as your user cannot tamper with what the elevated
-  app later restores. In read-only mode it uses `%LOCALAPPDATA%\Vigil`.
+  app later restores. A folder there that Vigil did not create private is moved aside (never deleted) and replaced;
+  if the folder cannot be made private, Vigil runs read-only. In read-only mode it uses `%LOCALAPPDATA%\Vigil`.
 
 ## How findings are judged
 

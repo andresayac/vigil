@@ -17,10 +17,16 @@ function ConvertTo-Iso {
     try { return ([datetime]$Value).ToString('yyyy-MM-ddTHH:mm:ss') } catch { return $null }
 }
 
-function Write-JsonFile {
-    param([string]$Path, $Data)
+# The result goes to standard output after a marker, as raw UTF-8 bytes on their own line: no
+# file is written (the collectors run elevated, and a file in a folder the user can write could be
+# changed before Vigil reads it), and the console code page cannot alter the text.
+function Write-Result {
+    param($Data)
     $json = ConvertTo-Json -InputObject $Data -Depth 8 -Compress
-    [System.IO.File]::WriteAllText($Path, $json, (New-Object System.Text.UTF8Encoding($false)))
+    $bytes = (New-Object System.Text.UTF8Encoding($false)).GetBytes("`nVIGIL-JSON:" + $json + "`n")
+    $out = [Console]::OpenStandardOutput()
+    $out.Write($bytes, 0, $bytes.Length)
+    $out.Flush()
 }
 
 function Test-IsAdmin {

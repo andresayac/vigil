@@ -1032,21 +1032,25 @@ fn affinity_plan(pid: u32, created_ms: i64, cores: &[u32], ctx: &Context<'_>) ->
 /// Run new task: the program is resolved to one existing file and the confirmation shows the exact
 /// command line that will start.
 fn run_plan(path: &str, args: &str, admin: bool) -> Result<Plan, String> {
+    use vigil_actions::run::RunMode;
     let program = vigil_actions::run::resolve_program(path).map_err(|e| e.to_string())?;
     vigil_actions::run::check_args(args).map_err(|e| e.to_string())?;
     let args = args.trim();
-    let line = vigil_actions::run::command_line(&program, args);
-    let elevated = vigil_actions::is_admin();
+    let plan = vigil_actions::run::plan(&program, args, admin, vigil_actions::is_admin()).map_err(|e| e.to_string())?;
+    // Exactly what starts (with administrator rights a console or batch file runs through its
+    // System32 host, and a shortcut through its target); the action refuses anything else.
+    let line = plan.command_line();
     let mut explain = format!("{}\n{line}\n\n", tr!("Starts this command:"));
-    explain.push_str(&if admin && !elevated {
-        tr!("Windows asks for administrator permission first.")
-    } else if elevated {
-        tr!("Vigil runs as administrator, so the program also gets administrator rights.")
-    } else {
-        tr!("It runs with your normal rights.")
+    explain.push_str(&match plan.mode {
+        RunMode::AskAdmin => tr!("Windows asks for administrator permission first."),
+        RunMode::Elevated => tr!("It runs with administrator rights."),
+        RunMode::AsUser => {
+            tr!("It runs with your normal rights, not Vigil's administrator rights: Explorer starts it for you.")
+        }
+        RunMode::Normal => tr!("It runs with your normal rights."),
     });
     let spec = spec("process.run", tr!("Run new task"), "", explain)
-        .params(json!({"path": program, "args": args, "admin": admin}))
+        .params(json!({"path": program, "args": args, "admin": admin, "command": line}))
         .group("fix")
         .irreversible()
         .no_admin();

@@ -333,9 +333,11 @@ impl Folders {
             let r = crate::paths::windows_dir().display().to_string();
             if r.is_empty() { format!(r"{drive}\Windows") } else { r }
         };
-        let program_data = var("ProgramData");
+        // System folders from Windows, not the environment (which the user controls).
+        let text = |p: std::path::PathBuf| p.display().to_string();
+        let program_data = text(crate::paths::program_data());
         let writable = [
-            var("USERPROFILE"),
+            crate::paths::profile().map(text).unwrap_or_default(),
             var("TEMP"),
             var("TMP"),
             program_data.clone(),
@@ -344,9 +346,9 @@ impl Folders {
         ];
         let protected = [
             root,
-            var("ProgramFiles"),
-            var("ProgramFiles(x86)"),
-            var("ProgramW6432"),
+            text(crate::paths::program_files()),
+            text(crate::paths::program_files_x86()),
+            text(crate::paths::program_files()),
             if program_data.is_empty() {
                 String::new()
             } else {

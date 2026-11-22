@@ -13,7 +13,7 @@ use windows::Win32::System::Services::{
 };
 use windows::core::{HSTRING, PCWSTR};
 
-use crate::cmdline::{basename, in_dir, is_abs, normalize_path, split_command};
+use crate::cmdline::{basename, expand_env, in_dir, is_abs, normalize_path, split_command};
 use crate::engine::{Builtin, Outcome, run_fn, undo_fn};
 use crate::error::{ActionError, Result, fail};
 use crate::guards::{guard_file, guard_service};
@@ -721,7 +721,9 @@ pub fn approved_location(reg_key: &str) -> Result<Option<String>> {
 
 /// The StartupApproved key of a file in a Startup folder.
 pub fn startup_folder_approved(file_path: &str) -> String {
-    let appdata = std::env::var("APPDATA").unwrap_or_default();
+    let appdata = vigil_sys::paths::roaming_app_data()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let hive = if !appdata.is_empty() && in_dir(file_path, &appdata) {
         "HKCU"
     } else {
@@ -951,6 +953,22 @@ static MSI_RE: LazyLock<Option<Regex>> = LazyLock::new(|| {
     .ok()
 });
 
+/// Whether a registry key belongs to a user's own hive (`HKCU`, `HKEY_USERS\<SID>`), which that
+/// user's programs can change.
+pub(crate) fn per_user_key(key: &str) -> bool {
+    let low = key.trim().to_ascii_lowercase();
+    [
+        "hkcu\\",
+        "hkey_current_user\\",
+        "hku\\",
+        "hkey_users\\",
+        "registry::hkey_current_user\\",
+        "registry::hkey_users\\",
+    ]
+    .iter()
+    .any(|prefix| low.starts_with(prefix))
+}
+
 fn op_program_uninstall(p: Params<'_>, _store: &Store, _id: &str) -> Result<Outcome> {
     let key = p.str_or_empty("registry_key");
     let mut command = String::new();
@@ -964,13 +982,29 @@ fn op_program_uninstall(p: Params<'_>, _store: &Store, _id: &str) -> Result<Outc
             "the program no longer lists an uninstaller (it may already be uninstalled)"
         ));
     }
+    // The confirmation showed this command: it must still be the one that runs.
+    // (Both sides expanded: the list shows REG_EXPAND_SZ values expanded.)
+    let shown = p.str_or_empty("command");
+    if !shown.trim().is_empty() && expand_env(shown.trim()) != expand_env(&command) {
+        return fail(tr!(
+            "the program's uninstall command changed after you confirmed it; nothing was started"
+        ));
+    }
+    // A per-user entry is written by the user's own programs: it runs with the user's normal
+    // rights, never with Vigil's administrator rights.
+    let as_user = per_user_key(&key) && crate::is_admin();
     let name = text_of(p.get("name"));
     if let Some(guid) = MSI_RE
         .as_ref()
         .and_then(|re| re.captures(&command))
         .and_then(|c| c.get(1))
     {
-        runner::launch(&tool("msiexec.exe"), &["/x", guid.as_str()])?;
+        let msiexec = tool("msiexec.exe");
+        if as_user {
+            crate::desktop::launch_as_user(&msiexec, &format!("/x {}", guid.as_str()), "")?;
+        } else {
+            runner::launch(&msiexec, &["/x", guid.as_str()])?;
+        }
         return Ok(Outcome::done(tr!(
             "started the Windows Installer uninstall of \"{0}\"",
             name
@@ -982,7 +1016,15 @@ fn op_program_uninstall(p: Params<'_>, _store: &Store, _id: &str) -> Result<Outc
         let shown: String = command.chars().take(200).collect();
         return fail(tr!("the uninstaller was not found: {0}", shown));
     }
-    runner::launch_raw(&program, &args)?;
+    if as_user {
+        let folder = Path::new(&program)
+            .parent()
+            .map(|d| d.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        crate::desktop::launch_as_user(&program, &args, &folder)?;
+    } else {
+        runner::launch_raw(&program, &args)?;
+    }
     Ok(Outcome::done(tr!(
         "started the uninstaller of \"{0}\"; follow its window to finish",
         name
@@ -1470,6 +1512,48 @@ pub(crate) fn builtin() -> Vec<Builtin> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn per_user_uninstallers_run_with_the_users_rights_and_as_shown() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        assert!(per_user_key(
+            r"HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\Contoso"
+        ));
+        assert!(per_user_key(
+            r"HKEY_USERS\S-1-5-21-1-2-3-1001\Software\Microsoft\Windows\CurrentVersion\Uninstall\X"
+        ));
+        assert!(!per_user_key(
+            r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Contoso"
+        ));
+
+        let sub = format!(r"Software\VigilTests\uninstall-{}", std::process::id());
+        let key = format!(r"HKCU\{sub}");
+        let notepad = format!(r"{}\notepad.exe", runner::system32().to_string_lossy());
+        let command = format!("\"{notepad}\" /uninstall");
+        crate::registry::reg_write(&key, "UninstallString", &json!({"type": "REG_SZ", "data": command}))
+            .expect("write");
+        let calls: Rc<RefCell<Vec<String>>> = Rc::default();
+        let seen = calls.clone();
+        crate::testing::set_user_launch(Some(Rc::new(move |file: &str, args: &str, _: &str| {
+            seen.borrow_mut().push(format!("{file}|{args}"));
+            Ok(())
+        })));
+        crate::testing::set_admin(Some(true));
+        let store_dir = std::env::temp_dir().join(format!("vigil-uninstall-{}", std::process::id()));
+        let store = Store::open(&store_dir).expect("store");
+        // The command shown in the confirmation is no longer the one listed: nothing starts.
+        let changed = json!({"registry_key": key, "name": "Contoso", "command": "\"C:\\Other\\u.exe\""});
+        assert!(op_program_uninstall(Params::new(&changed), &store, "").is_err());
+        assert!(calls.borrow().is_empty());
+        // As shown: Explorer starts it for the user (here the fake records it).
+        let same = json!({"registry_key": key, "name": "Contoso", "command": command});
+        op_program_uninstall(Params::new(&same), &store, "").expect("started");
+        assert_eq!(calls.borrow().as_slice(), [format!("{notepad}|/uninstall")]);
+        crate::testing::reset();
+        let _ = crate::testing::delete_scratch_key(&sub);
+        let _ = std::fs::remove_dir_all(&store_dir);
+    }
 
     #[test]
     fn task_enabled_parser() {

@@ -16,6 +16,8 @@ type SignatureFn = Rc<dyn Fn(&str) -> Option<SignatureInfo>>;
 type ServiceRegFn = Rc<dyn Fn(&str) -> Result<Map<String, Value>>>;
 type ServiceStatusFn = Rc<dyn Fn(&str) -> Option<String>>;
 type ApprovedFn = Rc<dyn Fn(&str) -> Option<String>>;
+/// Stands in for Explorer starting something as the signed-in user: (file, arguments, folder).
+pub type UserLaunchFn = Rc<dyn Fn(&str, &str, &str) -> Result<()>>;
 
 #[derive(Default)]
 struct Seams {
@@ -30,6 +32,7 @@ struct Seams {
     uninstall_root: Option<String>,
     policy_root: Option<String>,
     account_backend: Option<Rc<dyn crate::accounts::AccountBackend>>,
+    user_launch: Option<UserLaunchFn>,
 }
 
 thread_local! {
@@ -40,6 +43,16 @@ thread_local! {
 /// `None` uses Windows again.
 pub fn set_account_backend(backend: Option<Rc<dyn crate::accounts::AccountBackend>>) {
     SEAMS.with(|s| s.borrow_mut().account_backend = backend);
+}
+
+/// Replaces starting something as the signed-in user through Explorer (a fake that records the
+/// calls). `None` uses Explorer again.
+pub fn set_user_launch(launch: Option<UserLaunchFn>) {
+    SEAMS.with(|s| s.borrow_mut().user_launch = launch);
+}
+
+pub(crate) fn user_launch() -> Option<UserLaunchFn> {
+    SEAMS.with(|s| s.borrow().user_launch.clone())
 }
 
 pub(crate) fn account_backend() -> Option<Rc<dyn crate::accounts::AccountBackend>> {
@@ -123,11 +136,20 @@ pub fn delete_scratch_key(sub: &str) -> Result<()> {
 }
 
 /// The data-folder lock-down with other accounts in place of Administrators (a test cannot count
-/// on being elevated). Returns the warning it left, empty when the folder was fully restricted.
+/// on being elevated). Returns the notice it would show, empty unless an untrusted folder was
+/// moved aside.
 pub fn prepare_private_dir_as(root: &Path, owner_sid: &str, grant_sids: &[&str]) -> Result<String> {
     crate::datadir::forget_locked(root);
-    crate::datadir::prepare_private_dir(root, owner_sid, grant_sids)?;
-    Ok(crate::datadir::data_dir_warning().unwrap_or_default())
+    let moved = crate::datadir::prepare_private_dir(root, owner_sid, grant_sids)?;
+    Ok(moved
+        .map(|m| format!("{} -> {}: {}", m.root.display(), m.aside.display(), m.reason))
+        .unwrap_or_default())
+}
+
+/// Creates a folder with the security descriptor `sddl` in one step, the way the data folder is
+/// created (tests build folders with chosen permissions this way).
+pub fn create_dir_with_sddl(path: &Path, sddl: &str) -> Result<()> {
+    crate::datadir::create_with_sddl(path, sddl)
 }
 
 pub(crate) fn admin() -> Option<bool> {

@@ -1,8 +1,10 @@
 //! Inventory collection. Everything here is READ-ONLY: nothing in this module changes the system.
 //!
-//! The PowerShell collectors are embedded in the binary and written to a fresh temporary folder
-//! for each scan; the rest (startup entries, programs, browser extensions, configuration) is read
-//! directly from the registry and the file system.
+//! The PowerShell collectors are embedded in the binary and handed to PowerShell through its
+//! standard input, their results read back from its standard output: nothing they run or produce
+//! ever sits in a folder the user can write (the scan usually runs elevated). The rest (startup
+//! entries, programs, browser extensions, configuration) is read directly from the registry and
+//! the file system.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -11,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, mpsc};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use chrono::Local;
 use serde_json::{Map, Value, json};
@@ -22,66 +24,13 @@ use crate::ntpath::{WINDIR, basename, dirname, isabs, join};
 use crate::winreg::{self, Hive, RegData, View};
 use vigil_i18n::{tl, tr};
 
-// --------------------------------------------------------------------------- working folder
+// --------------------------------------------------------------------------- earlier collectors' folder
 
-/// Parent of every scan folder; events.ps1 uses it to recognise the collectors' own activity.
+/// Where earlier versions ran the collectors from (`%TEMP%\vigil-scan`). Nothing is written there
+/// any more; events.ps1 still uses it to leave out those versions' own PowerShell activity, which
+/// the event logs keep for weeks.
 pub(crate) fn scan_root() -> PathBuf {
     std::env::temp_dir().join("vigil-scan")
-}
-
-/// A fresh, uniquely named temporary folder for one scan, deleted when dropped.
-pub(crate) struct WorkDir {
-    path: PathBuf,
-}
-
-impl WorkDir {
-    pub(crate) fn create() -> std::io::Result<Self> {
-        static COUNTER: AtomicUsize = AtomicUsize::new(0);
-        let root = scan_root();
-        fs::create_dir_all(&root)?;
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let seed = format!(
-            "{}-{nanos}-{}",
-            std::process::id(),
-            COUNTER.fetch_add(1, Ordering::Relaxed)
-        );
-        let digest: String = Sha256::digest(seed.as_bytes())
-            .iter()
-            .take(8)
-            .map(|b| format!("{b:02x}"))
-            .collect();
-        let path = root.join(format!("scan-{digest}"));
-        fs::create_dir(&path)?;
-        Ok(Self { path })
-    }
-
-    pub(crate) fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
-impl Drop for WorkDir {
-    fn drop(&mut self) {
-        // Only our own fresh folder; remove_dir_all does not follow links.
-        let _ = fs::remove_dir_all(&self.path);
-    }
-}
-
-fn unique_suffix() -> String {
-    static COUNTER: AtomicUsize = AtomicUsize::new(0);
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let seed = format!("{nanos}-{}", COUNTER.fetch_add(1, Ordering::Relaxed));
-    Sha256::digest(seed.as_bytes())
-        .iter()
-        .take(4)
-        .map(|b| format!("{b:02x}"))
-        .collect()
 }
 
 // --------------------------------------------------------------------------- PowerShell collectors
@@ -97,28 +46,71 @@ const SCRIPTS: &[(&str, &str)] = &[
     ("tasks", include_str!("../ps/tasks.ps1")),
 ];
 
-/// The collectors, in `%TEMP%\vigil-scan\ps-<hash of their content>`.
-///
-/// The folder is stable across scans (PowerShell and the antivirus cache what they already
-/// checked), and every file is compared with the embedded copy before each run and rewritten
-/// when it differs, so a modified script is never run.
-fn script_dir(_workdir: &Path) -> Result<PathBuf, String> {
-    let mut digest = Sha256::new();
-    for (name, body) in SCRIPTS {
-        digest.update(name.as_bytes());
-        digest.update(body.as_bytes());
-    }
-    let tag: String = digest.finalize().iter().take(6).map(|b| format!("{b:02x}")).collect();
-    let dir = scan_root().join(format!("ps-{tag}"));
-    let fail = |e: std::io::Error| tr!("could not prepare the collectors: {0}", e);
-    fs::create_dir_all(&dir).map_err(fail)?;
-    for (name, body) in SCRIPTS {
-        let path = dir.join(format!("{name}.ps1"));
-        if fs::read(&path).ok().as_deref() != Some(body.as_bytes()) {
-            fs::write(&path, body).map_err(fail)?;
+/// The line each collector uses to load the shared helpers; replaced by the helpers themselves.
+const INCLUDE_LINE: &str = ". \"$PSScriptRoot\\_common.ps1\"";
+/// Separates the script from its input on PowerShell's standard input.
+const INPUT_SEPARATOR: &str = "<#VIGIL-INPUT#>";
+/// The marker in front of a collector's result on its standard output.
+const RESULT_MARKER: &[u8] = b"VIGIL-JSON:";
+
+/// A mark on the collectors' own command line and scripts (`VigilCollector-<hash of the
+/// scripts>`): events.ps1 leaves PowerShell activity that carries it out of the findings.
+pub(crate) fn self_mark() -> String {
+    static MARK: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    MARK.get_or_init(|| {
+        let mut digest = Sha256::new();
+        for (name, body) in SCRIPTS {
+            digest.update(name.as_bytes());
+            digest.update(body.as_bytes());
         }
+        let tag: String = digest.finalize().iter().take(6).map(|b| format!("{b:02x}")).collect();
+        format!("VigilCollector-{tag}")
+    })
+    .clone()
+}
+
+/// The text of one collector with the shared helpers in place of its include line.
+fn collector_text(script: &str) -> Result<String, String> {
+    let body = SCRIPTS
+        .iter()
+        .find(|(name, _)| *name == script)
+        .map(|(_, body)| *body)
+        .ok_or_else(|| tr!("could not prepare the collectors: {0}", script))?;
+    let common = SCRIPTS
+        .iter()
+        .find(|(name, _)| *name == "_common")
+        .map(|(_, body)| *body)
+        .unwrap_or_default();
+    if !body.contains(INCLUDE_LINE) {
+        return Err(tr!("could not prepare the collectors: {0}", script));
     }
-    Ok(dir)
+    Ok(format!("# {}\n{}", self_mark(), body.replacen(INCLUDE_LINE, common, 1)))
+}
+
+/// The `-Command` that runs a collector from standard input: the script (ASCII), then optionally
+/// its input lines (base64 of UTF-8, so no code page can alter a path). Named values arrive as
+/// `PC_ARG_<name>` environment variables and become the script's parameters. Single quotes only:
+/// the text travels as one command-line argument.
+fn bootstrap() -> String {
+    format!(
+        "$VigilMark='{mark}';$t=[Console]::In.ReadToEnd();$k=$t.IndexOf('{sep}');$global:VigilInput=@();\
+         if($k -ge 0){{$b=$t.Substring($k+{len}).Trim();if($b){{$global:VigilInput=@([Text.Encoding]::UTF8.\
+         GetString([Convert]::FromBase64String($b)).Split([char]10)|Where-Object {{$_}})}};$t=$t.Substring(0,$k)}};\
+         $a=@{{}};Get-ChildItem Env:PC_ARG_* | ForEach-Object {{$a[$_.Name.Substring(7)]=$_.Value}};\
+         $null=& ([scriptblock]::Create($t)) @a",
+        mark = self_mark(),
+        sep = INPUT_SEPARATOR,
+        len = INPUT_SEPARATOR.len(),
+    )
+}
+
+/// The JSON after the last result marker on a collector's standard output.
+fn result_json(stdout: &[u8]) -> Option<&[u8]> {
+    let start = stdout.windows(RESULT_MARKER.len()).rposition(|w| w == RESULT_MARKER)? + RESULT_MARKER.len();
+    let rest = &stdout[start..];
+    let end = rest.iter().position(|&b| b == b'\n').unwrap_or(rest.len());
+    let json = &rest[..end];
+    Some(json.strip_suffix(b"\r").unwrap_or(json))
 }
 
 /// Absolute path of Windows PowerShell (never resolved through PATH or the current directory).
@@ -322,18 +314,27 @@ pub(crate) fn read_text(path: &Path) -> std::io::Result<String> {
     Ok(String::from_utf8_lossy(bytes).into_owned())
 }
 
-/// Runs `<script>.ps1 -OutPath <file> [-Name value...]` and returns the JSON it writes.
-///
-/// The result travels through a UTF-8 file (not stdout) so it does not depend on the console code page.
+/// Runs one collector and returns the JSON it prints. The script and its input go through
+/// PowerShell's standard input and the result comes back on its standard output, so nothing is
+/// written to a folder: an elevated scan runs exactly the script built into Vigil, and its result
+/// cannot be swapped on the way. `params` become the script's named parameters (through
+/// environment variables, never inside the script text).
 fn run_collector(
     script: &str,
-    workdir: &Path,
     params: &[(&str, String)],
+    input: Option<&str>,
     timeout: u64,
     cancel: &AtomicBool,
 ) -> Result<Value, String> {
-    let dir = script_dir(workdir)?;
-    let out_path = workdir.join(format!("{script}-{}.json", unique_suffix()));
+    use base64::Engine;
+    let mut payload = collector_text(script)?;
+    if let Some(input) = input {
+        payload.push('\n');
+        payload.push_str(INPUT_SEPARATOR);
+        payload.push('\n');
+        payload.push_str(&base64::engine::general_purpose::STANDARD.encode(input.as_bytes()));
+        payload.push('\n');
+    }
     let mut command = Command::new(powershell_path());
     // -ExecutionPolicy only affects this child process: without it, the "Restricted" policy
     // prevents loading the Windows modules the collectors use.
@@ -344,21 +345,30 @@ fn run_collector(
             "-NonInteractive",
             "-ExecutionPolicy",
             "Bypass",
-            "-File",
+            "-Command",
         ])
-        .arg(dir.join(format!("{script}.ps1")))
-        .arg("-OutPath")
-        .arg(&out_path);
-    for (name, value) in params {
-        command.arg(format!("-{name}")).arg(value);
+        .arg(bootstrap());
+    for (name, _) in std::env::vars_os() {
+        if name.to_string_lossy().to_uppercase().starts_with("PC_ARG_") {
+            command.env_remove(name);
+        }
     }
-    let finished = match run_child(command, None, Duration::from_secs(timeout), cancel) {
+    for (name, value) in params {
+        command.env(format!("PC_ARG_{name}"), value);
+    }
+    // Windows' own module folder and folders: a module in the user's Documents could otherwise
+    // replace the cmdlets the collectors call.
+    #[cfg(windows)]
+    for (name, value) in vigil_sys::paths::powershell_env() {
+        command.env(name, value);
+    }
+    let finished = match run_child(command, Some(&payload), Duration::from_secs(timeout), cancel) {
         Ok(finished) => finished,
         Err(ChildError::Timeout) => return Err(tr!("{0}: timed out after {1}s", script, timeout)),
         Err(ChildError::Cancelled) => return Err(format!("{script}: cancelled")),
         Err(ChildError::Spawn(error)) => return Err(tr!("{0}: could not run PowerShell ({1})", script, error)),
     };
-    if !out_path.is_file() {
+    let Some(json) = result_json(&finished.stdout) else {
         let detail = if finished.stderr.is_empty() {
             &finished.stdout
         } else {
@@ -372,9 +382,8 @@ fn run_collector(
             code,
             last(strip(&detail), 600)
         ));
-    }
-    let text = read_text(&out_path).map_err(|e| format!("{script}: {e}"))?;
-    let _ = fs::remove_file(&out_path);
+    };
+    let text = String::from_utf8_lossy(json);
     serde_json::from_str(&text).map_err(|e| tr!("{0}: invalid JSON ({1})", script, e))
 }
 
@@ -478,13 +487,18 @@ fn lookup(state: &[(String, bool)], name: &str) -> bool {
 }
 
 pub(crate) fn startup_folders() -> Vec<String> {
+    // From Windows, not the environment: a redirected `%ProgramData%` would hide the computer's
+    // Startup folder from an elevated scan.
     let mut folders = Vec::new();
-    for var in ["APPDATA", "ProgramData"] {
-        if let Ok(base) = std::env::var(var)
-            && !base.is_empty()
-        {
-            folders.push(join(&base, &[r"Microsoft\Windows\Start Menu\Programs\Startup"]));
-        }
+    let bases = [
+        vigil_sys::paths::roaming_app_data(),
+        Some(vigil_sys::paths::program_data()),
+    ];
+    for base in bases.into_iter().flatten() {
+        folders.push(join(
+            &base.to_string_lossy(),
+            &[r"Microsoft\Windows\Start Menu\Programs\Startup"],
+        ));
     }
     folders
 }
@@ -1276,11 +1290,7 @@ pub(crate) fn collect_sysconfig() -> Value {
 // --------------------------------------------------------------------------- signatures
 
 /// Signature and version information for each path. Result key: the lower-cased path.
-pub(crate) fn collect_signatures(
-    paths: &[String],
-    workdir: &Path,
-    cancel: &AtomicBool,
-) -> Result<Map<String, Value>, String> {
+pub(crate) fn collect_signatures(paths: &[String], cancel: &AtomicBool) -> Result<Map<String, Value>, String> {
     let unique: Vec<&String> = paths
         .iter()
         .filter(|p| !p.is_empty())
@@ -1299,19 +1309,11 @@ pub(crate) fn collect_signatures(
     let outcomes: Vec<Result<Value, String>> = std::thread::scope(|scope| {
         let handles: Vec<_> = chunks
             .iter()
-            .enumerate()
-            .map(|(index, chunk)| {
+            .map(|chunk| {
                 scope.spawn(move || {
-                    let list_path = workdir.join(format!("paths-{index}.txt"));
+                    // The paths go with the script, never through a file a user could change.
                     let text = chunk.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n");
-                    fs::write(&list_path, text).map_err(|e| format!("signatures: {e}"))?;
-                    run_collector(
-                        "signatures",
-                        workdir,
-                        &[("InPath", list_path.display().to_string())],
-                        900,
-                        cancel,
-                    )
+                    run_collector("signatures", &[], Some(&text), 900, cancel)
                 })
             })
             .collect();
@@ -1479,7 +1481,13 @@ fn fill_process_paths(processes: &mut [Value]) -> usize {
 
 // --------------------------------------------------------------------------- orchestration
 
-type Job = fn(&Path, u32, &AtomicBool) -> Result<Value, String>;
+/// What a job may need besides the days: the shortcuts of the Startup folders (system.ps1 reads
+/// their targets).
+pub(crate) struct JobInput {
+    pub(crate) shortcuts: String,
+}
+
+type Job = fn(&JobInput, u32, &AtomicBool) -> Result<Value, String>;
 
 fn job_label(name: &str) -> &'static str {
     match name {
@@ -1499,32 +1507,28 @@ fn job_label(name: &str) -> &'static str {
 
 fn jobs() -> Vec<(&'static str, Job)> {
     vec![
-        ("processes", |dir, _, cancel| {
-            run_collector("processes", dir, &[], 300, cancel)
+        ("processes", |_, _, cancel| {
+            run_collector("processes", &[], None, 300, cancel)
         }),
-        ("services", |dir, _, cancel| {
-            run_collector("services", dir, &[], 300, cancel)
+        ("services", |_, _, cancel| {
+            run_collector("services", &[], None, 300, cancel)
         }),
-        ("tasks", |dir, _, cancel| run_collector("tasks", dir, &[], 300, cancel)),
-        ("network", |dir, _, cancel| {
-            run_collector("network", dir, &[], 300, cancel)
+        ("tasks", |_, _, cancel| run_collector("tasks", &[], None, 300, cancel)),
+        ("network", |_, _, cancel| {
+            run_collector("network", &[], None, 300, cancel)
         }),
-        ("system", |dir, _, cancel| {
-            run_collector(
-                "system",
-                dir,
-                &[("LnkListPath", dir.join("startup-lnk.txt").display().to_string())],
-                300,
-                cancel,
-            )
+        ("system", |input, _, cancel| {
+            run_collector("system", &[], Some(&input.shortcuts), 300, cancel)
         }),
-        ("events", |dir, days, cancel| {
-            // SelfDir lets events.ps1 recognise the collectors' own PowerShell activity (of any scan).
+        ("events", |_, days, cancel| {
+            // The collectors' own PowerShell activity is left out: SelfMark is on this version's
+            // command line and scripts, SelfDir where earlier versions ran them from.
             let params = [
                 ("Days", days.to_string()),
                 ("SelfDir", scan_root().display().to_string()),
+                ("SelfMark", self_mark()),
             ];
-            run_collector("events", dir, &params, 600, cancel)
+            run_collector("events", &params, None, 600, cancel)
         }),
         ("autoruns", |_, _, _| Ok(Value::Array(collect_autoruns()))),
         ("programs", |_, _, _| Ok(Value::Array(collect_programs()))),
@@ -1536,14 +1540,17 @@ fn jobs() -> Vec<(&'static str, Job)> {
 }
 
 /// Runs every collector in parallel and returns the raw inventory.
-pub(crate) fn collect_all(workdir: &Path, days: u32, progress: &dyn Fn(&str), cancel: &AtomicBool) -> Value {
+pub(crate) fn collect_all(days: u32, progress: &dyn Fn(&str), cancel: &AtomicBool) -> Value {
     let days = days.max(1);
     let started = Local::now();
     let lnk: Vec<String> = list_startup_files()
         .into_iter()
         .filter(|f| lower(f).ends_with(".lnk"))
         .collect();
-    let _ = fs::write(workdir.join("startup-lnk.txt"), lnk.join("\n"));
+    let input = JobInput {
+        shortcuts: lnk.join("\n"),
+    };
+    let input = &input;
 
     let jobs = jobs();
     let next = AtomicUsize::new(0);
@@ -1562,7 +1569,7 @@ pub(crate) fn collect_all(workdir: &Path, days: u32, progress: &dyn Fn(&str), ca
                     let outcome = if cancel.load(Ordering::Relaxed) {
                         Err("cancelled".to_string())
                     } else {
-                        job(workdir, days, cancel)
+                        job(input, days, cancel)
                     };
                     let seconds = t0.elapsed().as_secs_f64();
                     let message = match &outcome {
@@ -1753,14 +1760,83 @@ mod tests {
     }
 
     #[test]
-    fn work_dir_is_unique_and_removed() {
-        let a = WorkDir::create().expect("work dir");
-        let b = WorkDir::create().expect("work dir");
-        assert_ne!(a.path(), b.path());
-        let path = a.path().to_path_buf();
-        assert!(path.is_dir());
-        drop(a);
-        assert!(!path.exists());
+    fn collectors_are_composed_with_their_helpers_and_the_mark() {
+        for (name, _) in SCRIPTS.iter().filter(|(name, _)| *name != "_common") {
+            let text = collector_text(name).expect("composed");
+            assert!(text.starts_with(&format!("# {}", self_mark())), "{name}");
+            assert!(text.contains("function Write-Result"), "{name}");
+            assert!(!text.contains(INCLUDE_LINE), "{name}");
+            assert!(text.is_ascii(), "{name}");
+        }
+        assert!(collector_text("nope").is_err());
+        let boot = bootstrap();
+        assert!(boot.contains(&self_mark()));
+        assert!(!boot.contains('"'), "one command-line argument: no double quotes");
+    }
+
+    #[test]
+    fn the_result_is_the_last_marked_line() {
+        let out = b"WARNING: something\r\nVIGIL-JSON:{\"a\":1}\r\nnoise\nVIGIL-JSON:{\"b\":2}\n";
+        assert_eq!(result_json(out), Some(&b"{\"b\":2}"[..]));
+        assert_eq!(result_json(b"no marker here"), None);
+        assert_eq!(result_json(b"VIGIL-JSON:[1]"), Some(&b"[1]"[..]));
+    }
+
+    #[test]
+    #[ignore = "a real read-only scan: run by hand"]
+    fn every_collector_runs_and_answers() {
+        let cancel = AtomicBool::new(false);
+        let lines = Mutex::new(Vec::new());
+        let progress = |line: &str| {
+            if let Ok(mut lines) = lines.lock() {
+                lines.push(line.to_string());
+            }
+        };
+        let raw = collect_all(7, &progress, &cancel);
+        let lines = lines.into_inner().unwrap_or_default();
+        // Counts only: no data from this computer is printed.
+        for (name, _) in jobs() {
+            let ok = lines
+                .iter()
+                .any(|l| l.trim_start().starts_with("ok ") && l.contains(job_label(name)));
+            println!("{name:<20} {}", if ok { "ok" } else { "FAILED" });
+        }
+        let failed: Vec<&String> = lines.iter().filter(|l| l.trim_start().starts_with('!')).collect();
+        assert!(failed.is_empty(), "{failed:?}");
+        assert!(!list(raw.at("processes")).is_empty());
+        assert!(raw.at("events").is_object());
+        // The collectors' own PowerShell (this run's included) never shows up as a finding.
+        let mark = self_mark();
+        let events = raw.at("events");
+        for entry in list(events.at("ps_commands"))
+            .iter()
+            .chain(list(events.at("ps_scriptblocks")).iter())
+        {
+            let text = entry.to_string();
+            assert!(!text.contains(&mark), "own activity listed");
+            assert!(!text.contains("VIGIL-INPUT"), "own activity listed");
+        }
+    }
+
+    #[test]
+    #[ignore = "starts PowerShell: run by hand"]
+    fn a_collector_runs_from_standard_input_with_its_input() {
+        let cancel = AtomicBool::new(false);
+        let paths = format!(
+            "{}\n{}",
+            vigil_sys::paths::system_dir().join("notepad.exe").display(),
+            std::env::temp_dir().join("vigil-\u{e9}t\u{e9}-missing.exe").display()
+        );
+        let data = run_collector("signatures", &[], Some(&paths), 120, &cancel).expect("runs");
+        let files = list(data.at("files"));
+        assert_eq!(files.len(), 2, "{data}");
+        assert!(
+            files
+                .iter()
+                .any(|f| f.at("path").as_str().is_some_and(|p| p.contains('\u{e9}')))
+        );
+        let processes = run_collector("processes", &[], None, 120, &cancel).expect("runs");
+        assert!(!list(processes.at("processes")).is_empty());
     }
 
     #[test]

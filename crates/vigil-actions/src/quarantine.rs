@@ -200,7 +200,15 @@ pub fn restore_quarantined(qid: &str, store: &Store) -> Result<String> {
     if target.is_empty() {
         return fail(tr!("the quarantine record is damaged: it has no original path"));
     }
-    if Path::new(&target).exists() {
+    // The record lives in the administrators-only data folder, but the folders on the way to the
+    // original place may be anyone's: the file is written only through folders that are not links,
+    // never over an existing file, and only where a quarantined file could have come from.
+    let target = normalize_path(&target);
+    if crate::cmdline::is_remote_path(&target) || !local_absolute(&target) {
+        return fail(tr!("the original place is not a local folder: {0}", target));
+    }
+    guard_file(&target, false)?;
+    if Path::new(&target).exists() || fs::symlink_metadata(&target).is_ok() {
         let scheduled = meta.get("state").and_then(Value::as_str) == Some("scheduled");
         return fail(tr!(
             "a file already exists at {0}{1}",
@@ -213,34 +221,218 @@ pub fn restore_quarantined(qid: &str, store: &Store) -> Result<String> {
         ));
     }
     let folder = dirname(&target);
-    if !folder.is_empty() {
-        fs::create_dir_all(&folder)
-            .map_err(|e| ActionError::new(tr!("could not create {0}: {1}", folder, io_text(&e))))?;
-    }
-    let tmp = format!("{target}.pc-restore");
-    let sha256 = copy_masked(&blob, Path::new(&tmp), false)
-        .map_err(|e| ActionError::new(tr!("could not restore: {0}", io_text(&e))))?;
+    let held = safe_folder(&folder)?;
+    let mut output = create_in(&held, &target)?;
+    let sha256 = match unmask_into(&blob, &mut output) {
+        Ok(sha) => sha,
+        Err(e) => {
+            discard(&output);
+            return fail(tr!("could not restore: {0}", io_text(&e)));
+        }
+    };
     if Some(sha256.as_str()) != meta.get("sha256").and_then(Value::as_str) {
-        let _ = fs::remove_file(&tmp);
+        discard(&output);
         return fail(tr!(
             "the quarantined copy is damaged (hash mismatch); it was not restored"
         ));
     }
-    fs::rename(&tmp, &target).map_err(|e| {
-        let _ = fs::remove_file(&tmp);
-        ActionError::new(tr!("could not restore: {0}", io_text(&e)))
-    })?;
     let modified = meta.get("modified").and_then(Value::as_f64).filter(|m| *m != 0.0);
-    if let Some(modified) = modified
-        && let Ok(file) = fs::OpenOptions::new().write(true).open(&target)
-    {
+    if let Some(modified) = modified {
         let time = std::time::UNIX_EPOCH + std::time::Duration::from_secs_f64(modified.max(0.0));
-        let _ = file.set_times(fs::FileTimes::new().set_modified(time).set_accessed(time));
+        let _ = output.set_times(fs::FileTimes::new().set_modified(time).set_accessed(time));
     }
+    drop(output);
+    drop(held);
     let _ = fs::remove_file(&blob);
     let _ = fs::remove_file(&meta_path);
     let name = meta.get("name").and_then(Value::as_str).unwrap_or(qid);
     Ok(format!("restored {name} to {target}"))
+}
+
+/// `C:\...`: a drive letter and an absolute path (no `\\?\`, UNC or device names).
+fn local_absolute(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    bytes.len() > 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'\\'
+}
+
+/// The folders from the drive root to `folder`, each opened without following a link and held
+/// open without delete sharing, so none of them can be renamed or swapped while the file is
+/// written. A missing folder is created (one level at a time, each checked the same way). Any
+/// link (junction, symbolic link, mount point) on the way refuses the restore.
+struct HeldFolders {
+    /// Held open (root first, `folder` last) until the file is written: that is their purpose.
+    _handles: Vec<File>,
+    /// `folder` as Windows names it (long names, the drive's real letter).
+    real: String,
+}
+
+fn safe_folder(folder: &str) -> Result<HeldFolders> {
+    use std::os::windows::fs::OpenOptionsExt;
+    const BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    const READ_ATTRIBUTES: u32 = 0x0080;
+    const SHARE_READ_WRITE: u32 = 0x1 | 0x2;
+    let parts: Vec<&str> = folder.trim_end_matches('\\').split('\\').collect();
+    let mut handles = Vec::with_capacity(parts.len());
+    let mut path = String::new();
+    for (i, part) in parts.iter().enumerate() {
+        if part.is_empty() {
+            return fail(tr!("the original place is not a local folder: {0}", folder));
+        }
+        path.push_str(part);
+        if i == 0 {
+            path.push('\\');
+        }
+        if !Path::new(&path).exists() && fs::symlink_metadata(&path).is_err() {
+            fs::create_dir(&path).map_err(|e| ActionError::new(tr!("could not create {0}: {1}", path, io_text(&e))))?;
+        }
+        let open = |share: u32| {
+            fs::OpenOptions::new()
+                .access_mode(READ_ATTRIBUTES)
+                .share_mode(share)
+                .custom_flags(BACKUP_SEMANTICS | OPEN_REPARSE_POINT)
+                .open(&path)
+        };
+        // Without delete sharing, nobody can rename this folder or replace it while it is held; a
+        // program that already holds it for deletion only loses that lock (the real path is
+        // still checked below).
+        let handle = open(SHARE_READ_WRITE)
+            .or_else(|_| open(SHARE_READ_WRITE | 0x4))
+            .map_err(|e| ActionError::new(tr!("could not open {0}: {1}", path, io_text(&e))))?;
+        let meta = handle
+            .metadata()
+            .map_err(|e| ActionError::new(tr!("could not open {0}: {1}", path, io_text(&e))))?;
+        if is_reparse(&meta) || !meta.is_dir() {
+            return fail(tr!("{0} is a link; the file was not restored", path));
+        }
+        handles.push(handle);
+        if i > 0 {
+            path.push('\\');
+        }
+    }
+    let last = handles
+        .last()
+        .ok_or_else(|| ActionError::new(tr!("the original place is not a local folder: {0}", folder)))?;
+    let real = final_path(last).ok_or_else(|| ActionError::new(tr!("could not open {0}", folder)))?;
+    if !real.eq_ignore_ascii_case(&long_name(folder)) {
+        return fail(tr!(
+            "{0} is reached through a link ({1}); the file was not restored",
+            folder,
+            real
+        ));
+    }
+    Ok(HeldFolders {
+        _handles: handles,
+        real,
+    })
+}
+
+/// Creates `target` (a new file, never an existing one) in the held folder and checks Windows
+/// put it there.
+fn create_in(held: &HeldFolders, target: &str) -> Result<File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    const OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .share_mode(0)
+        .access_mode(0x0012_0116 | 0x0001_0000 | 0x0012_0089)
+        .custom_flags(OPEN_REPARSE_POINT)
+        .open(target)
+        .map_err(|e| ActionError::new(tr!("could not restore: {0}", io_text(&e))))?;
+    let name = basename(target);
+    let expected = format!("{}\\{}", held.real.trim_end_matches('\\'), name);
+    match final_path(&file) {
+        Some(real) if real.eq_ignore_ascii_case(&expected) => Ok(file),
+        other => {
+            discard(&file);
+            fail(tr!(
+                "{0} is reached through a link ({1}); the file was not restored",
+                target,
+                other.unwrap_or_default()
+            ))
+        }
+    }
+}
+
+/// Marks a file this restore created for deletion when its handle closes.
+fn discard(file: &File) {
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::Storage::FileSystem::{FILE_DISPOSITION_INFO, FileDispositionInfo, SetFileInformationByHandle};
+    let info = FILE_DISPOSITION_INFO { DeleteFile: true };
+    // SAFETY: the handle is open (with DELETE access) for the call; `info` outlives it.
+    let _ = unsafe {
+        SetFileInformationByHandle(
+            HANDLE(file.as_raw_handle()),
+            FileDispositionInfo,
+            std::ptr::from_ref(&info).cast(),
+            size_of::<FILE_DISPOSITION_INFO>() as u32,
+        )
+    };
+}
+
+fn is_reparse(meta: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    meta.file_attributes() & 0x400 != 0
+}
+
+/// The path Windows has for an open file or folder (`C:\...`, long names).
+fn final_path(file: &File) -> Option<String> {
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::Storage::FileSystem::{FILE_NAME_NORMALIZED, GetFinalPathNameByHandleW};
+    let mut buffer = vec![0u16; 1024];
+    for _ in 0..2 {
+        // SAFETY: the handle is open for the call; `buffer` is writable for its whole length.
+        let length =
+            unsafe { GetFinalPathNameByHandleW(HANDLE(file.as_raw_handle()), &mut buffer, FILE_NAME_NORMALIZED) }
+                as usize;
+        if length == 0 {
+            return None;
+        }
+        if length < buffer.len() {
+            let text = String::from_utf16_lossy(&buffer[..length]);
+            let text = text.strip_prefix(r"\\?\").unwrap_or(&text).to_string();
+            return (!text.starts_with(r"UNC\")).then_some(text);
+        }
+        buffer.resize(length + 1, 0);
+    }
+    None
+}
+
+/// `path` with short (8.3) names expanded and nothing else resolved: a junction keeps its name.
+fn long_name(path: &str) -> String {
+    use windows::Win32::Storage::FileSystem::GetLongPathNameW;
+    let wide: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut buffer = vec![0u16; 1024];
+    // SAFETY: `wide` is NUL-terminated; `buffer` is writable for its whole length.
+    let length = unsafe { GetLongPathNameW(PCWSTR(wide.as_ptr()), Some(&mut buffer)) } as usize;
+    if length == 0 || length >= buffer.len() {
+        return path.to_string();
+    }
+    String::from_utf16_lossy(&buffer[..length])
+}
+
+/// Copies the quarantined (masked) copy into `output`; returns the SHA-256 of the plain content.
+fn unmask_into(blob: &Path, output: &mut File) -> std::io::Result<String> {
+    let mut input = File::open(blob)?;
+    let mut digest = Sha256::new();
+    let mut buffer = vec![0u8; CHUNK];
+    let mut offset = 0u64;
+    loop {
+        let read = read_full(&mut input, &mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        let plain = mask(&buffer[..read], offset);
+        digest.update(&plain);
+        output.write_all(&plain)?;
+        offset += read as u64;
+    }
+    output.flush()?;
+    Ok(digest.finalize().iter().map(|b| format!("{b:02x}")).collect())
 }
 
 /// Deletes the quarantined copy and its record for good.

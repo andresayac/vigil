@@ -29,8 +29,11 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// Where Microsoft Defender's command-line tool lives (not checked: see `ops::mpcmdrun`).
 pub(crate) fn mpcmdrun_path() -> String {
-    let base = std::env::var("ProgramFiles").unwrap_or_else(|_| r"C:\Program Files".to_string());
-    format!("{base}\\Windows Defender\\MpCmdRun.exe")
+    // From Windows, never `%ProgramFiles%`: the user's environment could point it at a copy.
+    vigil_sys::paths::program_files()
+        .join(r"Windows Defender\MpCmdRun.exe")
+        .to_string_lossy()
+        .into_owned()
 }
 
 fn now_ms() -> i64 {

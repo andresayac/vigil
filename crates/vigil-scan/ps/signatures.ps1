@@ -1,12 +1,8 @@
 # Authenticode signature and version information for a list of files (read-only).
-# InPath: UTF-8 text file with one path per line.
-param(
-    [Parameter(Mandatory = $true)][string]$InPath,
-    [Parameter(Mandatory = $true)][string]$OutPath
-)
+# The paths arrive in $global:VigilInput, one per line (sent with the script, never through a file).
 . "$PSScriptRoot\_common.ps1"
 
-$paths = [System.IO.File]::ReadAllLines($InPath, [System.Text.Encoding]::UTF8)
+$paths = @($global:VigilInput)
 $files = New-Object System.Collections.ArrayList
 
 foreach ($p in $paths) {
@@ -62,4 +58,4 @@ foreach ($p in $paths) {
     [void]$files.Add($r)
 }
 
-Write-JsonFile $OutPath @{ files = @($files) }
+Write-Result @{ files = @($files) }

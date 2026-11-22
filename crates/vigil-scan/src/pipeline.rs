@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 use chrono::Local;
 use serde_json::Value;
 
-use crate::collect::read_text;
 use crate::engine::sort_for_report;
 use crate::error::ScanError;
 use crate::lenient::{Get, list};
@@ -79,7 +78,10 @@ pub fn attach_changes(analysis: &mut Analysis, base: &Path) -> Option<crate::dif
 
 /// Opens a saved `-report.json`.
 pub fn load_report(path: &Path) -> Result<Analysis, ScanError> {
-    let text = read_text(path).map_err(|e| ScanError::io(path, e))?;
+    let bytes =
+        crate::limits::read_capped(path, crate::limits::MAX_REPORT_BYTES).map_err(|e| ScanError::io(path, e))?;
+    let bytes = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&bytes);
+    let text = String::from_utf8_lossy(bytes);
     let data: Value = serde_json::from_str(&text)
         .map_err(|e| ScanError::InvalidReport(tr!("not a Vigil report (invalid JSON: {0})", e)))?;
     if !data.as_object().is_some_and(|m| m.contains_key("items")) {

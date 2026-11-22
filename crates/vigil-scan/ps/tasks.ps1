@@ -1,5 +1,4 @@
 # Scheduled tasks (read-only).
-param([Parameter(Mandatory = $true)][string]$OutPath)
 . "$PSScriptRoot\_common.ps1"
 
 function Get-ComServer {
@@ -65,4 +64,4 @@ try {
     })
 } catch { Add-Note 'tasks' $_.Exception.Message }
 
-Write-JsonFile $OutPath @{ tasks = $tasks; notes = @($script:Notes) }
+Write-Result @{ tasks = $tasks; notes = @($script:Notes) }

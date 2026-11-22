@@ -1,0 +1,4 @@
+# The C runtime is linked into the executables, so vigil.exe needs no VCRUNTIME140.dll: a copy
+# placed next to a portable vigil.exe could otherwise be loaded when it runs as administrator.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

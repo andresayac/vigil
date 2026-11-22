@@ -74,17 +74,22 @@ static URL_RE: LazyLock<Option<Regex>> =
     LazyLock::new(|| Regex::new(r"(?i)^(https://|windowsdefender://|ms-settings:)").ok());
 
 /// Opens a link in the default browser or app (only https, Windows Security and Settings links).
+/// The program that opens a link is the one the user's own registrations name, which any program
+/// can change: while Vigil runs as administrator it is started with the user's normal rights,
+/// through Explorer (see `desktop`).
 pub fn open_url(url: &str) -> Result<()> {
     if !URL_RE.as_ref().is_some_and(|re| re.is_match(url)) {
         return fail(tr!("only https, Windows Security and Settings links are opened"));
     }
-    let wide = HSTRING::from(url);
-    // SAFETY: `wide` outlives the call.
-    let result = unsafe { ShellExecuteW(None, w!("open"), &wide, PCWSTR::null(), PCWSTR::null(), SW_SHOWNORMAL) };
-    if (result.0 as isize) <= 32 {
-        return fail(tr!("Windows could not open the link"));
-    }
-    Ok(())
+    crate::desktop::launch_unelevated(url, "", "", || {
+        let wide = HSTRING::from(url);
+        // SAFETY: `wide` outlives the call.
+        let result = unsafe { ShellExecuteW(None, w!("open"), &wide, PCWSTR::null(), PCWSTR::null(), SW_SHOWNORMAL) };
+        if (result.0 as isize) <= 32 {
+            return fail(tr!("Windows could not open the link"));
+        }
+        Ok(())
+    })
 }
 
 const CONSOLES: [&str; 6] = [
@@ -208,13 +213,15 @@ fn browser_exe(browser: &str, exe: &str) -> Option<String> {
     }
 }
 
-/// Opens a browser's extensions page.
+/// Opens a browser's extensions page. A browser is the user's own program (it may live in the
+/// user's folders and be replaced by any program they run): while Vigil runs as administrator it
+/// is started with the user's normal rights, through Explorer, never with Vigil's.
 pub fn open_browser_extensions(browser: &str) -> Result<()> {
     let Some((_, exe, page)) = BROWSERS.iter().find(|(name, _, _)| *name == browser) else {
         return fail(tr!("unknown browser {0}", browser));
     };
     match browser_exe(browser, exe) {
-        Some(path) => launch(&path, &[page]),
+        Some(path) => crate::desktop::launch_unelevated(&path, page, "", || launch(&path, &[page])),
         None => fail(tr!("{0} was not found; open {1} in it yourself", browser, page)),
     }
 }
@@ -222,4 +229,39 @@ pub fn open_browser_extensions(browser: &str) -> Result<()> {
 /// Whether Vigil knows how to open this browser's extensions page.
 pub fn known_browser(browser: &str) -> bool {
     BROWSERS.iter().any(|(name, _, _)| *name == browser)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    #[test]
+    fn links_open_with_the_users_rights_while_vigil_is_elevated() {
+        let calls: Rc<RefCell<Vec<String>>> = Rc::default();
+        let seen = calls.clone();
+        crate::testing::set_user_launch(Some(Rc::new(move |file: &str, args: &str, _: &str| {
+            seen.borrow_mut().push(format!("{file}|{args}"));
+            Ok(())
+        })));
+        crate::testing::set_admin(Some(true));
+        open_url("ms-settings:windowsupdate").expect("opened");
+        open_url("windowsdefender://threat").expect("opened");
+        assert_eq!(
+            calls.borrow().as_slice(),
+            ["ms-settings:windowsupdate|", "windowsdefender://threat|"]
+        );
+        // Anything else is refused before any launch.
+        for bad in [
+            "http://example.com",
+            "file:///C:/Windows/notepad.exe",
+            "mscfile:x",
+            r"C:\Tools\x.exe",
+        ] {
+            assert!(open_url(bad).is_err(), "{bad}");
+        }
+        assert_eq!(calls.borrow().len(), 2);
+        crate::testing::reset();
+    }
 }

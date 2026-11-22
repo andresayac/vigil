@@ -81,6 +81,7 @@ const OP_LABELS: &[(&str, &str)] = &[
         tl!("Send duplicate copies to Recycle Bin"),
     ),
     ("vigil.autostart", tl!("Start with Windows")),
+    ("vigil.data_folder", tl!("Data folder moved aside")),
 ];
 
 /// The History name of an operation, in the current language; an unknown operation is shown by its id.

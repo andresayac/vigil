@@ -1,5 +1,4 @@
 # Running processes (read-only).
-param([Parameter(Mandatory = $true)][string]$OutPath)
 . "$PSScriptRoot\_common.ps1"
 
 $processes = @()
@@ -18,4 +17,4 @@ try {
     })
 } catch { Add-Note 'processes' $_.Exception.Message }
 
-Write-JsonFile $OutPath @{ processes = $processes; notes = @($script:Notes) }
+Write-Result @{ processes = $processes; notes = @($script:Notes) }
