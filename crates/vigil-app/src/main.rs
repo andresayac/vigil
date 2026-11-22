@@ -28,6 +28,8 @@ mod data;
 mod demo;
 mod demo_pages;
 mod dialogs;
+#[cfg(test)]
+mod docs_check;
 mod format;
 mod groups;
 mod i18n;

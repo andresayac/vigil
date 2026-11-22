@@ -74,16 +74,25 @@ pub fn is_newer(latest: &str, current: &str) -> bool {
     }
 }
 
-/// A release page of Vigil's repository: `https://github.com/andresayac/vigil/releases/...` with
-/// only plain characters after it (no query, fragment, credentials or spaces).
+/// The release page of a plain version: `https://github.com/andresayac/vigil/releases/tag/v2.4.0`.
+pub fn release_url(version: (u64, u64, u64)) -> String {
+    let (major, minor, patch) = version;
+    format!("{RELEASES_PREFIX}tag/v{major}.{minor}.{patch}")
+}
+
+/// A release page of Vigil's repository, and nothing else: exactly
+/// `https://github.com/andresayac/vigil/releases/tag/v{x.y.z}` for a plain version. Download
+/// links, other paths, queries and fragments are refused.
 pub fn valid_release_url(url: &str) -> bool {
-    let Some(rest) = url.strip_prefix(RELEASES_PREFIX) else {
-        return false;
-    };
-    !rest.is_empty()
-        && rest.len() <= 80
-        && rest.chars().all(|c| c.is_ascii_alphanumeric() || "-_./".contains(c))
-        && !rest.contains("..")
+    url.strip_prefix(RELEASES_PREFIX)
+        .and_then(|rest| rest.strip_prefix("tag/"))
+        .and_then(parse_version)
+        .is_some_and(|version| release_url(version) == url)
+}
+
+/// [`valid_release_url`] for the page of exactly `version` ("2.4.0").
+pub fn valid_release_url_for(url: &str, version: &str) -> bool {
+    parse_version(version).is_some_and(|v| release_url(v) == url)
 }
 
 /// An asset name Vigil publishes: `Vigil_x.y.z_x64-setup.exe`, `Vigil-x.y.z-portable.exe` or
@@ -128,7 +137,8 @@ pub fn parse(body: &str) -> Result<Release, String> {
         .at("html_url")
         .as_str()
         .ok_or_else(|| tr!("The answer has no release page."))?;
-    if !valid_release_url(url) {
+    // The page must be the one of this very tag on Vigil's repository.
+    if url != release_url((major, minor, patch)) {
         return Err(tr!("The release page is not on Vigil's repository."));
     }
     let assets = value
@@ -253,7 +263,21 @@ mod tests {
         assert!(valid_release_url(
             "https://github.com/andresayac/vigil/releases/tag/v2.4.0"
         ));
+        assert!(valid_release_url_for(
+            "https://github.com/andresayac/vigil/releases/tag/v2.4.0",
+            "2.4.0"
+        ));
+        assert!(!valid_release_url_for(
+            "https://github.com/andresayac/vigil/releases/tag/v2.4.0",
+            "2.5.0"
+        ));
         for bad in [
+            // A download from the real repository, or any other path under releases/.
+            "https://github.com/andresayac/vigil/releases/download/v9.9.9/Vigil-9.9.9-portable.exe",
+            "https://github.com/andresayac/vigil/releases/latest",
+            "https://github.com/andresayac/vigil/releases/tag/v2.4.0/x",
+            "https://github.com/andresayac/vigil/releases/tag/v2.4",
+            "https://github.com/andresayac/vigil/releases/tag/v2.4.0-rc.1",
             "https://github.com/someone/vigil/releases/tag/v2.4.0",
             "https://github.com/andresayac/vigil/releases/",
             "https://github.com/andresayac/vigil/releases/tag/v2.4.0?x=1",

@@ -1183,8 +1183,9 @@ pub fn port_print(connections: &[vigil_sys::net::Connection]) -> BTreeMap<String
     out
 }
 
+/// The Windows folder. From Windows (`GetSystemWindowsDirectoryW`), not `%SystemRoot%`, which a user's environment can override.
 fn windows_folder() -> PathBuf {
-    std::env::var_os("SystemRoot").map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from)
+    vigil_sys::paths::windows_dir()
 }
 
 fn tasks_root() -> PathBuf {
@@ -1667,19 +1668,30 @@ pub fn driver_alerts(old: &BTreeMap<String, DriverPrint>, new: &BTreeMap<String,
 /// `None` when there is no readable blocklist.
 pub fn vulnerable_print(list: &[vigil_sys::hooks::Driver]) -> Option<BTreeMap<String, String>> {
     let policy = vigil_sys::drvblock::installed_policy()?;
+    // Only a list signed by Microsoft accuses a driver; any other one leaves the section unread.
+    let rules = policy.trusted_rules()?;
     let windows = vigil_sys::drvblock::windows_dir();
-    let mut out = BTreeMap::new();
-    for driver in list {
-        let path = if driver.path.trim().is_empty() {
-            format!(r"{windows}\System32\drivers\{}.sys", driver.name)
-        } else {
-            vigil_sys::netcfg::driver_file(&driver.path, &windows)
-        };
-        if let Some(Some(_)) = vigil_sys::drvblock::check_cached(&policy.rules, &path) {
-            out.insert(driver.name.to_lowercase(), path);
-        }
-    }
-    Some(out)
+    let paths: Vec<String> = list
+        .iter()
+        .map(|driver| {
+            if driver.path.trim().is_empty() {
+                format!(r"{windows}\System32\drivers\{}.sys", driver.name)
+            } else {
+                vigil_sys::netcfg::driver_file(&driver.path, &windows)
+            }
+        })
+        .collect();
+    // `None` while new or changed driver files are still being hashed in the background: the
+    // section counts as not read this round, so nothing is reported from a partial list.
+    let hits = vigil_sys::drvblock::watch_hits(rules, &paths)?;
+    Some(
+        list.iter()
+            .zip(paths)
+            .zip(hits)
+            .filter(|(_, hit)| hit.is_some())
+            .map(|((driver, path), _)| (driver.name.to_lowercase(), path))
+            .collect(),
+    )
 }
 
 /// A driver newly on the blocklist list of this computer: critical when it starts with Windows.

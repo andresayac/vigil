@@ -689,7 +689,7 @@ fn prefetch(path: &str) -> Value {
     if name.is_empty() {
         return json!({"readable": false});
     }
-    let root = std::env::var_os("SystemRoot").map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from);
+    let root = vigil_sys::paths::windows_dir();
     let Ok(entries) = std::fs::read_dir(root.join("Prefetch")) else {
         return json!({"readable": false, "note": "the Prefetch folder needs administrator rights"});
     };

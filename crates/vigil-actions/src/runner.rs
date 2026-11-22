@@ -193,8 +193,9 @@ pub(crate) fn run_system(
     SystemRunner.run(args, Duration::from_secs(timeout_secs), env)
 }
 
+/// The Windows folder. From Windows (`GetSystemWindowsDirectoryW`), not `%SystemRoot%`, which a user's environment can override.
 pub fn windir() -> PathBuf {
-    PathBuf::from(std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_string()))
+    vigil_sys::paths::windows_dir()
 }
 
 pub fn system32() -> PathBuf {

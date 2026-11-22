@@ -347,13 +347,27 @@ impl Drop for NoErrorDialogs {
     }
 }
 
+/// The Windows folder. From Windows (`GetSystemWindowsDirectoryW`), not `%SystemRoot%`, which a user's environment can override.
+pub(crate) fn windows_dir() -> PathBuf {
+    static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        let mut buffer = [0u16; 520];
+        // SAFETY: the buffer is writable for its whole length, which is the size passed.
+        let len = unsafe { windows::Win32::System::SystemInformation::GetSystemWindowsDirectoryW(Some(&mut buffer)) }
+            as usize;
+        if len == 0 || len >= buffer.len() {
+            PathBuf::from(r"C:\Windows")
+        } else {
+            PathBuf::from(String::from_utf16_lossy(&buffer[..len]))
+        }
+    })
+    .clone()
+}
+
 /// Windows PowerShell by absolute path, never resolved through PATH or the current folder. A
 /// 32-bit process on 64-bit Windows would get the redirected 32-bit System32: use Sysnative.
 pub(crate) fn powershell_path() -> PathBuf {
-    let windir = std::env::var_os("SystemRoot")
-        .or_else(|| std::env::var_os("windir"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
+    let windir = windows_dir();
     let native = if cfg!(target_pointer_width = "32") && windir.join("Sysnative").is_dir() {
         "Sysnative"
     } else {

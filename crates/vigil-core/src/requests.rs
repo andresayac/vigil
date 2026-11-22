@@ -582,8 +582,9 @@ fn startup_plan(op: &str, id: &str, ctx: &Context<'_>) -> Result<Plan, String> {
 /// component (its binary, or the DLL svchost loads for it, lives in the Windows folder). The page
 /// uses it to lock its buttons; the engine's own guard stays the authority.
 pub fn protected_service(service: &vigil_sys::services::Service) -> bool {
-    let windir = std::env::var("SystemRoot")
-        .unwrap_or_else(|_| r"C:\Windows".into())
+    let windir = vigil_sys::paths::windows_dir()
+        .display()
+        .to_string()
         .trim_end_matches('\\')
         .to_lowercase();
     let target = if service.dll.is_empty() {
@@ -1426,6 +1427,11 @@ mod tests {
         assert!(allowed_url("https://github.com/andresayac/vigil/releases/tag/v9.0.0"));
         assert!(!allowed_url("https://github.com/someone/vigil/releases/tag/v9.0.0"));
         assert!(!allowed_url("https://github.com/andresayac/vigil/releases/tag/v9?x=1"));
+        // Only the tag page of a plain version: never a download link of the repository.
+        assert!(!allowed_url(
+            "https://github.com/andresayac/vigil/releases/download/v9.0.0/Vigil-9.0.0-portable.exe"
+        ));
+        assert!(!allowed_url("https://github.com/andresayac/vigil/releases/latest"));
     }
 
     #[test]

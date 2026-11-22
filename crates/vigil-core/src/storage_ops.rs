@@ -57,10 +57,9 @@ fn in_dir(path: &str, folder: &str) -> bool {
     path == folder || path.starts_with(&format!("{folder}\\"))
 }
 
+/// The Windows folder. From Windows (`GetSystemWindowsDirectoryW`), not `%SystemRoot%`, which a user's environment can override.
 fn windir() -> String {
-    std::env::var("SystemRoot")
-        .or_else(|_| std::env::var("windir"))
-        .unwrap_or_else(|_| r"C:\Windows".into())
+    vigil_sys::paths::windows_dir().display().to_string()
 }
 
 fn count(value: u64) -> String {

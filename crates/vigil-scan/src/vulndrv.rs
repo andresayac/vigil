@@ -4,10 +4,14 @@
 //! (`System32\CodeIntegrity\driversipolicy.p7b`) offline, hashes the driver files the service
 //! database names (Authenticode, as code integrity does) and reads the code integrity log.
 //!
+//! The list is used only when its signature chains, offline, to one of Microsoft's product roots.
+//! A list that is not signed by Microsoft (or cannot be verified) never accuses a driver: it is
+//! reported as a coverage note and a configuration item instead.
+//!
 //! How it is judged:
 //! - a registered driver whose file the list names gets the `vulnerable_driver` flag on its file
 //!   item, so it is offered the usual "disable the driver" action (with undo); by hash it is
-//!   certain, by original file name it is likely (the list denies every version of those);
+//!   certain, by original file name it is likely (only rules that deny every version count);
 //! - a driver seen loaded without a service entry becomes its own config item;
 //! - drivers Windows refused to load are reported once, as information: the protection worked.
 
@@ -39,6 +43,13 @@ pub(crate) fn collect(days: u32) -> Value {
             )
         };
         notes.push(json!({"area": area, "message": message}));
+    } else if report.policy.as_ref().is_some_and(|p| !p.used) {
+        notes.push(json!({
+            "area": area,
+            "message": tr!(
+                "Windows' vulnerable driver list on this computer is not signed by Microsoft, or its signature could not be verified offline, so Vigil did not use it"
+            ),
+        }));
     } else if report.unreadable > 0 {
         notes.push(json!({
             "area": area,
@@ -56,9 +67,19 @@ pub(crate) fn collect(_days: u32) -> Value {
     json!({})
 }
 
+/// Whether the section's list may accuse drivers: not when the scan says it did not use it
+/// (its signature is not Microsoft's). Reports from before that field existed count as used.
+fn list_used(section: &Value) -> bool {
+    section.at("policy").at("used").as_bool() != Some(false)
+}
+
 /// The matches by lower-case file path (for the file items' flag).
 pub(crate) fn matches_by_path(raw: &Value) -> HashMap<String, Value> {
-    list(raw.at("sysconfig").at(SECTION).at("matches"))
+    let section = raw.at("sysconfig").at(SECTION);
+    if !list_used(section) {
+        return HashMap::new();
+    }
+    list(section.at("matches"))
         .iter()
         .map(|m| (lower(&text(m.at("path"))), m.clone()))
         .filter(|(path, _)| !path.is_empty())
@@ -82,7 +103,7 @@ pub(crate) fn flag(m: &Value) -> Flag {
     let message = if by_hash {
         tr!("on Microsoft's list of vulnerable drivers: attackers load this exact file to switch off security software")
     } else {
-        tr!("its original file name is on Microsoft's list of vulnerable drivers, which blocks every version of it")
+        tr!("its original file name is on Microsoft's list of vulnerable drivers for every version of it")
     };
     Flag::new(FLAG, weight, message)
 }
@@ -109,7 +130,35 @@ pub(crate) fn items(raw: &Value) -> Vec<Item> {
         return Vec::new();
     }
     let mut out = Vec::new();
-    for m in list(section.at("matches")) {
+    // A list Vigil did not use because its signature is not Microsoft's (or not verifiable).
+    let policy = section.at("policy");
+    if policy.at("used").as_bool() == Some(false) {
+        let state = text(policy.at("signature").at("state"));
+        let reason = text(policy.at("signature").at("reason"));
+        // A signature that does not verify at all points to a replaced file; one that verifies but
+        // cannot be traced to Microsoft offline is only a coverage gap.
+        let score = if state == "invalid" { 40 } else { 10 };
+        out.push(item(
+            "vulnerable_driver_list_unverified",
+            tr!("Windows' vulnerable driver list could not be verified"),
+            score,
+            tr!(
+                "Windows' vulnerable driver list on this computer is not signed by Microsoft, or its signature could not be verified offline ({0}), so Vigil did not use it to judge drivers. If Windows Security shows the vulnerable driver blocklist as on, Windows itself still applies its own copy; a list file that does not verify may have been replaced.",
+                if reason.is_empty() { state.clone() } else { reason.clone() }
+            ),
+            facts(vec![
+                ("path", policy.at("path").clone()),
+                ("signature", json!(state)),
+                ("reason", json!(reason)),
+            ]),
+        ));
+    }
+    let matches = if list_used(section) {
+        list(section.at("matches"))
+    } else {
+        &[]
+    };
+    for m in matches {
         // A registered driver is judged on its own file item (with its actions).
         if !text(m.at("service")).is_empty() {
             continue;
@@ -195,6 +244,35 @@ mod tests {
             assert_eq!(found.len(), 1);
             assert_eq!(text(found[0].facts.at("topic")), "vulnerable_driver_loaded");
             assert!(found[0].score >= 70, "{}", found[0].score);
+        });
+    }
+
+    #[test]
+    fn a_list_vigil_did_not_use_accuses_nothing_and_is_reported() {
+        vigil_i18n::with_language("en", || {
+            let mut data = raw(
+                json!([
+                    {"path": r"C:\Program Files\Contoso\agent.sys", "service": "contoso", "start": "boot", "rule": "name"},
+                    {"path": r"C:\Users\jdoe\fabrikam.sys", "service": "", "loaded": true, "rule": "hash"},
+                ]),
+                json!([]),
+            );
+            data["sysconfig"][SECTION]["policy"] = json!({
+                "path": r"C:\Windows\System32\CodeIntegrity\driversipolicy.p7b",
+                "used": false,
+                "signature": {"state": "intact", "reason": "the certificate chain does not end at a Microsoft product root"},
+            });
+            assert!(matches_by_path(&data).is_empty(), "no flag from an unverified list");
+            let found = items(&data);
+            assert_eq!(found.len(), 1);
+            assert_eq!(text(found[0].facts.at("topic")), "vulnerable_driver_list_unverified");
+            assert_eq!(found[0].score, 10);
+            data["sysconfig"][SECTION]["policy"]["signature"]["state"] = json!("invalid");
+            assert_eq!(
+                items(&data)[0].score,
+                40,
+                "a list whose signature fails stands out more"
+            );
         });
     }
 

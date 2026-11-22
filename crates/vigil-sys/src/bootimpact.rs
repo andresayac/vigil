@@ -156,7 +156,7 @@ enum Refused {
 
 /// The start records of this account (newest first, with their time), read without following links.
 fn startup_records() -> Result<Vec<(i64, String)>, Refused> {
-    let windows = std::env::var_os("SystemRoot").map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from);
+    let windows = crate::paths::windows_dir();
     let dir = windows.join(r"System32\wdi\LogFiles\StartupInfo");
     let entries = match std::fs::read_dir(&dir) {
         Ok(entries) => entries,

@@ -499,9 +499,7 @@ pub fn run(args: &[String]) -> i32 {
 
 /// Opens our own report with the default browser (Explorer by absolute path, argument list).
 fn open_with_default_app(path: &std::path::Path) -> std::io::Result<()> {
-    let windir = std::env::var_os("SystemRoot")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
+    let windir = vigil_sys::paths::windows_dir();
     std::process::Command::new(windir.join("explorer.exe"))
         .arg(path)
         .spawn()

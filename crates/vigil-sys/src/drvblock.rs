@@ -7,18 +7,27 @@
 //! by Microsoft, but its layout is stable and well studied; the reader below is bounded and
 //! refuses anything that does not look exactly like it.
 //!
+//! The list is used only when its signature verifies and its certificate chain ends, offline, at
+//! one of Microsoft's product roots (state "microsoft"). Anything else ("intact", "invalid",
+//! "unknown") is reported and never used to accuse a driver: a policy file planted by someone
+//! with write access to the Windows folder must not make Vigil offer to disable a security
+//! product's driver. The rules are read from the content the signature check returns, so they
+//! are exactly the signed bytes.
+//!
 //! What is used:
 //! - the deny rules that name a file by hash: the Authenticode SHA-1 and SHA-256 of the driver
 //!   (the policy also lists page hashes, which never match a whole-file hash and are harmless);
-//! - the deny rules that name a file by its original file name, with no hash.
+//! - the deny rules that name a file by its original file name with the version
+//!   65535.65535.65535.65535, which the list uses for "every version of this file".
 //!
-//! What is not used: the rules that deny a signer for some file names and versions. Matching them
-//! needs the certificates' TBS hashes and version ranges kept in later parts of the policy, and a
-//! wrong reading would accuse a fixed version of a driver. The counts are still reported.
+//! What is not used, only counted: deny-by-name rules with another version (they cover a range of
+//! versions whose exact reading is not documented; matching them by name alone would accuse a
+//! fixed version), and the rules that deny a signer for some file names and versions (matching
+//! them needs the certificates' TBS hashes and version ranges kept in later parts of the policy).
 //!
 //! Nothing is sent anywhere and nothing is executed: the policy is parsed as data, its signature
 //! is checked with the certificates it carries and the local stores only (no URL retrieval), and
-//! driver files are only read to hash them.
+//! driver files are only read, a bounded piece at a time, to hash them.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
@@ -30,11 +39,11 @@ use std::time::UNIX_EPOCH;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use windows::Win32::Security::Cryptography::{
-    CERT_CHAIN_CACHE_ONLY_URL_RETRIEVAL, CERT_CHAIN_CONTEXT, CERT_CHAIN_PARA, CERT_CHAIN_POLICY_FLAGS,
-    CERT_CHAIN_POLICY_MICROSOFT_ROOT, CERT_CHAIN_POLICY_PARA, CERT_CHAIN_POLICY_STATUS, CERT_CONTEXT,
-    CERT_NAME_SIMPLE_DISPLAY_TYPE, CRYPT_VERIFY_MESSAGE_PARA, CertFreeCertificateChain, CertFreeCertificateContext,
-    CertGetCertificateChain, CertGetNameStringW, CertVerifyCertificateChainPolicy, CryptVerifyMessageSignature,
-    MICROSOFT_ROOT_CERT_CHAIN_POLICY_CHECK_APPLICATION_ROOT_FLAG, PKCS_7_ASN_ENCODING, X509_ASN_ENCODING,
+    CERT_CHAIN_CACHE_ONLY_URL_RETRIEVAL, CERT_CHAIN_CONTEXT, CERT_CHAIN_PARA, CERT_CONTEXT,
+    CERT_FIND_EXT_ONLY_ENHKEY_USAGE_FLAG, CERT_NAME_SIMPLE_DISPLAY_TYPE, CERT_OPEN_STORE_FLAGS, CERT_STORE_PROV_PKCS7,
+    CRYPT_INTEGER_BLOB, CRYPT_VERIFY_MESSAGE_PARA, CTL_USAGE, CertCloseStore, CertFreeCertificateChain,
+    CertFreeCertificateContext, CertGetCertificateChain, CertGetEnhancedKeyUsage, CertGetNameStringW, CertOpenStore,
+    CryptVerifyMessageSignature, HCERTSTORE, PKCS_7_ASN_ENCODING, X509_ASN_ENCODING,
 };
 use windows::Win32::System::ProcessStatus::{EnumDeviceDrivers, GetDeviceDriverFileNameW};
 
@@ -67,8 +76,10 @@ pub struct Rules {
     pub file_rules: u32,
     /// Deny rules by hash (Authenticode and page hashes, SHA-1 and SHA-256).
     pub hash_rules: usize,
-    /// Deny rules by original file name.
+    /// Deny rules by original file name that cover every version (checked).
     pub name_rules: usize,
+    /// Deny rules by original file name limited to some versions (counted, not checked).
+    pub versioned_name_rules: usize,
     /// File attributes used by signer rules (not checked).
     pub attribute_rules: usize,
     /// Signer rules (not checked).
@@ -84,7 +95,7 @@ pub struct Rules {
 pub enum Hit {
     /// Its Authenticode hash is listed: this exact file is a known vulnerable driver.
     Hash,
-    /// Its original file name is listed (every version of that driver is denied).
+    /// Its original file name is listed for every version of that file.
     Name,
 }
 
@@ -188,7 +199,8 @@ pub fn parse_policy(bin: &[u8]) -> Option<Rules> {
                 .collect::<Vec<_>>(),
         );
         let _reserved = r.u32()?;
-        r.bytes(8)?; // minimum file version
+        // The file version (revision, build, minor, major); all 65535 means every version.
+        let every_version = r.bytes(8)?.iter().all(|b| *b == 0xff);
         let hash_len = r.u32()?;
         if hash_len > MAX_HASH_BYTES {
             return None;
@@ -207,8 +219,12 @@ pub fn parse_policy(bin: &[u8]) -> Option<Rules> {
                     rules.sha256.insert(h);
                     rules.hash_rules += 1;
                 } else if hash.is_empty() && !name.trim().is_empty() && name.trim() != "*" {
-                    rules.names.insert(name.trim().to_lowercase());
-                    rules.name_rules += 1;
+                    if every_version {
+                        rules.names.insert(name.trim().to_lowercase());
+                        rules.name_rules += 1;
+                    } else {
+                        rules.versioned_name_rules += 1;
+                    }
                 }
             }
             2 => rules.attribute_rules += 1,
@@ -241,151 +257,367 @@ fn element(buf: &[u8], pos: usize) -> Option<(u8, usize, usize)> {
 /// `1.2.840.113549.1.7.2`, PKCS#7 signed data.
 const SIGNED_DATA: [u8; 9] = [0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x07, 0x02];
 
-/// The content of a PKCS#7 signed message (`ContentInfo` → `SignedData` → encapsulated content);
-/// `None` when the structure is not exactly that.
-pub fn pkcs7_content(der: &[u8]) -> Option<&[u8]> {
-    let (tag, outer, _) = element(der, 0)?;
-    if tag != 0x30 {
-        return None;
-    }
-    let (tag, oid, oid_len) = element(der, outer)?;
-    if tag != 0x06 || der.get(oid..oid + oid_len)? != SIGNED_DATA {
-        return None;
-    }
-    let (tag, explicit, _) = element(der, oid + oid_len)?;
-    if tag != 0xa0 {
-        return None;
-    }
-    let (tag, signed, _) = element(der, explicit)?;
-    if tag != 0x30 {
-        return None;
-    }
-    let (tag, version, version_len) = element(der, signed)?;
-    if tag != 0x02 {
-        return None;
-    }
-    let (tag, algorithms, algorithms_len) = element(der, version + version_len)?;
-    if tag != 0x31 {
-        return None;
-    }
-    let (tag, info, _) = element(der, algorithms + algorithms_len)?;
-    if tag != 0x30 {
-        return None;
-    }
-    let (tag, content_type, content_type_len) = element(der, info)?;
-    if tag != 0x06 {
-        return None;
-    }
-    let (tag, wrapped, _) = element(der, content_type + content_type_len)?;
-    if tag != 0xa0 {
-        return None;
-    }
-    let (tag, content, content_len) = element(der, wrapped)?;
-    if tag != 0x04 {
-        return None;
-    }
-    der.get(content..content + content_len)
+/// One DER element of `tag` at `pos` that ends within `end` (its parent's end): where its content
+/// starts and where it ends.
+fn child(buf: &[u8], pos: usize, end: usize, tag: u8) -> Option<(usize, usize)> {
+    let (found, start, len) = element(buf, pos)?;
+    let stop = start.checked_add(len)?;
+    (found == tag && stop <= end).then_some((start, stop))
 }
+
+/// The content of a PKCS#7 signed message (`ContentInfo` → `SignedData` → encapsulated content);
+/// `None` when the structure is not exactly that. Every element must lie within its parent.
+///
+/// This walk does not verify anything: it is only used to tell the version and counts of a policy
+/// whose signature does not verify. The rules Vigil checks drivers against come from the content
+/// the signature check itself returns (see [`verify`]).
+pub fn pkcs7_content(der: &[u8]) -> Option<&[u8]> {
+    let (outer, outer_end) = child(der, 0, der.len(), 0x30)?;
+    let (oid, oid_end) = child(der, outer, outer_end, 0x06)?;
+    if der.get(oid..oid_end)? != SIGNED_DATA {
+        return None;
+    }
+    let (explicit, explicit_end) = child(der, oid_end, outer_end, 0xa0)?;
+    let (signed, signed_end) = child(der, explicit, explicit_end, 0x30)?;
+    let (_, version_end) = child(der, signed, signed_end, 0x02)?;
+    let (_, algorithms_end) = child(der, version_end, signed_end, 0x31)?;
+    let (info, info_end) = child(der, algorithms_end, signed_end, 0x30)?;
+    let (_, content_type_end) = child(der, info, info_end, 0x06)?;
+    let (wrapped, wrapped_end) = child(der, content_type_end, info_end, 0xa0)?;
+    let (content, content_end) = child(der, wrapped, wrapped_end, 0x04)?;
+    der.get(content..content_end)
+}
+
+/// Microsoft's product root certificates (SHA-1 thumbprints) that Windows and its code integrity
+/// policies chain to. The development, test, time-stamping and identity roots are left out on
+/// purpose: a policy signed under them is not Windows' own list.
+const MICROSOFT_ROOTS: [(&str, &str); 5] = [
+    (
+        "3b1efd3a66ea28b16697394703a72ca340a05bd5",
+        "Microsoft Root Certificate Authority 2010",
+    ),
+    (
+        "8f43288ad272f3103b6fb1428485ea3014c0bcfe",
+        "Microsoft Root Certificate Authority 2011",
+    ),
+    (
+        "cdd4eeae6000ac7f40c3802c171e30148030c072",
+        "Microsoft Root Certificate Authority",
+    ),
+    ("a43489159a520f0d93d032ccaf37e7fe20a8b419", "Microsoft Root Authority"),
+    (
+        "06f1aa330b927b753a40e68cdf22e34bcbef3352",
+        "Microsoft ECC Product Root Certificate Authority 2018",
+    ),
+];
+
+/// Chain errors that do not make a Microsoft signature less Microsoft's: an expired certificate
+/// (policies are signed with certificates that later expire), and revocation that cannot be
+/// checked offline. Anything else (a partial chain, an untrusted or unknown root, a bad signature
+/// between certificates, a revoked certificate) refuses the list.
+const TOLERATED_CHAIN_ERRORS: u32 = 0x0000_0001 // CERT_TRUST_IS_NOT_TIME_VALID
+    | 0x0000_0002 // CERT_TRUST_IS_NOT_TIME_NESTED
+    | 0x0000_0040 // CERT_TRUST_REVOCATION_STATUS_UNKNOWN
+    | 0x0100_0000; // CERT_TRUST_IS_OFFLINE_REVOCATION
 
 /// What the signature of the policy shows.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct Signature {
-    /// "microsoft": the signature is valid and its chain ends at a Microsoft root;
-    /// "intact": the signature is valid, but its chain cannot be completed offline (the
-    /// intermediate certificate is neither in the file nor in the local stores);
-    /// "invalid": the signature does not verify; "unknown": the check could not run.
+    /// "microsoft": the signature verifies, its chain is complete offline and ends at one of
+    /// Microsoft's product roots, and the signer is Microsoft's: the list is used.
+    /// "intact": the signature verifies against the certificate the message carries, but no such
+    /// chain could be built offline (an intermediate is missing, the root is unknown, untrusted or
+    /// not a Microsoft product root, or the signer is not Microsoft's). A self-signed message is
+    /// "intact" too: the list is not used.
+    /// "invalid": the signature does not verify, or nobody signed the message: not used.
+    /// "unknown": the check could not run: not used.
     pub state: String,
     /// The signing certificate's name ("Microsoft Windows").
     pub signer: String,
+    /// The root the chain ended at ("Microsoft Root Certificate Authority 2010"), when one was
+    /// built.
+    pub root: String,
+    /// Why the list was not used, in short English (empty when it was).
+    pub reason: String,
 }
 
-/// The signature of a PKCS#7 signed message. Only the certificates in the message and the local
-/// stores are used: no URL is ever fetched, so a chain whose intermediate is not on the computer
-/// stays partial and the result is "intact", not "microsoft".
-pub fn signature(der: &[u8]) -> Signature {
+impl Signature {
+    fn refused(state: &str, signer: String, root: String, reason: &str) -> Self {
+        Signature {
+            state: state.into(),
+            signer,
+            root,
+            reason: reason.into(),
+        }
+    }
+}
+
+/// A certificate's display name.
+///
+/// # Safety
+/// `cert` must be a live certificate context.
+unsafe fn cert_name(cert: *const CERT_CONTEXT) -> String {
+    let mut name = [0u16; 256];
+    // SAFETY: the caller passes a live context; `name` is writable for its length.
+    let len = unsafe { CertGetNameStringW(cert, CERT_NAME_SIMPLE_DISPLAY_TYPE, 0, None, Some(&mut name)) };
+    from_wide(&name[..(len as usize).saturating_sub(1).min(name.len())])
+}
+
+/// The SHA-1 thumbprint (hex, lower case) of a certificate.
+///
+/// # Safety
+/// `cert` must be a live certificate context.
+unsafe fn thumbprint(cert: *const CERT_CONTEXT) -> String {
+    // SAFETY: a live context holds `cbCertEncoded` readable bytes at `pbCertEncoded`.
+    let encoded = unsafe {
+        if (*cert).pbCertEncoded.is_null() {
+            return String::new();
+        }
+        std::slice::from_raw_parts((*cert).pbCertEncoded, (*cert).cbCertEncoded as usize)
+    };
+    let mut sha1 = sha1_smol::Sha1::new();
+    sha1.update(encoded);
+    hex(&sha1.digest().bytes())
+}
+
+/// What the chain of `signer` shows, built offline with the message's own certificates as the
+/// additional store (Windows' `.p7b` policies carry their intermediate certificate). Returns the
+/// root's name and thumbprint and the chain's error bits, or `None` when no chain could be built.
+///
+/// # Safety
+/// `signer` must be a live certificate context from a verified message, and `message` the open
+/// store of that message's certificates.
+unsafe fn offline_chain(signer: *const CERT_CONTEXT, message: HCERTSTORE) -> Option<(String, String, u32)> {
+    // SAFETY: the caller passes a live context and an open store.
+    unsafe { chain_with(signer, message) }
+}
+
+/// One offline chain of `signer` with `store` as the additional store.
+///
+/// # Safety
+/// `signer` must be a live certificate context and `store` an open store.
+unsafe fn chain_with(signer: *const CERT_CONTEXT, store: HCERTSTORE) -> Option<(String, String, u32)> {
+    let chain_para = CERT_CHAIN_PARA {
+        cbSize: std::mem::size_of::<CERT_CHAIN_PARA>() as u32,
+        ..Default::default()
+    };
+    let mut chain: *mut CERT_CHAIN_CONTEXT = std::ptr::null_mut();
+    // SAFETY: `signer` and `store` are live (caller); cache-only retrieval keeps the call offline;
+    // `chain` is freed below.
+    let built = unsafe {
+        CertGetCertificateChain(
+            None,
+            signer,
+            None,
+            Some(store),
+            &chain_para,
+            CERT_CHAIN_CACHE_ONLY_URL_RETRIEVAL,
+            None,
+            &mut chain,
+        )
+    };
+    if built.is_err() || chain.is_null() {
+        return None;
+    }
+    // SAFETY: `chain` is the live context built above; its first simple chain and that chain's
+    // elements are owned by it and read before it is freed.
+    let found = unsafe {
+        let errors = (*chain).TrustStatus.dwErrorStatus;
+        let simple = if (*chain).cChain == 0 || (*chain).rgpChain.is_null() {
+            std::ptr::null_mut()
+        } else {
+            *(*chain).rgpChain
+        };
+        if simple.is_null() || (*simple).cElement == 0 || (*simple).rgpElement.is_null() {
+            None
+        } else {
+            let last = *(*simple).rgpElement.add((*simple).cElement as usize - 1);
+            if last.is_null() || (*last).pCertContext.is_null() {
+                None
+            } else {
+                let root = (*last).pCertContext;
+                Some((cert_name(root), thumbprint(root), errors))
+            }
+        }
+    };
+    // SAFETY: `chain` came from CertGetCertificateChain and is not used afterwards.
+    unsafe { CertFreeCertificateChain(chain) };
+    found
+}
+
+/// The certificates a PKCS#7 message carries, as a store (closed by the caller).
+fn message_store(der: &[u8]) -> Option<HCERTSTORE> {
+    let blob = CRYPT_INTEGER_BLOB {
+        cbData: u32::try_from(der.len()).ok()?,
+        pbData: der.as_ptr().cast_mut(),
+    };
+    // SAFETY: `blob` points into `der`, which outlives the call; the store copies what it needs.
+    unsafe {
+        CertOpenStore(
+            CERT_STORE_PROV_PKCS7,
+            X509_ASN_ENCODING | PKCS_7_ASN_ENCODING,
+            None,
+            CERT_OPEN_STORE_FLAGS(0),
+            Some((&raw const blob).cast()),
+        )
+    }
+    .ok()
+}
+
+/// Windows System Component Verification: the extended key usage of the certificates that sign
+/// Windows' own components, code integrity policies among them.
+const WINDOWS_COMPONENT_EKU: &str = "1.3.6.1.4.1.311.10.3.6";
+
+/// The extended key usages a certificate lists in its own extension (empty when it has none).
+///
+/// # Safety
+/// `cert` must be a live certificate context.
+unsafe fn ekus(cert: *const CERT_CONTEXT) -> Vec<String> {
+    let mut size = 0u32;
+    // SAFETY: the caller passes a live context; first only the size is asked for.
+    if unsafe { CertGetEnhancedKeyUsage(cert, CERT_FIND_EXT_ONLY_ENHKEY_USAGE_FLAG.0, None, &mut size) }.is_err()
+        || size == 0
+    {
+        return Vec::new();
+    }
+    let mut buffer = vec![0u64; (size as usize).div_ceil(8)];
+    let usage = buffer.as_mut_ptr().cast::<CTL_USAGE>();
+    // SAFETY: `buffer` is 8-byte aligned and at least `size` bytes; the usage it receives points
+    // into the same buffer and is read before the buffer is dropped.
+    unsafe {
+        if CertGetEnhancedKeyUsage(cert, CERT_FIND_EXT_ONLY_ENHKEY_USAGE_FLAG.0, Some(usage), &mut size).is_err() {
+            return Vec::new();
+        }
+        let count = (*usage).cUsageIdentifier as usize;
+        if count == 0 || (*usage).rgpszUsageIdentifier.is_null() {
+            return Vec::new();
+        }
+        (0..count)
+            .filter_map(|i| {
+                let oid = *(*usage).rgpszUsageIdentifier.add(i);
+                (!oid.is_null()).then(|| oid.to_string().unwrap_or_default())
+            })
+            .collect()
+    }
+}
+
+/// The decision on a chain: "microsoft" only when nothing but tolerated errors is set, the root is
+/// one of Microsoft's product roots and the signer is Microsoft's. Separate from the Windows calls
+/// so it can be tested.
+fn judge_chain(signer: &str, signer_ekus: &[String], root_thumbprint: &str, errors: u32) -> Result<(), &'static str> {
+    if errors & !TOLERATED_CHAIN_ERRORS != 0 {
+        return Err(if errors & 0x0001_0000 != 0 {
+            "the certificate chain could not be completed offline"
+        } else if errors & 0x0000_0020 != 0 {
+            "the certificate chain ends at a root this computer does not trust"
+        } else {
+            "the certificate chain does not verify"
+        });
+    }
+    if !MICROSOFT_ROOTS
+        .iter()
+        .any(|(thumb, _)| thumb.eq_ignore_ascii_case(root_thumbprint))
+    {
+        return Err("the certificate chain does not end at a Microsoft product root");
+    }
+    if !signer.starts_with("Microsoft ") {
+        return Err("the signer is not Microsoft");
+    }
+    // A signer whose certificate names its uses must be allowed to sign Windows' components.
+    if !signer_ekus.is_empty() && !signer_ekus.iter().any(|eku| eku == WINDOWS_COMPONENT_EKU) {
+        return Err("the signer's certificate is not one that signs Windows components");
+    }
+    Ok(())
+}
+
+/// Verifies a PKCS#7 signed message and returns what its signature shows, with the content the
+/// signature covers. Only the certificates in the message and the local stores are used: no URL is
+/// ever fetched. The content is returned whenever the signature itself verifies; whether it may be
+/// trusted is `state == "microsoft"`.
+pub fn verify(der: &[u8]) -> (Signature, Option<Vec<u8>>) {
     let para = CRYPT_VERIFY_MESSAGE_PARA {
         cbSize: std::mem::size_of::<CRYPT_VERIFY_MESSAGE_PARA>() as u32,
         dwMsgAndCertEncodingType: (X509_ASN_ENCODING | PKCS_7_ASN_ENCODING).0,
         ..Default::default()
     };
-    let mut signer: *mut CERT_CONTEXT = std::ptr::null_mut();
-    // SAFETY: `para` and `der` outlive the call; no decoded output is asked for; `signer` receives
-    // a certificate context that is freed below.
-    let verified = unsafe { CryptVerifyMessageSignature(&para, 0, der, None, None, Some(&mut signer)) };
-    if verified.is_err() || signer.is_null() {
-        return Signature {
-            state: "invalid".into(),
-            signer: String::new(),
-        };
+    // First the size of the signed content, then the content itself.
+    let mut size = 0u32;
+    // SAFETY: `para` and `der` outlive the call; only the decoded size is asked for.
+    let sized = unsafe { CryptVerifyMessageSignature(&para, 0, der, None, Some(&mut size), None) };
+    if sized.is_err() || size as u64 > MAX_POLICY_BYTES {
+        return (
+            Signature::refused("invalid", String::new(), String::new(), "the signature does not verify"),
+            None,
+        );
     }
-    let mut name = [0u16; 256];
-    // SAFETY: `signer` is a live certificate context; `name` is writable for its length.
-    let len = unsafe { CertGetNameStringW(signer, CERT_NAME_SIMPLE_DISPLAY_TYPE, 0, None, Some(&mut name)) };
-    let signer_name = from_wide(&name[..(len as usize).saturating_sub(1).min(name.len())]);
-    let chained = (|| {
-        let chain_para = CERT_CHAIN_PARA {
-            cbSize: std::mem::size_of::<CERT_CHAIN_PARA>() as u32,
-            ..Default::default()
-        };
-        let mut chain: *mut CERT_CHAIN_CONTEXT = std::ptr::null_mut();
-        // SAFETY: `signer` is a live context whose own store (the message's certificates) is used
-        // as the additional store; cache-only retrieval keeps the call offline; `chain` is freed.
-        let built = unsafe {
-            CertGetCertificateChain(
-                None,
-                signer,
-                None,
-                Some((*signer).hCertStore),
-                &chain_para,
-                CERT_CHAIN_CACHE_ONLY_URL_RETRIEVAL,
-                None,
-                &mut chain,
-            )
-        };
-        if built.is_err() || chain.is_null() {
-            return None;
+    let mut content = vec![0u8; size as usize];
+    let mut signer: *mut CERT_CONTEXT = std::ptr::null_mut();
+    // SAFETY: `content` is writable for `size` bytes, which is passed in `size`; `signer`
+    // receives a certificate context that is freed below.
+    let verified = unsafe {
+        CryptVerifyMessageSignature(
+            &para,
+            0,
+            der,
+            Some(content.as_mut_ptr()),
+            Some(&mut size),
+            Some(&mut signer),
+        )
+    };
+    if verified.is_err() || signer.is_null() {
+        return (
+            Signature::refused("invalid", String::new(), String::new(), "the signature does not verify"),
+            None,
+        );
+    }
+    content.truncate(size as usize);
+    // A content type other than plain data comes back as its DER OCTET STRING: the policy is its
+    // bytes. Unwrapped only when that element is exactly the whole content.
+    if let Some((0x04, start, len)) = element(&content, 0)
+        && start.checked_add(len) == Some(content.len())
+    {
+        content = content[start..].to_vec();
+    }
+    // SAFETY: `signer` is the live context returned above.
+    let signer_name = unsafe { cert_name(signer) };
+    // SAFETY: as above.
+    let signer_ekus = unsafe { ekus(signer) };
+    let chain = message_store(der).and_then(|store| {
+        // SAFETY: `signer` is live and `store` open; the store is closed right after.
+        let chain = unsafe { offline_chain(signer, store) };
+        // SAFETY: `store` came from `message_store` and is not used afterwards.
+        unsafe {
+            let _ = CertCloseStore(Some(store), 0);
         }
-        // Microsoft's product roots, then its application root (2011).
-        let mut ok = false;
-        for flags in [
-            CERT_CHAIN_POLICY_FLAGS(0),
-            MICROSOFT_ROOT_CERT_CHAIN_POLICY_CHECK_APPLICATION_ROOT_FLAG,
-        ] {
-            let policy = CERT_CHAIN_POLICY_PARA {
-                cbSize: std::mem::size_of::<CERT_CHAIN_POLICY_PARA>() as u32,
-                dwFlags: flags,
-                ..Default::default()
-            };
-            let mut status = CERT_CHAIN_POLICY_STATUS {
-                cbSize: std::mem::size_of::<CERT_CHAIN_POLICY_STATUS>() as u32,
-                ..Default::default()
-            };
-            // SAFETY: `chain` is the live chain built above; both structures outlive the call.
-            let ran = unsafe {
-                CertVerifyCertificateChainPolicy(CERT_CHAIN_POLICY_MICROSOFT_ROOT, chain, &policy, &mut status)
-            };
-            if ran.as_bool() && status.dwError == 0 {
-                ok = true;
-                break;
-            }
-        }
-        // SAFETY: `chain` came from CertGetCertificateChain and is not used afterwards.
-        unsafe { CertFreeCertificateChain(chain) };
-        Some(ok)
-    })();
+        chain
+    });
     // SAFETY: `signer` came from CryptVerifyMessageSignature and is not used afterwards.
     unsafe {
         let _ = CertFreeCertificateContext(Some(signer));
     }
-    Signature {
-        state: match chained {
-            Some(true) => "microsoft",
-            Some(false) => "intact",
-            None => "unknown",
-        }
-        .into(),
-        signer: signer_name,
-    }
+    let signature = match chain {
+        None => Signature::refused(
+            "unknown",
+            signer_name,
+            String::new(),
+            "no certificate chain could be built",
+        ),
+        Some((root, thumb, errors)) => match judge_chain(&signer_name, &signer_ekus, &thumb, errors) {
+            Ok(()) => Signature {
+                state: "microsoft".into(),
+                signer: signer_name,
+                root,
+                reason: String::new(),
+            },
+            Err(reason) => Signature::refused("intact", signer_name, root, reason),
+        },
+    };
+    (signature, Some(content))
+}
+
+/// What the signature of a message shows (see [`verify`]).
+pub fn signature(der: &[u8]) -> Signature {
+    verify(der).0
 }
 
 /// What the scan says about the installed policy.
@@ -397,9 +629,13 @@ pub struct PolicyInfo {
     pub modified_ms: i64,
     /// What the policy's signature shows.
     pub signature: Signature,
+    /// Whether its rules were used to check drivers (only when the signature is "microsoft").
+    pub used: bool,
     pub file_rules: u32,
     pub hash_rules: usize,
     pub name_rules: usize,
+    /// Deny-by-name rules limited to some versions (counted, not checked).
+    pub versioned_name_rules: usize,
     pub attribute_rules: usize,
     pub signer_rules: u32,
 }
@@ -411,11 +647,18 @@ pub struct Policy {
     pub rules: Rules,
 }
 
-/// The Windows folder.
+impl Policy {
+    /// The rules to check drivers against: only those of a list signed by Microsoft. A policy whose
+    /// signature is not "microsoft" never accuses a driver.
+    pub fn trusted_rules(&self) -> Option<&Rules> {
+        self.info.used.then_some(&self.rules)
+    }
+}
+
+/// The Windows folder, from Windows itself (`GetSystemWindowsDirectoryW`), never from the
+/// `SystemRoot` / `windir` variables a user's environment can override.
 pub fn windows_dir() -> String {
-    std::env::var("SystemRoot")
-        .or_else(|_| std::env::var("windir"))
-        .unwrap_or_else(|_| r"C:\Windows".to_string())
+    crate::paths::windows_dir().display().to_string()
 }
 
 fn modified_ms(meta: &std::fs::Metadata) -> i64 {
@@ -444,26 +687,55 @@ pub fn read_policy_at(path: &Path) -> Result<Option<Policy>, String> {
     File::open(path)
         .and_then(|f| f.take(MAX_POLICY_BYTES).read_to_end(&mut der))
         .map_err(|e| e.to_string())?;
-    let content = pkcs7_content(&der).ok_or("not a signed policy")?;
-    let rules = parse_policy(content).ok_or("the policy has a layout Vigil does not know")?;
-    let info = PolicyInfo {
+    Ok(Some(policy_from(&der, path, modified_ms(&meta))?))
+}
+
+/// The policy in a `.p7b` file's bytes. The rules come from the content the signature check
+/// returns; a message whose signature does not verify is still described (version, counts) from
+/// its raw content, but never used.
+fn policy_from(der: &[u8], path: &Path, modified_ms: i64) -> Result<Policy, String> {
+    let (signature, signed) = verify(der);
+    let rules = match &signed {
+        Some(content) => parse_policy(content),
+        None => pkcs7_content(der).and_then(parse_policy),
+    }
+    .ok_or_else(|| {
+        if signed.is_some() || pkcs7_content(der).is_some() {
+            "the policy has a layout Vigil does not know".to_string()
+        } else {
+            "not a signed policy".to_string()
+        }
+    })?;
+    Ok(Policy {
+        info: info_of(&rules, path, modified_ms, signature),
+        rules,
+    })
+}
+
+fn info_of(rules: &Rules, path: &Path, modified_ms: i64, signature: Signature) -> PolicyInfo {
+    PolicyInfo {
         path: path.display().to_string(),
         version: rules.version.clone(),
         format: rules.format,
-        modified_ms: modified_ms(&meta),
-        signature: signature(&der),
+        modified_ms,
+        used: signature.state == "microsoft",
+        signature,
         file_rules: rules.file_rules,
         hash_rules: rules.hash_rules,
         name_rules: rules.name_rules,
+        versioned_name_rules: rules.versioned_name_rules,
         attribute_rules: rules.attribute_rules,
         signer_rules: rules.signer_rules,
-    };
-    Ok(Some(Policy { info, rules }))
+    }
 }
 
-static POLICY_CACHE: Mutex<Option<(i64, Arc<Policy>)>> = Mutex::new(None);
+/// The installed policy as last read, by the file's modification time: a policy that could not be
+/// read is remembered too, so the watch does not read and verify a broken file every round.
+type PolicyCacheEntry = (i64, Option<Arc<Policy>>);
+static POLICY_CACHE: Mutex<Option<PolicyCacheEntry>> = Mutex::new(None);
 
-/// The installed policy, parsed once and again only when the file changes (for the watch).
+/// The installed policy, parsed once and again only when the file changes (for the watch). `None`
+/// when there is none or it cannot be read.
 pub fn installed_policy() -> Option<Arc<Policy>> {
     let path = Path::new(&windows_dir()).join(POLICY_FILE);
     let stamp = std::fs::metadata(&path).ok().map(|m| modified_ms(&m))?;
@@ -471,11 +743,11 @@ pub fn installed_policy() -> Option<Arc<Policy>> {
     if let Some((when, policy)) = cache.as_ref()
         && *when == stamp
     {
-        return Some(Arc::clone(policy));
+        return policy.clone();
     }
-    let policy = Arc::new(read_policy_at(&path).ok()??);
-    *cache = Some((stamp, Arc::clone(&policy)));
-    Some(policy)
+    let policy = read_policy_at(&path).ok().flatten().map(Arc::new);
+    *cache = Some((stamp, policy.clone()));
+    policy
 }
 
 // --------------------------------------------------------------------------- Authenticode hashes
@@ -496,47 +768,53 @@ fn le_u32(buf: &[u8], at: usize) -> Option<u32> {
         .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
 }
 
-/// The Authenticode hashes of a PE image: the whole file except its checksum field, the
-/// certificate table entry and the certificate table itself. `None` when it is not a PE file.
-pub fn authenticode(pe: &[u8]) -> Option<AuthHashes> {
-    if pe.get(..2)? != b"MZ" {
+/// The byte ranges the Authenticode hash covers in a PE file of `len` bytes whose first bytes are
+/// `head`: the whole file except its checksum field, the certificate table entry and the
+/// certificate table itself. `None` when it is not a PE file, or its headers are not within `head`.
+fn authenticode_ranges(head: &[u8], len: usize) -> Option<Vec<(usize, usize)>> {
+    if head.get(..2)? != b"MZ" {
         return None;
     }
-    let header = le_u32(pe, 0x3c)? as usize;
-    if pe.get(header..header + 4)? != b"PE\0\0" {
+    let header = le_u32(head, 0x3c)? as usize;
+    if head.get(header..header.checked_add(4)?)? != b"PE\0\0" {
         return None;
     }
-    let optional = header + 24;
-    let directories = match le_u16(pe, optional)? {
+    let optional = header.checked_add(24)?;
+    let directories = match le_u16(head, optional)? {
         0x10b => optional + 96,
         0x20b => optional + 112,
         _ => return None,
     };
     let checksum = optional + 64;
-    let count = le_u32(pe, directories.checked_sub(4)?)?;
+    let count = le_u32(head, directories.checked_sub(4)?)?;
     let mut ranges: Vec<(usize, usize)> = Vec::new();
     if count > 4 {
         let security = directories + 4 * 8;
-        let offset = le_u32(pe, security)? as usize;
-        let size = le_u32(pe, security + 4)? as usize;
-        let end = if offset != 0 && size != 0 && offset.checked_add(size)? <= pe.len() && offset > security + 8 {
+        let offset = le_u32(head, security)? as usize;
+        let size = le_u32(head, security + 4)? as usize;
+        let end = if offset != 0 && size != 0 && offset.checked_add(size)? <= len && offset > security + 8 {
             offset
         } else {
-            pe.len()
+            len
         };
         if security + 8 > end || checksum + 4 > security {
             return None;
         }
         ranges.extend([(0, checksum), (checksum + 4, security), (security + 8, end)]);
     } else {
-        if checksum + 4 > pe.len() {
+        if checksum + 4 > len {
             return None;
         }
-        ranges.extend([(0, checksum), (checksum + 4, pe.len())]);
+        ranges.extend([(0, checksum), (checksum + 4, len)]);
     }
+    Some(ranges)
+}
+
+/// The Authenticode hashes of a PE image held in memory. `None` when it is not a PE file.
+pub fn authenticode(pe: &[u8]) -> Option<AuthHashes> {
     let mut sha1 = sha1_smol::Sha1::new();
     let mut sha256 = Sha256::new();
-    for (start, end) in ranges {
+    for (start, end) in authenticode_ranges(pe, pe.len())? {
         let part = pe.get(start..end)?;
         sha1.update(part);
         sha256.update(part);
@@ -547,20 +825,42 @@ pub fn authenticode(pe: &[u8]) -> Option<AuthHashes> {
     })
 }
 
-/// A driver file read and hashed: `None` when it cannot be read or is not a PE file. Links are
-/// not followed to a file of another size than the one checked, and very large files are skipped.
+/// The first bytes of a driver file that are read to find its headers.
+const HEAD_BYTES: usize = 64 * 1024;
+/// The rest of the file is hashed this many bytes at a time, so memory does not grow with it.
+const CHUNK_BYTES: usize = 256 * 1024;
+
+/// A driver file hashed a piece at a time: `None` when it cannot be read, is not a PE file, or
+/// changed size while it was read. Very large files are skipped.
 pub fn file_hashes(path: &str) -> Option<AuthHashes> {
-    let meta = std::fs::metadata(path).ok()?;
+    use std::io::{Seek, SeekFrom};
+    let mut file = File::open(path).ok()?;
+    let meta = file.metadata().ok()?;
     if !meta.is_file() || meta.len() > MAX_DRIVER_BYTES {
         return None;
     }
-    let mut bytes = Vec::with_capacity(meta.len() as usize);
-    File::open(path)
-        .ok()?
-        .take(MAX_DRIVER_BYTES)
-        .read_to_end(&mut bytes)
-        .ok()?;
-    authenticode(&bytes)
+    let len = meta.len() as usize;
+    let mut head = vec![0u8; len.min(HEAD_BYTES)];
+    file.read_exact(&mut head).ok()?;
+    let ranges = authenticode_ranges(&head, len)?;
+    let mut sha1 = sha1_smol::Sha1::new();
+    let mut sha256 = Sha256::new();
+    let mut buffer = vec![0u8; CHUNK_BYTES];
+    for (start, end) in ranges {
+        file.seek(SeekFrom::Start(start as u64)).ok()?;
+        let mut left = end.checked_sub(start)?;
+        while left > 0 {
+            let want = left.min(buffer.len());
+            file.read_exact(&mut buffer[..want]).ok()?;
+            sha1.update(&buffer[..want]);
+            sha256.update(&buffer[..want]);
+            left -= want;
+        }
+    }
+    (file.metadata().ok()?.len() as usize == len).then(|| AuthHashes {
+        sha1: sha1.digest().bytes(),
+        sha256: sha256.finalize().into(),
+    })
 }
 
 /// A file's original name from its version resource.
@@ -571,36 +871,78 @@ pub fn original_name(path: &str) -> Option<String> {
 /// What the watch keeps about one driver file: its hashes (`None`: not a readable PE file) and its
 /// original file name (read only when the policy has name rules).
 type Fingerprinted = (Option<AuthHashes>, Option<String>);
+/// A driver file as the watch knows it: lower-case path, size, time, and whether its name was read.
+type FileKey = (String, u64, i64, bool);
 
-/// The blocklist verdict for one driver file, cached by path, size and time (for the watch, so a
-/// driver is hashed and its version resource read again only when it changes). `None` when the
-/// file cannot be read.
-pub fn check_cached(rules: &Rules, path: &str) -> Option<Option<Hit>> {
-    type Key = (String, u64, i64, bool);
-    static CACHE: Mutex<Option<HashMap<Key, Fingerprinted>>> = Mutex::new(None);
+/// The watch's driver files already hashed, by path, size and time.
+static WATCH_CACHE: Mutex<Option<HashMap<FileKey, Fingerprinted>>> = Mutex::new(None);
+/// Whether the background hashing thread is running.
+static WARMING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn file_key(path: &str, with_name: bool) -> Option<FileKey> {
     let meta = std::fs::metadata(path).ok()?;
+    Some((path.to_lowercase(), meta.len(), modified_ms(&meta), with_name))
+}
+
+/// The blocklist verdict for each driver file, for the watch, or `None` while some of them are
+/// still being hashed. Hashing never runs on the caller's thread: files not hashed yet (new ones,
+/// or ones that changed since) are handed to one background thread that hashes them one at a time,
+/// a bounded piece at a time; the watch reads the verdicts on a later round. A file that cannot be
+/// read gives `None` in its place.
+pub fn watch_hits(rules: &Rules, paths: &[String]) -> Option<Vec<Option<Hit>>> {
     let with_name = rules.has_name_rules();
-    let key = (path.to_lowercase(), meta.len(), modified_ms(&meta), with_name);
-    let cached = CACHE
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .get_or_insert_with(HashMap::new)
-        .get(&key)
-        .cloned();
-    let (hashes, name) = match cached {
-        Some(found) => found,
-        None => {
-            let found = (file_hashes(path), if with_name { original_name(path) } else { None });
-            let mut guard = CACHE.lock().unwrap_or_else(PoisonError::into_inner);
-            let map = guard.get_or_insert_with(HashMap::new);
-            if map.len() > 8 * MAX_DRIVERS {
-                map.clear();
-            }
-            map.insert(key, found.clone());
-            found
-        }
+    let keys: Vec<Option<FileKey>> = paths.iter().map(|p| file_key(p, with_name)).collect();
+    let missing: Vec<(String, FileKey)> = {
+        let mut cache = WATCH_CACHE.lock().unwrap_or_else(PoisonError::into_inner);
+        let map = cache.get_or_insert_with(HashMap::new);
+        paths
+            .iter()
+            .zip(&keys)
+            .filter_map(|(path, key)| key.as_ref().map(|k| (path, k)))
+            .filter(|(_, key)| !map.contains_key(*key))
+            .map(|(path, key)| (path.clone(), key.clone()))
+            .collect()
     };
-    Some(rules.check(&hashes?, name.as_deref()))
+    if !missing.is_empty() {
+        warm(missing);
+        return None;
+    }
+    let cache = WATCH_CACHE.lock().unwrap_or_else(PoisonError::into_inner);
+    let map = cache.as_ref()?;
+    Some(
+        keys.iter()
+            .map(|key| {
+                let (hashes, name) = map.get(key.as_ref()?)?;
+                rules.check(hashes.as_ref()?, name.as_deref())
+            })
+            .collect(),
+    )
+}
+
+/// Starts the background thread that hashes `missing`, unless one is already running (it will be
+/// asked again on the next round for whatever it did not do).
+fn warm(missing: Vec<(String, FileKey)>) {
+    use std::sync::atomic::Ordering;
+    if WARMING.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let started = std::thread::Builder::new()
+        .name("vigil-driver-hashes".into())
+        .spawn(move || {
+            for (path, key) in missing.into_iter().take(MAX_DRIVERS) {
+                let found = (file_hashes(&path), if key.3 { original_name(&path) } else { None });
+                let mut cache = WATCH_CACHE.lock().unwrap_or_else(PoisonError::into_inner);
+                let map = cache.get_or_insert_with(HashMap::new);
+                if map.len() > 8 * MAX_DRIVERS {
+                    map.clear();
+                }
+                map.insert(key, found);
+            }
+            WARMING.store(false, Ordering::Release);
+        });
+    if started.is_err() {
+        WARMING.store(false, Ordering::Release);
+    }
 }
 
 // --------------------------------------------------------------------------- drivers on this computer
@@ -832,8 +1174,12 @@ pub fn blocked_event(xml: &str) -> Option<BlockedEvent> {
 pub fn scan(days: u32) -> Report {
     let policy = read_policy();
     let mut report = match &policy {
+        // Only a list signed by Microsoft accuses drivers; any other one is described, not used.
         Ok(Some(policy)) => {
-            let mut report = check_drivers(&policy.rules);
+            let mut report = match policy.trusted_rules() {
+                Some(rules) => check_drivers(rules),
+                None => Report::default(),
+            };
             report.policy = Some(policy.info.clone());
             report
         }
@@ -875,32 +1221,36 @@ mod tests {
     }
 
     /// A synthetic SIPolicy with the layout of the real one: a SHA-1 and a SHA-256 deny rule, a
-    /// deny-by-name rule, an allow rule and a file attribute.
+    /// deny-by-name rule for every version, one for some versions, an allow rule and a file
+    /// attribute.
     fn synthetic(sha1: [u8; 20], sha256: [u8; 32]) -> Vec<u8> {
         let mut p = Vec::new();
         put_u32(&mut p, 11); // format
         p.extend_from_slice(&[0x11; 32]); // GUIDs
         put_u32(&mut p, 0x8088_0000); // options
         put_u32(&mut p, 0); // EKUs
-        put_u32(&mut p, 5); // file rules
+        put_u32(&mut p, 6); // file rules
         put_u32(&mut p, 2); // signers
         put_u32(&mut p, 2); // scenarios
         for part in [4u16, 3, 2, 1] {
             p.extend_from_slice(&part.to_le_bytes()); // version 1.2.3.4
         }
         put_u32(&mut p, 64);
-        let mut rule = |kind: u32, name: &str, hash: &[u8]| {
+        let mut rule = |kind: u32, name: &str, hash: &[u8], version: [u8; 8]| {
             put_u32(&mut p, kind);
             put_padded(&mut p, &utf16(name));
             put_u32(&mut p, 0);
-            p.extend_from_slice(&[0xff; 8]);
+            p.extend_from_slice(&version);
             put_padded(&mut p, hash);
         };
-        rule(0, "", &sha1);
-        rule(0, "", &sha256);
-        rule(0, "Contoso.sys", &[]);
-        rule(1, "*", &[]);
-        rule(2, "fabrikam.sys", &[]);
+        let every = [0xff; 8];
+        rule(0, "", &sha1, every);
+        rule(0, "", &sha256, every);
+        rule(0, "Contoso.sys", &[], every);
+        // Version 3.2.1.0: some versions only.
+        rule(0, "Tailspin.sys", &[], [0, 0, 1, 0, 2, 0, 3, 0]);
+        rule(1, "*", &[], every);
+        rule(2, "fabrikam.sys", &[], every);
         p
     }
 
@@ -909,9 +1259,10 @@ mod tests {
         let rules = parse_policy(&synthetic([1; 20], [2; 32])).expect("parsed");
         assert_eq!(rules.format, 11);
         assert_eq!(rules.version, "1.2.3.4");
-        assert_eq!(rules.file_rules, 5);
+        assert_eq!(rules.file_rules, 6);
         assert_eq!(rules.hash_rules, 2);
         assert_eq!(rules.name_rules, 1);
+        assert_eq!(rules.versioned_name_rules, 1);
         assert_eq!(rules.attribute_rules, 1);
         assert_eq!(rules.signer_rules, 2);
         let by_sha256 = AuthHashes {
@@ -933,6 +1284,11 @@ mod tests {
             rules.check(&other, Some("fabrikam.sys")),
             None,
             "attribute rules are not checked"
+        );
+        assert_eq!(
+            rules.check(&other, Some("Tailspin.sys")),
+            None,
+            "a name rule for some versions only never accuses a driver"
         );
         assert_eq!(rules.check(&other, None), None);
     }
@@ -1063,14 +1419,18 @@ mod tests {
         let report = scan(30);
         if let Some(info) = &report.policy {
             println!(
-                "policy format {} version {} signature {} ({}): {} file rules ({} hash, {} name, {} attribute), {} signers",
+                "policy format {} version {} signature {} (signer {}, root {}, reason {:?}), used {}: {} file rules ({} hash, {} name for every version, {} name for some versions, {} attribute), {} signers",
                 info.format,
                 info.version,
                 info.signature.state,
                 info.signature.signer,
+                info.signature.root,
+                info.signature.reason,
+                info.used,
                 info.file_rules,
                 info.hash_rules,
                 info.name_rules,
+                info.versioned_name_rules,
                 info.attribute_rules,
                 info.signer_rules
             );
@@ -1087,5 +1447,137 @@ mod tests {
             report.events_readable,
             started.elapsed()
         );
+    }
+    #[test]
+    fn only_a_chain_to_a_microsoft_product_root_is_trusted() {
+        let ekus = vec![WINDOWS_COMPONENT_EKU.to_string(), "1.3.6.1.5.5.7.3.3".to_string()];
+        let root = "3B1EFD3A66EA28B16697394703A72CA340A05BD5";
+        // Windows' own list: complete, Microsoft root, Microsoft signer; expired and offline
+        // revocation are tolerated (the real file's certificate has expired).
+        assert_eq!(judge_chain("Microsoft Windows", &ekus, root, 0), Ok(()));
+        assert_eq!(judge_chain("Microsoft Windows", &ekus, root, 0x0100_0041), Ok(()));
+        // A self-signed or unknown root: refused, whatever the signer is called.
+        assert!(
+            judge_chain(
+                "Microsoft Windows",
+                &ekus,
+                "1111111111111111111111111111111111111111",
+                0x20
+            )
+            .is_err()
+        );
+        assert!(
+            judge_chain(
+                "Microsoft Windows",
+                &ekus,
+                "1111111111111111111111111111111111111111",
+                0
+            )
+            .is_err()
+        );
+        // A chain that stops short, or whose signatures do not verify.
+        assert!(judge_chain("Microsoft Windows", &ekus, root, 0x0001_0000).is_err());
+        assert!(judge_chain("Microsoft Windows", &ekus, root, 0x08).is_err());
+        // Microsoft's development root is not a product root.
+        assert!(
+            judge_chain(
+                "Microsoft Windows",
+                &ekus,
+                "F8DB7E1C16F1FFD4AAAD4AAD8DFF0F2445184AEB",
+                0
+            )
+            .is_err()
+        );
+        // Not Microsoft's signer, or a certificate not meant for Windows components.
+        assert!(judge_chain("Contoso Ltd", &ekus, root, 0).is_err());
+        assert!(judge_chain("Microsoft Windows", &["1.3.6.1.5.5.7.3.1".to_string()], root, 0).is_err());
+    }
+
+    #[test]
+    fn a_policy_nobody_signed_is_described_but_never_used() {
+        let policy = synthetic([1; 20], [2; 32]);
+        let econtent = [der(0x06, &[0x2b, 0x06, 0x01]), der(0xa0, &der(0x04, &policy))].concat();
+        let signed = [
+            der(0x02, &[1]),
+            der(0x31, &der(0x30, &[])),
+            der(0x30, &econtent),
+            der(0x31, &[]),
+        ]
+        .concat();
+        let message = der(
+            0x30,
+            &[der(0x06, &SIGNED_DATA), der(0xa0, &der(0x30, &signed))].concat(),
+        );
+        let found = policy_from(&message, Path::new("driversipolicy.p7b"), 0).expect("described");
+        assert_eq!(found.info.signature.state, "invalid");
+        assert!(!found.info.used);
+        assert!(found.trusted_rules().is_none(), "an unsigned list accuses nothing");
+        assert_eq!(found.info.hash_rules, 2, "its counts are still told");
+        // The same rules, once the signature is Microsoft's (the test seam), are checked.
+        let mut trusted = found;
+        trusted.info.used = true;
+        let rules = trusted.trusted_rules().expect("used");
+        let hashes = AuthHashes {
+            sha1: [9; 20],
+            sha256: [2; 32],
+        };
+        assert_eq!(rules.check(&hashes, None), Some(Hit::Hash));
+    }
+
+    #[test]
+    fn an_element_may_not_reach_past_its_parent() {
+        // An OCTET STRING that claims more bytes than its parent SEQUENCE holds.
+        let inner = [0x04, 0x05, 1, 2, 3, 4, 5];
+        let mut message = der(0x30, &inner);
+        message[1] = 3; // the SEQUENCE now ends inside the OCTET STRING
+        assert!(child(&message, 2, 2 + 3, 0x04).is_none());
+        assert!(child(&message, 2, message.len(), 0x04).is_some());
+    }
+
+    #[test]
+    fn a_file_is_hashed_in_pieces_like_in_memory() {
+        let dir = std::env::temp_dir().join(format!("vigil-drvblock-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        for (name, image) in [("signed.sys", pe(true)), ("plain.sys", pe(false))] {
+            let path = dir.join(name);
+            std::fs::write(&path, &image).expect("write");
+            assert_eq!(file_hashes(&path.display().to_string()), authenticode(&image), "{name}");
+        }
+        // Bigger than one piece.
+        let mut big = pe(false);
+        big.extend((0..(CHUNK_BYTES * 2 + 123)).map(|i| (i % 253) as u8));
+        let path = dir.join("big.sys");
+        std::fs::write(&path, &big).expect("write");
+        assert_eq!(file_hashes(&path.display().to_string()), authenticode(&big));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_watch_waits_for_the_background_hashing() {
+        let dir = std::env::temp_dir().join(format!("vigil-drvblock-watch-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let listed = dir.join("listed.sys");
+        let other = dir.join("other.sys");
+        let mut image = pe(true);
+        std::fs::write(&listed, &image).expect("write");
+        image[0x360] ^= 0xff;
+        std::fs::write(&other, &image).expect("write");
+        let listed_hashes = file_hashes(&listed.display().to_string()).expect("hashed");
+        let mut rules = parse_policy(&synthetic([1; 20], [2; 32])).expect("rules");
+        rules.sha256.insert(listed_hashes.sha256);
+        let paths = vec![
+            listed.display().to_string(),
+            other.display().to_string(),
+            dir.join("missing.sys").display().to_string(),
+        ];
+        // The first call only starts the background thread.
+        let mut hits = watch_hits(&rules, &paths);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while hits.is_none() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            hits = watch_hits(&rules, &paths);
+        }
+        assert_eq!(hits, Some(vec![Some(Hit::Hash), None, None]));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

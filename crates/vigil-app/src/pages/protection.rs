@@ -137,11 +137,17 @@ impl ProtectionPage {
             }
             cx.notify();
         })];
-        // A clock for the elapsed time of a running scan.
+        // A clock for the elapsed time of a running scan: it redraws the page only while one runs,
+        // so an idle Protection page costs nothing.
         cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor().timer(Duration::from_secs(1)).await;
-                if this.update(cx, |_, cx| cx.notify()).is_err() {
+                let alive = this.update(cx, |page, cx| {
+                    if page.scan(cx).is_some_and(|s| s.b("running")) {
+                        cx.notify();
+                    }
+                });
+                if alive.is_err() {
                     break;
                 }
             }

@@ -282,7 +282,7 @@ pub fn read() -> Snapshot {
 }
 
 fn system32() -> PathBuf {
-    PathBuf::from(std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into())).join("System32")
+    crate::paths::system_dir()
 }
 
 /// A NetApi32 buffer freed when dropped.

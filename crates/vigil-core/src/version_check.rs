@@ -66,7 +66,7 @@ fn offer_for(state: &UpdateState, version: &str) -> Option<Latest> {
     state
         .latest
         .clone()
-        .filter(|l| release::is_newer(&l.version, version) && release::valid_release_url(&l.url))
+        .filter(|l| release::is_newer(&l.version, version) && release::valid_release_url_for(&l.url, &l.version))
 }
 
 /// Stores the result of a check made at `now`.

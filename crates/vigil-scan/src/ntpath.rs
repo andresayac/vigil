@@ -7,10 +7,18 @@ use std::sync::LazyLock;
 
 /// `%SystemRoot%` (`C:\Windows` when it is not set).
 pub(crate) static WINDIR: LazyLock<String> = LazyLock::new(|| {
-    std::env::var("SystemRoot")
-        .ok()
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| r"C:\Windows".to_string())
+    // From Windows itself on Windows: a user's environment can override `%SystemRoot%`.
+    #[cfg(windows)]
+    {
+        vigil_sys::paths::windows_dir().display().to_string()
+    }
+    #[cfg(not(windows))]
+    {
+        std::env::var("SystemRoot")
+            .ok()
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| r"C:\Windows".to_string())
+    }
 });
 pub(crate) static SYSTEM32: LazyLock<String> = LazyLock::new(|| join(&WINDIR, &["System32"]));
 pub(crate) static SYSWOW64: LazyLock<String> = LazyLock::new(|| join(&WINDIR, &["SysWOW64"]));

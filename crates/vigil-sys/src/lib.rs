@@ -8,6 +8,7 @@
 
 mod error;
 mod nt;
+pub mod paths;
 mod util;
 mod xml;
 

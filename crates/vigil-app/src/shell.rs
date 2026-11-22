@@ -96,6 +96,11 @@ fn is_live(page: &str) -> bool {
     matches!(page, "performance" | "processes" | "overview" | "optimize" | "system")
 }
 
+/// Live pages that show the process list on every sample; the others get it now and then.
+fn shows_processes(page: &str) -> bool {
+    matches!(page, "performance" | "processes")
+}
+
 /// The page key for a name a notification or the command line gives (unknown: Alerts).
 pub fn page_key(name: &str) -> &'static str {
     PAGES
@@ -205,6 +210,11 @@ impl Shell {
                 this.apply_theme(window, cx);
             }),
             cx.observe(&report, |_, _, cx| cx.notify()),
+            // Minimized (not presented): the live pages stop sampling until it is shown again.
+            cx.observe_window_visibility(window, |this, visibility, _, cx| {
+                let shown = visibility.is_visible();
+                this.live.update(cx, |live, cx| live.set_minimized(!shown, cx));
+            }),
             {
                 // Ctrl+K anywhere in the window, and the palette's keys while it is open (its text
                 // box would otherwise keep Up, Down and Enter), before any control sees them.
@@ -417,7 +427,8 @@ impl Shell {
             _ => None,
         };
         let active = is_live(page);
-        self.live.update(cx, |live, cx| live.set_active(active, cx));
+        let processes = shows_processes(page);
+        self.live.update(cx, |live, cx| live.set_active(active, processes, cx));
         cx.notify();
     }
 

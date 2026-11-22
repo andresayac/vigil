@@ -468,9 +468,7 @@ fn drivers_under(root: HKEY, path: &str) -> Option<Vec<Driver>> {
 /// Whether a driver path is in the folders Windows installs drivers to (`System32\drivers`, the
 /// driver store); an empty path means the default `System32\drivers\<name>.sys`.
 pub fn standard_driver_path(path: &str) -> bool {
-    let windir = std::env::var("SystemRoot")
-        .or_else(|_| std::env::var("windir"))
-        .unwrap_or_else(|_| r"C:\Windows".into());
+    let windir = crate::paths::windows_dir().display().to_string();
     driver_path_in(path, &windir)
 }
 

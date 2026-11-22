@@ -648,7 +648,7 @@ mod imp {
         let Ok(Some(_)) = Key::open(HKEY_LOCAL_MACHINE, NETWORK_SERVICES, KEY_WOW64_64KEY) else {
             return None;
         };
-        let windows_dir = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_string());
+        let windows_dir = crate::paths::windows_dir().display().to_string();
         let mut out = Vec::new();
         for sub in subkeys(HKEY_LOCAL_MACHINE, NETWORK_SERVICES) {
             let Some(v) = values(HKEY_LOCAL_MACHINE, &format!(r"{NETWORK_SERVICES}\{sub}")) else {

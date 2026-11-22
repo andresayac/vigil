@@ -455,9 +455,7 @@ pub fn executable_of(command: &str) -> String {
     if program.contains('\\') || program.contains('/') || program.is_empty() {
         return program;
     }
-    let root = std::env::var_os("SystemRoot")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
+    let root = crate::paths::windows_dir();
     for name in [program.clone(), format!("{program}.exe")] {
         let candidate = root.join("System32").join(&name);
         if candidate.is_file() {

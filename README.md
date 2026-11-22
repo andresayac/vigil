@@ -10,6 +10,15 @@ It also shows live CPU, memory, GPU, VRAM, disk and network use, frees disk spac
 applies explained, reversible tune-ups. It looks and behaves like a Windows 11 app and speaks English, Spanish,
 French, Portuguese and Chinese.
 
+![Overview: the verdict on the computer, what to do first and the background watch](docs/screenshots/overview-light.png)
+
+| | | |
+|---|---|---|
+| ![Findings with one finding open, dark theme](docs/screenshots/findings-dark.png) | ![Processes grouped like Task Manager](docs/screenshots/processes-light.png) | ![Performance with the CPU chart, dark theme](docs/screenshots/performance-dark.png) |
+| ![Security posture with its score](docs/screenshots/posture-light.png) | ![Search with Ctrl+K, dark theme](docs/screenshots/search-dark.png) | |
+
+The screenshots show the demo mode (`vigil.exe --demo`), whose data is fictitious.
+
 ## Install and run
 
 Requirements: Windows 10 or 11 (64-bit) with a DirectX 11 graphics adapter (every PC that runs them has one).
@@ -41,6 +50,8 @@ vigil ports --listening            :: listening ports with the process and servi
 vigil services --running --json    :: running Windows services, as JSON
 vigil programs --recent            :: programs installed in the last 7 days, newest first
 vigil reliability --days 90        :: blue screens, crashes and other problems of the last 90 days
+vigil export --format csv --out findings.csv   :: a saved report as CSV, SARIF, HTML or JSON (below)
+vigil mcp                          :: read-only tools for AI clients over stdio (below)
 vigil --help                       :: every command
 ```
 
@@ -155,11 +166,15 @@ A server on this computer (`localhost`) keeps everything here: nothing leaves th
 
 ## The app
 
+The pages, in the order of the navigation. **Ctrl+K** (or the search button next to the menu) jumps to any page and
+finds a process, finding, alert, service, startup app, scheduled task, installed program, firewall rule or browser
+extension among what Vigil has already read; it only navigates, it never acts.
+
 | Page | What it shows | What you can do |
 |---|---|---|
 | **Overview** | Live CPU, memory, graphics and system drive, the verdict on the whole computer, one sliver per finding, what to do first, what changed since the last scan, the background watch, the security state (Defender, firewall, UAC, Remote Desktop, updates) and coverage notes. | Start a scan, jump to findings, pause the watch. |
 | **Findings** | Every item with its verdict (Remove, Disable, Review, No signals, Safe, Trusted), local score, type and presence. The side panel explains what it is, why it was flagged, the signals, where it appears, file and signature details, command lines and network activity. | The actions that make sense for that item, ignore it, copy its details, investigate it with the AI agent. |
-| **Alerts** | What the background watch noticed (below): new startup entries, new or changed services, new scheduled tasks, security settings turned off and remote-access ports opened to the network, with how much each one matters. | Open the page where the item lives, mark alerts as read, clear them. |
+| **Alerts** | What the background watch noticed (below): startup entries, services, scheduled tasks, drivers, registry hooks, certificates, DNS servers and proxies, background transfer jobs, security settings turned off, remote-access ports opened to the network, events from the Windows logs, automatic scan results and, if you turned the check on, a new version of Vigil; each with how much it matters, filterable by kind. | Open the page where the item lives, mark alerts as read, clear them. |
 | **Protection** | Microsoft Defender, read live: whether it protects the computer (or another antivirus does, with Defender in passive mode), its switches (real-time, behavior monitoring, tamper protection, cloud protection, sample submission, potentially unwanted app blocking, network protection, controlled folder access), security intelligence and scan dates, the threat history and the exclusions, with the risky ones marked (a whole drive, a folder any program can write to, a program file type, a process excluded by name). | Quick or full scan in the background with its progress and Stop, the Microsoft Defender Offline scan, update security intelligence, turn a switch on (never off), remove an exclusion, remove the active threats, open Windows Security. |
 | **Security posture** | The Windows settings that protect the computer as a whole, read live and explained, with a score ("N of M recommended settings are in place", weighted 1 to 3 by how much each matters; partly in place counts half; settings that do not apply or could not be read are left out): Secure Boot, TPM, Memory integrity, Credential Guard, LSA protection, the vulnerable driver blocklist, BitLocker per drive, User Account Control, Remote Desktop and Network Level Authentication, Remote Registry, SMBv1, the firewall profiles, SmartScreen, Windows PowerShell 2.0, AutoRun, the antivirus, its security intelligence and the last Windows update. | Raise a setting that is below the recommendation (see Actions), or open where Windows changes it (Windows Security, Settings, BitLocker, the Firewall rules and Protection pages). Nothing here lowers security. |
 | **Firewall rules** | The domain, private and public profiles and every Windows Defender Firewall rule, read live, with the rules that deserve a look marked: open to any address on public networks for every program, opening a remote-access port (Remote Desktop, SSH, VNC, WinRM, Telnet), allowing a program in a folder any user can write to, or left over for a program that no longer exists. | Turn a rule on or off, delete it (its full definition is saved first; rules of the groups Windows defines can only be turned off), open the program's location or Windows Defender Firewall. |
@@ -387,12 +402,14 @@ are never "optimizations").
    - vulnerable drivers: every driver the service database names (and, as administrator, every loaded one) is
      hashed the way code integrity does (Authenticode SHA-1 and SHA-256) and checked against Microsoft's
      vulnerable driver blocklist, read offline from the copy Windows keeps
-     (`System32\CodeIntegrity\driversipolicy.p7b`). A listed driver that runs or starts with Windows is
-     critical, one that is only installed is worth a look; a driver named by its original file name only is one
-     step lower. The list's rules that deny a signer for some versions of a file are not checked, and the
-     policy's signature is verified with the certificates on the computer only, so it may show as intact rather
-     than chained to Microsoft. Drivers Windows refused to load (code integrity log) are reported as
-     information: the protection worked;
+     (`System32\CodeIntegrity\driversipolicy.p7b`). The list is used only when its signature verifies offline
+     up to one of Microsoft's product roots, signed by Microsoft for Windows components; a list that is not
+     signed by Microsoft, or cannot be verified with what is on the computer, accuses no driver and is reported
+     instead. A listed driver that runs or starts with Windows is critical, one that is only installed is worth a
+     look; a driver named by its original file name for every version is one step lower. Name rules limited to
+     some versions, and rules that deny a signer for some versions of a file, are counted but not checked, so a
+     fixed version of a driver is never accused. Drivers Windows refused to load (code integrity log) are
+     reported as information: the protection worked;
 2. **Grouping**: every reference is resolved to the file that really decides what runs (the DLL behind `rundll32`,
    the script behind `wscript`, the payload of an encoded PowerShell command...), so each file is judged once.
 3. **Local rules**: digital signatures, locations, names that imitate Windows, command-line patterns (miners,

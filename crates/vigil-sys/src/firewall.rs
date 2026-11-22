@@ -330,7 +330,7 @@ impl Folders {
             if d.is_empty() { "C:".to_string() } else { d }
         };
         let root = {
-            let r = var("SystemRoot");
+            let r = crate::paths::windows_dir().display().to_string();
             if r.is_empty() { format!(r"{drive}\Windows") } else { r }
         };
         let program_data = var("ProgramData");

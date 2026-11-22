@@ -34,25 +34,32 @@ crates/
   vigil-i18n/     translations of the core's texts: `tr!` with English templates, catalogs in locales/
   vigil-sys/      Windows access for live data: processes (NtQuerySystemInformation), PDH metrics, DXGI GPUs,
                   connections, elevation, process inspector, services, startup entries, scheduled tasks,
-                  firewall rules, installed programs, event logs (reliability, sign-ins), local accounts,
-                  groups and sessions, security posture
+                  firewall rules, installed programs, event logs (reliability, sign-ins, the watch's log
+                  reader), local accounts, groups and sessions, security posture, Defender (WMI), registry
+                  hooks, certificates, network configuration, BITS, service permissions, the vulnerable
+                  driver blocklist, Windows Update, startup impact, power and battery, restore points
   vigil-scan/     the read-only scan: PowerShell collectors (embedded ps1), rules, analysis, posture, report
-                  (JSON + HTML), the AI agent (providers), anonymization, VirusTotal, browser extensions
-                  and policies read live (`browsers.rs`)
+                  (JSON + HTML), export (CSV, SARIF), the signature cache, the AI agent (providers and the
+                  tool-calling loop), anonymization, VirusTotal, the release check, and one module per
+                  source (browsers, hooks, secrets, com, rmm, shellext, certs, amsi, netcfg, bits, vulndrv…)
   vigil-actions/  the action engine: every change to the system goes through execute() / undo(); guards,
                   journal, quarantine, tool runner
-  vigil-maint/    maintenance data and primitives: volumes, cleanup targets, space analysis, hardware,
-                  tuning state, insights
+  vigil-maint/    maintenance data and primitives: volumes, cleanup targets, space analysis, duplicate
+                  files, the Recycle Bin, hardware, tuning state, insights
   vigil-core/     the service layer: app state, planner (actions per finding), requests (request -> trusted
                   ActionSpec), native confirmation, the action path (service::run_action), the window's
                   reads (`api.rs`), settings, secrets, the background watch, its notifications and
                   automatic scans (`autoscan.rs`), the AI investigation, the MCP tool registry and
-                  `vigil mcp`, the command lines
+                  `vigil mcp`, export, duplicates, restore points, the update check (`version_check.rs`),
+                  the display sanitizer for untrusted text (`display.rs`), the command lines
   vigil-app/      vigil.exe: the window (gpui-kit), the tray, the command-line entry points; pages in
-                  src/pages, Fluent controls in src/ui, catalogs in locales/, demo data in data/demo.json.
+                  src/pages, Fluent controls in src/ui, the Ctrl+K palette (`search.rs`, `palette.rs`), the
+                  welcome (`welcome.rs`), catalogs in locales/, demo data in data/demo.json.
                   It never depends on vigil-actions: it only sends requests to service::run_action
-installer/        vigil.nsi, the per-machine NSIS installer
-docs/             ARCHITECTURE.md (how it fits together), NATIVE-UI.md (the window and its Windows 11 look)
+installer/        vigil.nsi (the per-machine NSIS installer), build-setup.ps1, test-installer.ps1
+docs/             ARCHITECTURE.md (how it fits together), NATIVE-UI.md (the window and its Windows 11 look),
+                  screenshots/ (demo screenshots used by the README)
+CHANGELOG.md      what each release changed
 ```
 
 Each crate has its tests next to the code (`#[cfg(test)]`) or in `tests/`; recorded reference data lives in
@@ -159,9 +166,10 @@ Each crate has its tests next to the code (`#[cfg(test)]`) or in `tests/`; recor
 ## Checking the UI
 
 `cargo run -p vigil-app -- --demo --page <key>` shows any page with fictitious data (`--item ID` selects a
-finding, `--dialog settings|scan|run` opens a dialog, `--size WxH` sets the window size, `--theme light|dark`,
-`--lang CODE`). Keep only demo screenshots, and keep them out of the repository; delete screenshots of the real
-app, which show real processes and paths.
+finding, `--dialog settings|scan|run|search[=text]|welcome[=step]` opens a dialog, `--size WxH` sets the window
+size, `--theme light|dark`, `--lang CODE`). Delete screenshots of the real app, which show real processes and
+paths. Demo screenshots stay out of the repository too, except the few the README shows in `docs/screenshots/`:
+demo data only, checked by eye, small optimized PNGs (a test checks every screenshot the README names exists).
 
 ## Performance
 

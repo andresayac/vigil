@@ -639,7 +639,7 @@ pub fn from_xml(path: &str, xml: &str) -> ScheduledTask {
         _ if account_kind == "group" => "group",
         _ => "",
     };
-    let root_dir = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_string());
+    let root_dir = crate::paths::windows_dir().display().to_string();
     let elevated = run_level == "highest" || account_kind == "system";
     ScheduledTask {
         path: path.to_string(),
