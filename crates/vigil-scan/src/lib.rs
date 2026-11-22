@@ -44,6 +44,7 @@ mod persist;
 mod posture;
 mod rmm;
 mod secrets;
+mod shellext;
 mod sigcache;
 mod svcsec;
 mod winreg;

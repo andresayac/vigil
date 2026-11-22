@@ -1085,7 +1085,11 @@ impl Render for PerformancePage {
                                             .flex()
                                             .flex_col()
                                             .min_w_0()
-                                            .child(div().font_weight(FontWeight::SEMIBOLD).child(r.title.clone()))
+                                            .child(
+                                                div()
+                                                    .font_weight(FontWeight::SEMIBOLD)
+                                                    .child(crate::ui::kit::plain(r.title.clone())),
+                                            )
                                             .child(
                                                 div()
                                                     .text_size(px(12.))

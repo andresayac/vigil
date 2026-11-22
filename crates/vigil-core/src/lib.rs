@@ -12,6 +12,7 @@ pub mod autoscan;
 pub mod autostart;
 pub mod cli;
 pub mod confirm;
+pub mod display;
 pub mod export;
 pub mod extensions;
 pub mod firewall;

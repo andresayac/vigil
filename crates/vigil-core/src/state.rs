@@ -126,18 +126,22 @@ impl AppState {
     }
 
     pub fn set_analysis(&self, analysis: Analysis, path: Option<PathBuf>) {
+        self.set(analysis, path, false);
+    }
+
+    /// Loads a report to look at only (see `Inner::report_untrusted`).
+    pub fn set_analysis_untrusted(&self, analysis: Analysis, path: PathBuf) {
+        self.set(analysis, Some(path), true);
+    }
+
+    /// Both in one lock: a request planned meanwhile never sees the new report as trusted.
+    fn set(&self, analysis: Analysis, path: Option<PathBuf>, untrusted: bool) {
         let json = analysis.to_value();
         let mut inner = self.lock();
         inner.analysis = Some(analysis);
         inner.analysis_json = Some(json);
         inner.report_path = path;
-        inner.report_untrusted = false;
-    }
-
-    /// Loads a report to look at only (see `Inner::report_untrusted`).
-    pub fn set_analysis_untrusted(&self, analysis: Analysis, path: PathBuf) {
-        self.set_analysis(analysis, Some(path));
-        self.lock().report_untrusted = true;
+        inner.report_untrusted = untrusted;
     }
 
     /// Saves the current report in place (after an action recorded on one of its findings).
@@ -154,12 +158,40 @@ impl AppState {
         let _ = vigil_scan::pipeline::save_report(analysis, &base, false);
     }
 
-    /// Opens a saved report (`*-report.json`) as the current one. Blocking.
-    pub fn open_report(&self, path: &std::path::Path) -> Result<(), String> {
+    /// Whether a report at `path` may be acted on: a plain file directly in this copy's own scans
+    /// folder (for an elevated copy `%ProgramData%\Vigil\scans`, which only administrators can
+    /// write). Any other report (picked in "Open report…", sent by someone, or written by the
+    /// standard-user tray copy) could have been planted to mark a security product "remove": it is
+    /// shown, but nothing is planned or built from it.
+    pub fn report_trusted(&self, path: &std::path::Path) -> bool {
+        crate::autoscan::plain_file_in(path, &self.scans_dir())
+    }
+
+    /// Opens a saved report (`*-report.json`) as the current one, trusted or to look at only (see
+    /// [`AppState::report_trusted`]). Returns whether it is trusted. Blocking.
+    pub fn open_report(&self, path: &std::path::Path) -> Result<bool, String> {
         let analysis =
             vigil_scan::pipeline::load_report(path).map_err(|e| format!("Could not open the report: {e}"))?;
-        self.set_analysis(analysis, Some(path.to_path_buf()));
-        Ok(())
+        let trusted = self.report_trusted(path);
+        if trusted {
+            self.set_analysis(analysis, Some(path.to_path_buf()));
+        } else {
+            self.set_analysis_untrusted(analysis, path.to_path_buf());
+        }
+        Ok(trusted)
+    }
+
+    /// The current report as the window reads it, with `viewOnly: true` when it is only to be
+    /// looked at (the page then says why no action is offered).
+    pub fn report_view(&self) -> Option<Value> {
+        let inner = self.lock();
+        let mut json = inner.analysis_json.clone();
+        if inner.report_untrusted
+            && let Some(Value::Object(map)) = json.as_mut()
+        {
+            map.insert("viewOnly".into(), Value::Bool(true));
+        }
+        json
     }
 
     /// The current report as HTML and the file name to suggest for it

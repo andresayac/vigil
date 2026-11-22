@@ -34,7 +34,7 @@ use crate::ui::{self, FButton, Kind, Severity};
 use gpui_kit::base::Selectable as _;
 
 /// (key, section) of every page, in the order of the navigation pane.
-pub const PAGES: [(&str, &str); 21] = [
+pub const PAGES: [(&str, &str); 22] = [
     ("overview", "nav.security"),
     ("findings", "nav.security"),
     ("alerts", "nav.security"),
@@ -55,11 +55,12 @@ pub const PAGES: [(&str, &str); 21] = [
     ("programs", "nav.maintenance"),
     ("storage", "nav.maintenance"),
     ("system", "nav.maintenance"),
+    ("updates", "nav.maintenance"),
     ("reliability", "nav.maintenance"),
 ];
 
 /// Element ids of the navigation items (GPUI ids are static strings or numbers).
-const NAV_IDS: [&str; 21] = [
+const NAV_IDS: [&str; 22] = [
     "nav-overview",
     "nav-findings",
     "nav-alerts",
@@ -80,6 +81,7 @@ const NAV_IDS: [&str; 21] = [
     "nav-programs",
     "nav-storage",
     "nav-system",
+    "nav-updates",
     "nav-reliability",
 ];
 
@@ -161,7 +163,7 @@ impl Shell {
                 ..Report::default()
             };
             if demo {
-                report.analysis = Some(crate::data::demo("analysis"));
+                report.set_analysis(Some(crate::data::demo("analysis")));
                 report.loaded = true;
             } else {
                 Report::reload(core.clone(), cx);
@@ -344,6 +346,7 @@ impl Shell {
             "optimize" => Some(cx.new(|cx| crate::pages::optimize::OptimizePage::new(ctx, cx)).into()),
             "storage" => Some(cx.new(|cx| crate::pages::storage::StoragePage::new(ctx, cx)).into()),
             "system" => Some(cx.new(|cx| crate::pages::system::SystemPage::new(ctx, cx)).into()),
+            "updates" => Some(cx.new(|cx| crate::pages::updates::UpdatesPage::new(ctx, cx)).into()),
             "reliability" => Some(
                 cx.new(|cx| crate::pages::reliability::ReliabilityPage::new(ctx, cx))
                     .into(),
@@ -433,7 +436,9 @@ impl Shell {
         false
     }
 
-    /// "Open report…": a saved `*-report.json` becomes the current report.
+    /// "Open report…": a saved `*-report.json` becomes the current report. Outside this copy's own
+    /// scans folder it is opened to look at only (the core plans nothing from it), and every page
+    /// reads the new report at once.
     fn open_report(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(core) = self.core.clone() else {
             self.notice = Some((Severity::Info, t("app.demoNoActions")));
@@ -449,12 +454,23 @@ impl Shell {
         cx.spawn_in(window, async move |this, cx| {
             let Ok(Ok(Some(paths))) = picked.await else { return };
             let Some(path) = paths.into_iter().next() else { return };
-            let result = cx.background_spawn(async move { core.open_report(&path) }).await;
+            let reader = Arc::clone(&core);
+            let result = cx
+                .background_spawn(async move { vigil_core::api::open_report(&reader, &path) })
+                .await;
             let _ = this.update(cx, |shell, cx| {
-                shell.notice = Some(match result {
-                    Ok(()) => (Severity::Success, t("app.reportOpened")),
-                    Err(error) => (Severity::Error, error),
+                shell.notice = Some(match &result {
+                    Ok(view) if view.as_ref().is_some_and(|v| v.get("viewOnly").is_some()) => {
+                        (Severity::Warning, t("app.reportOpenedViewOnly"))
+                    }
+                    Ok(_) => (Severity::Success, t("app.reportOpened")),
+                    Err(error) => (Severity::Error, error.clone()),
                 });
+                // The pages drop what they showed of the previous report (items, plans).
+                if result.is_ok() {
+                    let core = Some(Arc::clone(&core));
+                    shell.report.update(cx, |_, cx| crate::app::Report::reload(core, cx));
+                }
                 cx.notify();
             });
         })
@@ -499,8 +515,11 @@ impl Shell {
     /// Asks Windows for administrator rights (UAC); on success the elevated copy starts and this
     /// one quits. Declining keeps this copy as it is.
     fn restart_elevated(&mut self, cx: &mut Context<Self>) {
-        match vigil_sys::elevation::relaunch_elevated(&["--elevated"]) {
+        // The elevated copy waits for this one (`--after`), so it never finds the window taken.
+        let me = std::process::id().to_string();
+        match vigil_sys::elevation::relaunch_elevated(&["--elevated", "--after", &me]) {
             Ok(true) => {
+                crate::platform::release_window_mutex();
                 crate::platform::remove_icon();
                 // A running automatic scan stops at its next step.
                 vigil_core::autoscan::cancel();

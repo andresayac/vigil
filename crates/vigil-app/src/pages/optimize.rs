@@ -209,7 +209,7 @@ impl OptimizePage {
                             .overflow_hidden()
                             .text_ellipsis()
                             .whitespace_nowrap()
-                            .child(item.s("title").to_string()),
+                            .child(kit::plain(item.s("title").to_string())),
                     )
                     .child(
                         kit::faint(role.s("label").to_string(), tk)

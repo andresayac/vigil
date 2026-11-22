@@ -37,7 +37,12 @@ pub struct StoragePage {
     status: String,
     root: String,
     scan: Option<Value>,
-    path: Vec<Value>,
+    /// The folders opened in the space analysis, the scan's root first. Shared: a frame clones the
+    /// handle, not the tree.
+    path: Vec<Arc<Value>>,
+    /// The layout of the open folder (its children by size and the treemap's rectangles), kept
+    /// until another folder opens.
+    layout: Option<(usize, Arc<Layout>)>,
     scanning: bool,
     scan_status: String,
     files: BTreeSet<String>,
@@ -83,6 +88,7 @@ impl StoragePage {
             root: String::new(),
             scan: None,
             path: Vec::new(),
+            layout: None,
             scanning: false,
             scan_status: t("storage.chooseHint"),
             files: BTreeSet::new(),
@@ -229,7 +235,7 @@ impl StoragePage {
                             parts.push(tf("storage.grouped", &[("size", &size(scan.n("mergedBelow"), 0))]));
                         }
                         page.scan_status = parts.join(" · ");
-                        page.path = vec![root.clone()];
+                        page.path = vec![Arc::new(root.clone())];
                         page.files.clear();
                         page.removed.clear();
                         page.scan = Some(scan);
@@ -518,7 +524,7 @@ impl StoragePage {
         kit::columns(0.6, left, right, window)
     }
 
-    fn space_tab(&self, cx: &mut Context<Self>, window: &Window, tk: &Tokens) -> Div {
+    fn space_tab(&mut self, cx: &mut Context<Self>, window: &Window, tk: &Tokens) -> Div {
         let drives: Vec<(String, String)> = self
             .drives
             .iter()
@@ -597,6 +603,7 @@ impl StoragePage {
         let Some(node) = self.path.last().cloned() else {
             return tab;
         };
+        let layout = self.layout_of(&node);
         let crumb = node.s("path").to_string();
         tab = tab.child(
             kit::row()
@@ -613,17 +620,18 @@ impl StoragePage {
         let weak = cx.entity().downgrade();
         let map = treemap(
             &node,
-            Arc::new(move |child: Value, _, cx| {
-                let _ = weak.update(cx, |this, cx| {
-                    this.path.push(child);
-                    cx.notify();
-                });
+            &layout,
+            Arc::new(move |index: usize, _, cx| {
+                let _ = weak.update(cx, |this, cx| this.open_child(index, cx));
             }),
             tk,
         );
         let total = node.n("size").max(1.0);
-        let mut children: Vec<&Value> = node.a("children").iter().collect();
-        children.sort_by(|a, b| b.n("size").total_cmp(&a.n("size")));
+        let children: Vec<(usize, &Value)> = layout
+            .order
+            .iter()
+            .filter_map(|&index| node.a("children").get(index).map(|child| (index, child)))
+            .collect();
         let mut table = div()
             .id("st-children")
             .max_h(px(360.))
@@ -642,11 +650,10 @@ impl StoragePage {
                     .child(div().w(px(64.)).child(t("storage.share")))
                     .child(div().w(px(80.)).child(t("storage.files"))),
             );
-        for (i, child) in children.iter().enumerate() {
+        for (i, &(index, child)) in children.iter().enumerate() {
             let dir = child.b("isDir");
             let drill = dir && !child.a("children").is_empty();
             let weak = cx.entity().downgrade();
-            let value = (*child).clone();
             let tip = child.s("path").to_string();
             table = table.child(
                 div()
@@ -662,10 +669,7 @@ impl StoragePage {
                     .when(drill, |this| {
                         this.on_click(move |event, _, cx| {
                             if event.click_count() >= 2 {
-                                let _ = weak.update(cx, |this, cx| {
-                                    this.path.push(value.clone());
-                                    cx.notify();
-                                });
+                                let _ = weak.update(cx, |this, cx| this.open_child(index, cx));
                             }
                         })
                     })
@@ -820,20 +824,61 @@ impl StoragePage {
     }
 }
 
-type Open = Arc<dyn Fn(Value, &mut Window, &mut gpui_kit::App)>;
+/// Opens child `index` of the folder shown.
+type Open = Arc<dyn Fn(usize, &mut Window, &mut gpui_kit::App)>;
+
+/// One tile of the treemap: a child of the folder (`None`: the small entries grouped as "other"),
+/// its size and its rectangle in a 1.6 × 1 box.
+#[derive(Debug, Clone, PartialEq)]
+struct Tile {
+    child: Option<usize>,
+    bytes: f64,
+    rect: (f64, f64, f64, f64),
+}
+
+/// What the space analysis shows of one folder: its children largest first (indexes into
+/// `children`) and the treemap's tiles. Computed once per folder, not every frame.
+#[derive(Debug, Clone, Default, PartialEq)]
+struct Layout {
+    order: Vec<usize>,
+    tiles: Vec<Tile>,
+}
+
+/// The box the treemap is laid out in (the usual shape of the panel); tiles are placed by fractions.
+const TREEMAP_BOX: (f64, f64) = (1.6, 1.0);
+
+impl Layout {
+    fn of(node: &Value) -> Layout {
+        let children = node.a("children");
+        let mut order: Vec<usize> = (0..children.len()).collect();
+        order.sort_by(|&a, &b| children[b].n("size").total_cmp(&children[a].n("size")));
+        let mut entries: Vec<(f64, Option<usize>)> = order
+            .iter()
+            .filter(|&&i| children[i].n("size") > 0.0)
+            .map(|&i| (children[i].n("size"), Some(i)))
+            .collect();
+        if node.n("other") > 0.0 {
+            entries.push((node.n("other"), None));
+        }
+        entries.sort_by(|a, b| b.0.total_cmp(&a.0));
+        let total: f64 = entries.iter().map(|e| e.0).sum();
+        let tiles = if total > 0.0 {
+            let (w, h) = TREEMAP_BOX;
+            let areas: Vec<f64> = entries.iter().map(|e| e.0 * w * h / total).collect();
+            squarify(&areas, w, h)
+                .into_iter()
+                .zip(entries)
+                .map(|(rect, (bytes, child))| Tile { child, bytes, rect })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        Layout { order, tiles }
+    }
+}
 
 /// A squarified treemap of a folder's children (and what was merged as "Other").
-fn treemap(node: &Value, open: Open, tk: &Tokens) -> gpui_kit::Stateful<Div> {
-    let mut entries: Vec<(f64, Option<&Value>)> = node
-        .a("children")
-        .iter()
-        .filter(|c| c.n("size") > 0.0)
-        .map(|c| (c.n("size"), Some(c)))
-        .collect();
-    if node.n("other") > 0.0 {
-        entries.push((node.n("other"), None));
-    }
-    entries.sort_by(|a, b| b.0.total_cmp(&a.0));
+fn treemap(node: &Value, layout: &Layout, open: Open, tk: &Tokens) -> gpui_kit::Stateful<Div> {
     let frame = div()
         .id("treemap")
         .role(Role::Group)
@@ -846,20 +891,20 @@ fn treemap(node: &Value, open: Open, tk: &Tokens) -> gpui_kit::Stateful<Div> {
         .border_1()
         .border_color(tk.rule)
         .overflow_hidden();
-    let total: f64 = entries.iter().map(|e| e.0).sum();
-    if total <= 0.0 {
+    if layout.tiles.is_empty() {
         return frame
             .flex()
             .items_center()
             .justify_center()
             .child(kit::faint(t("treemap.empty"), tk));
     }
-    // Lay out in a 1.6 : 1 box (the usual shape of the panel), then place by fractions.
-    let (w, h) = (1.6f64, 1.0f64);
-    let areas: Vec<f64> = entries.iter().map(|e| e.0 * w * h / total).collect();
-    let rects = squarify(&areas, w, h);
+    let (w, h) = TREEMAP_BOX;
+    let children = node.a("children");
     let mut map = frame;
-    for (index, ((x, y, rw, rh), (bytes, child))) in rects.into_iter().zip(entries).enumerate() {
+    for (index, tile) in layout.tiles.iter().enumerate() {
+        let (x, y, rw, rh) = tile.rect;
+        let bytes = tile.bytes;
+        let child = tile.child.and_then(|i| children.get(i));
         let fill = match child {
             None => tk.ink3.opacity(0.35),
             Some(c) if !c.b("isDir") => tk.chart2.opacity(0.55),
@@ -875,7 +920,9 @@ fn treemap(node: &Value, open: Open, tk: &Tokens) -> gpui_kit::Stateful<Div> {
                 .unwrap_or_else(|| t("treemap.other")),
             size(bytes, 1)
         );
-        let drill = child.filter(|c| c.b("isDir") && !c.a("children").is_empty()).cloned();
+        let drill = tile
+            .child
+            .filter(|_| child.is_some_and(|c| c.b("isDir") && !c.a("children").is_empty()));
         let open = open.clone();
         let wide = rw / w > 0.07;
         let tall = rh / h > 0.08;
@@ -901,7 +948,7 @@ fn treemap(node: &Value, open: Open, tk: &Tokens) -> gpui_kit::Stateful<Div> {
                 .aria_label(SharedString::from(tip.replace('\n', " ")))
                 .tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(window, cx))
                 .when_some(drill, |this, child| {
-                    this.on_click(move |_, window, cx| open(child.clone(), window, cx))
+                    this.on_click(move |_, window, cx| open(child, window, cx))
                 })
                 .when(wide && tall, |this| {
                     this.child(div().overflow_hidden().text_ellipsis().whitespace_nowrap().child(name))
@@ -960,6 +1007,35 @@ fn squarify(areas: &[f64], w: f64, h: f64) -> Vec<(f64, f64, f64, f64)> {
     out
 }
 
+impl StoragePage {
+    /// Opens child `index` of the open folder (a folder with something inside). Only now is that
+    /// subtree copied, once.
+    fn open_child(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(node) = self.path.last() else { return };
+        let Some(child) = node.a("children").get(index) else {
+            return;
+        };
+        if child.b("isDir") && !child.a("children").is_empty() {
+            let child = Arc::new(child.clone());
+            self.path.push(child);
+            cx.notify();
+        }
+    }
+
+    /// The layout of `node`, computed once per opened folder.
+    fn layout_of(&mut self, node: &Arc<Value>) -> Arc<Layout> {
+        let key = Arc::as_ptr(node) as usize;
+        match &self.layout {
+            Some((cached, layout)) if *cached == key => Arc::clone(layout),
+            _ => {
+                let layout = Arc::new(Layout::of(node));
+                self.layout = Some((key, Arc::clone(&layout)));
+                layout
+            }
+        }
+    }
+}
+
 impl Render for StoragePage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let tk = *tokens(cx);
@@ -1011,7 +1087,29 @@ impl Render for StoragePage {
 
 #[cfg(test)]
 mod tests {
-    use super::squarify;
+    use super::{Layout, TREEMAP_BOX, squarify};
+
+    #[test]
+    fn a_folder_is_laid_out_once_largest_first() {
+        let node = serde_json::json!({
+            "size": 100.0,
+            "other": 5.0,
+            "children": [
+                {"name": "small", "size": 10.0, "isDir": false},
+                {"name": "big", "size": 60.0, "isDir": true, "children": [{"name": "x", "size": 60.0}]},
+                {"name": "empty", "size": 0.0, "isDir": true},
+                {"name": "mid", "size": 25.0, "isDir": true},
+            ]
+        });
+        let layout = Layout::of(&node);
+        assert_eq!(layout.order, vec![1, 3, 0, 2]);
+        // Empty entries get no tile; "other" is the last, smallest one.
+        let tiles: Vec<Option<usize>> = layout.tiles.iter().map(|t| t.child).collect();
+        assert_eq!(tiles, vec![Some(1), Some(3), Some(0), None]);
+        let area: f64 = layout.tiles.iter().map(|t| t.rect.2 * t.rect.3).sum();
+        assert!((area - TREEMAP_BOX.0 * TREEMAP_BOX.1).abs() < 1e-9);
+        assert_eq!(Layout::of(&serde_json::json!({"children": []})), Layout::default());
+    }
 
     #[test]
     fn treemap_fills_the_box() {

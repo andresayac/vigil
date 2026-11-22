@@ -14,6 +14,7 @@ mod xml;
 pub mod accounts;
 pub mod apps;
 pub mod bits;
+pub mod bootimpact;
 pub mod certs;
 pub mod cpusets;
 pub mod defender;
@@ -33,6 +34,7 @@ pub mod signins;
 pub mod startup;
 pub mod svcsec;
 pub mod tasks;
+pub mod updates;
 pub mod watchlog;
 
 pub use error::SysError;

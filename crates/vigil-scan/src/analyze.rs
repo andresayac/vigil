@@ -542,6 +542,83 @@ fn com_hijack_flag(refs: &[Ref], info: Option<&Map<String, Value>>, path: &str, 
     None
 }
 
+/// What an Explorer extension does, for its label.
+fn shell_extension_kind(kind: &str) -> String {
+    match kind {
+        "context_menu" => tr!("context menu handler"),
+        "property_sheet" => tr!("property page"),
+        "drag_drop" => tr!("drag-and-drop handler"),
+        "copy_hook" => tr!("copy hook"),
+        "column_handler" => tr!("column handler"),
+        "icon_overlay" => tr!("icon overlay"),
+        "thumbnail_provider" => tr!("thumbnail provider"),
+        "preview_handler" => tr!("preview handler"),
+        "shell_service_object" => tr!("shell service object"),
+        "delay_load" => tr!("delay-loaded shell service object"),
+        "shared_task_scheduler" => tr!("shared task scheduler object"),
+        "execute_hook" => tr!("ShellExecute hook"),
+        "browser_helper" => tr!("browser helper object"),
+        _ => tr!("extension"),
+    }
+}
+
+/// The signal of an Explorer extension, once its DLL is known. Microsoft-signed DLLs and signed
+/// vendor DLLs in their own folders give none (cloud drives, archivers, Git clients, Office and
+/// graphics panels all register these). Objects Explorer loads when it starts (shell service
+/// objects, SharedTaskScheduler, ShellExecute hooks) weigh more: they run for every user at every
+/// sign-in without anyone opening a menu.
+fn shell_extension_flag(refs: &[Ref], info: Option<&Map<String, Value>>, path: &str, signed: bool) -> Option<Flag> {
+    let mine: Vec<&Ref> = refs
+        .iter()
+        .filter(|r| r.role.detail.get("source").and_then(Value::as_str) == Some(crate::shellext::SOURCE))
+        .collect();
+    let first = mine.first()?;
+    let startup = mine.iter().any(|r| truthy(r.role.detail.at("startup")));
+    let what = shell_extension_kind(&text(first.role.detail.at("kind")));
+    if !file_exists(info) {
+        return Some(Flag::new(
+            "shell_extension_missing",
+            5,
+            tr!(
+                "Explorer {0} whose DLL is gone: a leftover of an uninstalled program",
+                what
+            ),
+        ));
+    }
+    if !signed {
+        return Some(Flag::new(
+            "shell_extension_unsigned",
+            if startup { 50 } else { 30 },
+            if startup {
+                tr!("unsigned DLL Explorer loads when it starts ({0})", what)
+            } else {
+                tr!("unsigned DLL loaded into Explorer ({0})", what)
+            },
+        ));
+    }
+    if crate::rules::is_user_writable(path) {
+        return Some(Flag::new(
+            "shell_extension_user_folder",
+            if startup { 45 } else { 25 },
+            tr!(
+                "DLL loaded into Explorer ({0}) from a folder standard users can change: another program could replace it",
+                what
+            ),
+        ));
+    }
+    if mine.iter().any(|r| truthy(r.role.detail.at("shadowed"))) && !is_microsoft_signed(info) {
+        return Some(Flag::new(
+            "shell_extension_replaced",
+            20,
+            tr!(
+                "your account's registration replaces the DLL the computer registers for this Explorer {0}",
+                what
+            ),
+        ));
+    }
+    None
+}
+
 /// Startup-entry references and configuration findings (modified BootExecute...).
 /// The command of Vigil's own sign-in entry (Settings > Start with Windows): this very program,
 /// started hidden in the tray. The same text as `vigil_sys::startup::own_command`.
@@ -927,6 +1004,39 @@ fn autorun_refs(raw: &Value) -> (Vec<Ref>, Vec<Map<String, Value>>) {
                 };
                 // Signed or not, and where the file lives, is judged with the file
                 // (`evaluate_file`): per-user installs of signed apps register COM classes too.
+                let parsed = ParsedCommand {
+                    program: Some(file),
+                    certain: true,
+                    ..ParsedCommand::new(&command)
+                };
+                add(&command, label, vec![], Some(detail), Some(parsed));
+            }
+            "shell_extension" => {
+                let file = text(entry.at("file"));
+                if file.is_empty() {
+                    continue;
+                }
+                let kind = text(entry.at("kind"));
+                let detail = map(vec![
+                    ("source", source_value.clone()),
+                    ("reg_key", json!(location)),
+                    ("value", or_empty(entry.at("name"))),
+                    ("kind", json!(kind)),
+                    ("clsid", or_empty(entry.at("clsid"))),
+                    ("class_name", or_empty(entry.at("class_name"))),
+                    ("startup", json!(truthy(entry.at("startup")))),
+                    ("shadowed", json!(truthy(entry.at("shadowed")))),
+                ]);
+                let class = text(entry.at("class_name"));
+                let shown = if class.is_empty() { name.clone() } else { class };
+                let label = tr!(
+                    "Explorer {0} \"{1}\" ({2})",
+                    shell_extension_kind(&kind),
+                    shown,
+                    location
+                );
+                // Signed or not, and where the DLL lives, is judged with the file
+                // (`shell_extension_flag`): cloud drives, archivers and Office register these too.
                 let parsed = ParsedCommand {
                     program: Some(file),
                     certain: true,
@@ -1742,6 +1852,9 @@ fn evaluate_file(entity: &Entity, files: &Files, ctx: &Ctx) -> Item {
         }
     }
     if let Some(flag) = com_hijack_flag(&entity.refs, info, &path, valid || package_signed) {
+        item.add_flag(flag);
+    }
+    if let Some(flag) = shell_extension_flag(&entity.refs, info, &path, valid || package_signed) {
         item.add_flag(flag);
     }
     if let Some(flag) = crate::svcsec::hidden_flag(&entity.refs, info, &path) {

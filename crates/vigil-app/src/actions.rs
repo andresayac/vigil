@@ -1,8 +1,9 @@
 //! How the window asks for a change: it hands a typed request to
 //! `vigil_core::service::run_action`. That rebuilds the action
 //! from Rust's own state (`requests.rs`), confirms it in the native Windows task dialog
-//! (`confirm.rs`) and runs it through `vigil_actions::execute()`. Nothing in this crate builds an
-//! `ActionSpec` or calls the engine (a test below checks the sources).
+//! (`confirm.rs`, shown by the core) and runs it through `vigil_actions::execute()`. Nothing in
+//! this crate builds an `ActionSpec`, calls the engine or answers a confirmation: the core's
+//! `confirm::ask` is private to it (a compile-time seal), and a test below checks the sources.
 //!
 //! The request runs on its own thread, so the UI thread keeps pumping messages while the task
 //! dialog is open; the dialog is owned by the main window, which Windows disables meanwhile (the
@@ -11,11 +12,9 @@
 use std::sync::Arc;
 
 use futures::channel::{mpsc, oneshot};
-use vigil_core::confirm::{self, Answer, Prompt};
 use vigil_core::requests::Request;
 use vigil_core::service::{self, ActionOutcome, Ui};
 use vigil_core::state::AppState;
-use windows::Win32::Foundation::HWND;
 
 /// What the page shows after a request.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,13 +32,10 @@ struct NativeUi {
 }
 
 impl Ui for NativeUi {
+    /// The main window: the core's confirmation dialog belongs to it (its modal loop runs on the
+    /// request's thread).
     fn owner(&self) -> isize {
         self.owner
-    }
-
-    /// Runs on the request's thread: the dialog's modal loop runs there, owned by the main window.
-    fn ask(&self, prompt: Prompt) -> Answer {
-        confirm::ask(HWND(self.owner as *mut core::ffi::c_void), &prompt)
     }
 
     fn progress(&self, text: &str) {
@@ -121,8 +117,10 @@ fn summarize(result: Result<ActionOutcome, String>) -> Outcome {
 mod tests {
     use super::*;
 
-    /// The security boundary: the window only sends requests. It never builds an action,
-    /// never calls the engine and does not even depend on it.
+    /// The security boundary: the window only sends requests. It never builds an action, never
+    /// calls the engine (it does not even depend on it) and never answers a confirmation. The
+    /// core's `confirm::ask` is `pub(crate)`, so calling it does not compile; this also catches an
+    /// attempt to implement the action path's `Ui` anywhere but here, or to name an answer.
     #[test]
     fn the_ui_never_builds_or_runs_actions() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -131,6 +129,8 @@ mod tests {
             !manifest.contains("vigil-actions"),
             "the app must not depend on the action engine"
         );
+        let bridge = root.join("src").join("actions.rs");
+        let mut checked = 0;
         let mut stack = vec![root.join("src")];
         while let Some(dir) = stack.pop() {
             for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
@@ -139,21 +139,56 @@ mod tests {
                     stack.push(path);
                     continue;
                 }
-                if path.extension().is_none_or(|e| e != "rs") || path.ends_with("actions.rs") {
+                if path.extension().is_none_or(|e| e != "rs") {
                     continue;
                 }
                 let text = std::fs::read_to_string(&path).unwrap_or_default();
-                for forbidden in [
+                // The bridge's own tests (these lists) are not part of what it runs, and comments
+                // are not code. Whitespace is removed, so `confirm :: { ask }` or a line break
+                // cannot hide a name.
+                let code = if path == bridge {
+                    text.split("#[cfg(test)]").next().unwrap_or("")
+                } else {
+                    text.as_str()
+                };
+                let compact: String = code
+                    .lines()
+                    .filter(|line| !line.trim_start().starts_with("//"))
+                    .flat_map(str::chars)
+                    .filter(|c| !c.is_whitespace())
+                    .collect();
+                let mut forbidden = vec![
                     "vigil_actions",
                     "ActionSpec",
                     "execute_plan",
                     "execute(",
                     "confirm::ask",
-                ] {
-                    assert!(!text.contains(forbidden), "{} uses {forbidden}", path.display());
+                    "confirm::{",
+                    "Answer::Confirm",
+                    "Answer::Cancel",
+                    "confirm::Answer",
+                    "confirm::Prompt",
+                ];
+                // Only the bridge implements the action path's `Ui` (and imports it).
+                if path != bridge {
+                    forbidden.extend(["implUi", "service::Ui", "service::{"]);
                 }
+                for name in forbidden {
+                    assert!(!compact.contains(name), "{} uses {name}", path.display());
+                }
+                checked += 1;
             }
         }
+        assert!(checked > 20, "the sources were not found ({checked} files)");
+    }
+
+    /// `NativeUi` only names the owner window and passes progress on: it has no way to answer.
+    #[test]
+    fn the_bridge_cannot_answer() {
+        let text = include_str!("actions.rs");
+        let code = text.split("#[cfg(test)]").next().unwrap_or("");
+        let compact: String = code.chars().filter(|c| !c.is_whitespace()).collect();
+        assert!(!compact.contains("fnask("), "the bridge must not answer confirmations");
     }
 
     #[test]

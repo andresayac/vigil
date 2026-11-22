@@ -324,15 +324,15 @@ pub fn consent(ctx: Ctx, offer: Value, window: &mut Window, cx: &mut gpui_kit::A
             button.min_w(px(120.)).on_click(move |_, window, cx| {
                 answered.set(true);
                 window.close_dialog(cx);
-                app::finish_scan(&ctx, send, true, cx);
+                app::finish_scan(&ctx, send, true, crate::win::hwnd(window), cx);
             })
         };
         let on_close = {
             let ctx = ctx.clone();
             let answered = Rc::clone(&answered);
-            move |_: &gpui_kit::ClickEvent, _: &mut Window, cx: &mut gpui_kit::App| {
+            move |_: &gpui_kit::ClickEvent, window: &mut Window, cx: &mut gpui_kit::App| {
                 if !answered.replace(true) {
-                    app::finish_scan(&ctx, false, true, cx);
+                    app::finish_scan(&ctx, false, true, crate::win::hwnd(window), cx);
                 }
             }
         };

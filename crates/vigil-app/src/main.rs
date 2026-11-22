@@ -9,6 +9,7 @@
 //! - `--tray`: start hidden, watching from the tray (the start at sign-in); never asks for rights;
 //! - `--no-elevate`: start in read-only mode without asking for administrator rights;
 //! - `--elevate`: ask for them in a debug build too (release builds ask unless `--no-elevate`);
+//! - `--after PID`: wait (at most 15 s) for that copy to end first ("Restart as administrator");
 //! - `--demo` (with `--item ID`, `--size WxH`, `--dialog settings|scan|run` for previews):
 //!   fictitious data; reads nothing, changes nothing, no tray, no watch.
 //!
@@ -105,7 +106,13 @@ fn main() {
     let focus_item = arg(&args, "--item").map(|s| s.to_string());
     let dialog = arg(&args, "--dialog").map(|s| s.to_string());
 
-    // One native window per session: a second copy asks the first to show itself and quits.
+    // "Restart as administrator" names the copy it replaces: wait until that one is gone, so its
+    // window and its watch are free (bounded; a stale or foreign PID only shortens the wait).
+    if let Some(pid) = arg(&args, "--after").and_then(|pid| pid.parse::<u32>().ok()) {
+        platform::wait_for_exit(pid, 15_000);
+    }
+    // One native window per session: a second copy asks the first to show itself and quits (an
+    // elevated copy takes over from a standard one, see `platform::claim_window`).
     if !demo && !platform::claim_window() {
         return;
     }

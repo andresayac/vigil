@@ -21,6 +21,7 @@
  "connections": [
   {
    "pid": 6100,
+   "createdMs": 1767254400000,
    "process": "chrome.exe",
    "exe": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
    "protocol": "TCP",
@@ -32,6 +33,7 @@
   },
   {
    "pid": 8100,
+   "createdMs": 1767254400000,
    "process": "Discord.exe",
    "exe": "C:\\Users\\jdoe\\AppData\\Local\\Discord\\app-1.0\\Discord.exe",
    "protocol": "TCP",
@@ -43,6 +45,7 @@
   },
   {
    "pid": 1044,
+   "createdMs": 1767254400000,
    "process": "svchost.exe",
    "exe": "C:\\Windows\\System32\\svchost.exe",
    "protocol": "UDP",
@@ -54,6 +57,7 @@
   },
   {
    "pid": 840,
+   "createdMs": 1767254400000,
    "process": "lsass.exe",
    "exe": "C:\\Windows\\System32\\lsass.exe",
    "protocol": "TCP",
@@ -4122,7 +4126,7 @@
     "page": "tasks"
    },
    {
-    "text": "Starts at sign-in from HKCU\\…\\Run as \"Contoso Updater\".",
+    "text": "Starts at sign-in from HKCU\\\u2026\\Run as \"Contoso Updater\".",
     "page": "startup"
    },
    {
@@ -5265,8 +5269,8 @@
     {
      "id": "B2",
      "what": [
-      "Verdict: Review → Remove",
-      "Signature: Valid → Not signed",
+      "Verdict: Review \u2192 Remove",
+      "Signature: Valid \u2192 Not signed",
       "New: Starts with Windows (Run key)"
      ]
     },
@@ -5278,7 +5282,7 @@
     }
    ],
    "posture": [
-    "Remote Desktop: off → on",
+    "Remote Desktop: off \u2192 on",
     "New Microsoft Defender exclusion: C:\\Users\\jdoe\\AppData\\Roaming"
    ]
   }
@@ -8328,5 +8332,319 @@
    "title": "Service now starts automatically: Example Telemetry",
    "detail": "C:\\Program Files\\Example\\telemetry.exe"
   }
- ]
+ ],
+ "updates": {
+  "readMs": 1795329000000,
+  "product": "Windows 11 Pro",
+  "displayVersion": "24H2",
+  "build": "26100",
+  "ubr": 2454,
+  "servicingStack": "10.0.26100.2454",
+  "historySource": "agent",
+  "history": [
+   {
+    "timeMs": 1795307400000,
+    "time": "2026-11-22T00:30:00",
+    "title": "Security Intelligence Update for Microsoft Defender Antivirus - KB2267602 (Version 1.421.300.0)",
+    "kb": "KB2267602",
+    "operation": "install",
+    "result": "succeeded",
+    "code": ""
+   },
+   {
+    "timeMs": 1795069800000,
+    "time": "2026-11-19T06:30:00",
+    "title": "2026-11 Cumulative Update for Windows 11 Version 24H2 for x64-based Systems (KB5050009)",
+    "kb": "KB5050009",
+    "operation": "install",
+    "result": "succeeded",
+    "code": ""
+   },
+   {
+    "timeMs": 1795062600000,
+    "time": "2026-11-19T04:30:00",
+    "title": "Contoso Ltd. - Display - 31.0.15.4001",
+    "kb": "",
+    "operation": "install",
+    "result": "failed",
+    "code": "0x80073701"
+   },
+   {
+    "timeMs": 1794983400000,
+    "time": "2026-11-18T06:30:00",
+    "title": "2026-11 .NET Framework 3.5 and 4.8.1 Cumulative Update for Windows 11 (KB5050010)",
+    "kb": "KB5050010",
+    "operation": "install",
+    "result": "succeeded",
+    "code": ""
+   },
+   {
+    "timeMs": 1794810600000,
+    "time": "2026-11-16T06:30:00",
+    "title": "Contoso Ltd. - Display - 31.0.15.4001",
+    "kb": "",
+    "operation": "install",
+    "result": "failed",
+    "code": "0x80073701"
+   },
+   {
+    "timeMs": 1794551400000,
+    "time": "2026-11-13T06:30:00",
+    "title": "Windows Malicious Software Removal Tool x64 - v5.130 (KB890830)",
+    "kb": "KB890830",
+    "operation": "install",
+    "result": "succeeded",
+    "code": ""
+   },
+   {
+    "timeMs": 1794292200000,
+    "time": "2026-11-10T06:30:00",
+    "title": "Fabrikam - Bluetooth - 22.1.0.3",
+    "kb": "",
+    "operation": "install",
+    "result": "failed",
+    "code": "0x80240017"
+   },
+   {
+    "timeMs": 1794205800000,
+    "time": "2026-11-09T06:30:00",
+    "title": "Fabrikam - Bluetooth - 22.1.0.3",
+    "kb": "",
+    "operation": "install",
+    "result": "succeeded",
+    "code": ""
+   },
+   {
+    "timeMs": 1792477800000,
+    "time": "2026-10-20T06:30:00",
+    "title": "2026-10 Cumulative Update for Windows 11 Version 24H2 for x64-based Systems (KB5048001)",
+    "kb": "KB5048001",
+    "operation": "install",
+    "result": "succeeded",
+    "code": ""
+   },
+   {
+    "timeMs": 1792391400000,
+    "time": "2026-10-19T06:30:00",
+    "title": "2026-10 Cumulative Update for Windows 11 Version 24H2 for x64-based Systems (KB5048001)",
+    "kb": "KB5048001",
+    "operation": "install",
+    "result": "failed",
+    "code": "0x800F0922"
+   },
+   {
+    "timeMs": 1791873000000,
+    "time": "2026-10-13T06:30:00",
+    "title": "Update for Windows Security platform - KB5007651 (Version 10.0.29429.1000)",
+    "kb": "KB5007651",
+    "operation": "install",
+    "result": "succeeded",
+    "code": ""
+   },
+   {
+    "timeMs": 1789885800000,
+    "time": "2026-09-20T06:30:00",
+    "title": "2026-09 Cumulative Update for Windows 11 Version 24H2 for x64-based Systems (KB5046001)",
+    "kb": "KB5046001",
+    "operation": "install",
+    "result": "succeeded",
+    "code": ""
+   }
+  ],
+  "failures": [
+   {
+    "title": "Contoso Ltd. - Display - 31.0.15.4001",
+    "kb": "",
+    "count": 2,
+    "lastMs": 1795062600000,
+    "lastTime": "2026-11-19T04:30:00",
+    "code": "0x80073701",
+    "fixedLater": false
+   },
+   {
+    "title": "Fabrikam - Bluetooth - 22.1.0.3",
+    "kb": "",
+    "count": 1,
+    "lastMs": 1794292200000,
+    "lastTime": "2026-11-10T06:30:00",
+    "code": "0x80240017",
+    "fixedLater": false
+   },
+   {
+    "title": "2026-10 Cumulative Update for Windows 11 Version 24H2 for x64-based Systems (KB5048001)",
+    "kb": "KB5048001",
+    "count": 1,
+    "lastMs": 1792391400000,
+    "lastTime": "2026-10-19T06:30:00",
+    "code": "0x800F0922",
+    "fixedLater": true
+   }
+  ],
+  "lastInstallMs": 1795307400000,
+  "lastInstallTitle": "Security Intelligence Update for Microsoft Defender Antivirus - KB2267602 (Version 1.421.300.0)",
+  "lastSearchMs": 1795311000000,
+  "rebootPending": true,
+  "rebootReasons": [
+   "windows_update"
+  ],
+  "rebootSinceMs": 1795069800000,
+  "paused": false,
+  "pauseUntilMs": null,
+  "pauseFeatureUntilMs": null,
+  "pauseQualityUntilMs": null,
+  "activeHoursStart": 8,
+  "activeHoursEnd": 17,
+  "activeHoursAutomatic": true,
+  "policy": {
+   "set": true,
+   "wsusServer": "",
+   "useWsus": false,
+   "noAutoUpdate": false,
+   "auOptions": null,
+   "disableAccess": false,
+   "blockInternet": false,
+   "deferFeatureDays": null,
+   "deferQualityDays": 7,
+   "targetVersion": ""
+  },
+  "serviceStart": "demand",
+  "serviceRunning": true,
+  "disabled": false,
+  "defenderVersion": "1.421.300.0",
+  "defenderUpdatedMs": 1795307400000,
+  "hints": [
+   {
+    "code": "failing_repeatedly",
+    "severity": "warn",
+    "subject": "Contoso Ltd. - Display - 31.0.15.4001",
+    "count": 2,
+    "detail": "0x80073701"
+   },
+   {
+    "code": "restart_pending",
+    "severity": "warn",
+    "subject": "",
+    "count": 3,
+    "detail": ""
+   },
+   {
+    "code": "deferred",
+    "severity": "info",
+    "subject": "",
+    "count": 7,
+    "detail": ""
+   }
+  ],
+  "notes": []
+ },
+ "startupImpact": {
+  "readMs": 1795329000000,
+  "measured": true,
+  "needsAdmin": false,
+  "programs": [
+   {
+    "key": "contosomail.exe",
+    "path": "C:\\Program Files\\Contoso\\Mail\\ContosoMail.exe",
+    "cpuMs": 1420,
+    "diskBytes": 6396000,
+    "boots": 5,
+    "lastMs": 1795156200000,
+    "degradationMs": 0,
+    "degradedMs": 0,
+    "level": "high"
+   },
+   {
+    "key": "tailspinvpn.exe",
+    "path": "C:\\Program Files\\Tailspin\\VPN\\TailspinVPN.exe",
+    "cpuMs": 210,
+    "diskBytes": 204800,
+    "boots": 5,
+    "lastMs": 1795156200000,
+    "degradationMs": 1900,
+    "degradedMs": 1794551400000,
+    "level": "high"
+   },
+   {
+    "key": "onesync.exe",
+    "path": "C:\\Users\\jdoe\\AppData\\Local\\Contoso\\OneSync\\OneSync.exe",
+    "cpuMs": 380,
+    "diskBytes": 419840,
+    "boots": 5,
+    "lastMs": 1795156200000,
+    "degradationMs": 0,
+    "degradedMs": 0,
+    "level": "medium"
+   },
+   {
+    "key": "notes.exe",
+    "path": "C:\\Program Files\\Woodgrove\\Notes\\Notes.exe",
+    "cpuMs": 520,
+    "diskBytes": 120000,
+    "boots": 4,
+    "lastMs": 1795156200000,
+    "degradationMs": 0,
+    "degradedMs": 0,
+    "level": "medium"
+   },
+   {
+    "key": "updater.exe",
+    "path": "C:\\Users\\jdoe\\AppData\\Roaming\\Microsft\\updater.exe",
+    "cpuMs": 60,
+    "diskBytes": 40960,
+    "boots": 5,
+    "lastMs": 1795156200000,
+    "degradationMs": 0,
+    "degradedMs": 0,
+    "level": "low"
+   },
+   {
+    "key": "securityhealthsystray.exe",
+    "path": "C:\\Windows\\System32\\SecurityHealthSystray.exe",
+    "cpuMs": 40,
+    "diskBytes": 92160,
+    "boots": 5,
+    "lastMs": 1795156200000,
+    "degradationMs": 0,
+    "degradedMs": 0,
+    "level": "low"
+   }
+  ],
+  "boots": [
+   {
+    "timeMs": 1795149772382,
+    "time": "2026-11-19T23:42:52",
+    "bootMs": 28400,
+    "mainPathMs": 11200,
+    "postBootMs": 17200
+   },
+   {
+    "timeMs": 1794890572382,
+    "time": "2026-11-16T23:42:52",
+    "bootMs": 30500,
+    "mainPathMs": 11600,
+    "postBootMs": 18900
+   },
+   {
+    "timeMs": 1794544972382,
+    "time": "2026-11-12T23:42:52",
+    "bootMs": 32600,
+    "mainPathMs": 12000,
+    "postBootMs": 20600
+   },
+   {
+    "timeMs": 1794112972382,
+    "time": "2026-11-07T23:42:52",
+    "bootMs": 34700,
+    "mainPathMs": 12400,
+    "postBootMs": 22300
+   },
+   {
+    "timeMs": 1793594572382,
+    "time": "2026-11-01T23:42:52",
+    "bootMs": 36800,
+    "mainPathMs": 12800,
+    "postBootMs": 24000
+   }
+  ]
+ }
 }

@@ -1,10 +1,13 @@
 //! Native confirmation with a Windows task dialog. The window never decides that an action
 //! runs: Rust rebuilds the action, shows exactly what it will do here, and runs it only on "yes".
+//! [`ask`] is private to this crate: a front end cannot show the dialog or answer it; the core
+//! (`service::run_action`, the AI consents) asks the user itself.
 //!
 //! The text is plain (hyperlinks are not enabled), so names and paths that come from the system
-//! cannot inject anything. TaskDialogIndirect lives only in Common Controls 6; it is loaded at call
-//! time so that binaries without the application manifest (tests) still start, and a plain message
-//! box is used when it is not available.
+//! cannot inject anything, and hidden or direction-changing characters in them are shown as
+//! markers (see `display.rs`). TaskDialogIndirect lives only in Common Controls 6; it is loaded at
+//! call time so that binaries without the application manifest (tests) still start, and a plain
+//! message box is used when it is not available.
 
 use windows::Win32::Foundation::HWND;
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
@@ -55,12 +58,25 @@ fn task_dialog_fn() -> Option<TaskDialogIndirectFn> {
     Some(unsafe { std::mem::transmute::<unsafe extern "system" fn() -> isize, TaskDialogIndirectFn>(proc) })
 }
 
-/// Shows the confirmation. Must run on the thread that owns `parent` (the main thread).
-pub fn ask(parent: HWND, prompt: &Prompt) -> Answer {
+/// Shows the confirmation, owned by `parent` (Windows disables that window meanwhile). Only the
+/// core calls it.
+pub(crate) fn ask(parent: HWND, prompt: &Prompt) -> Answer {
+    let prompt = Prompt {
+        title: crate::display::shown(&prompt.title),
+        body: crate::display::shown(&prompt.body),
+        warning: crate::display::shown(&prompt.warning),
+        confirm: crate::display::shown_line(&prompt.confirm),
+        ..prompt.clone()
+    };
     match task_dialog_fn() {
-        Some(dialog) => ask_task_dialog(dialog, parent, prompt),
-        None => ask_message_box(parent, prompt),
+        Some(dialog) => ask_task_dialog(dialog, parent, &prompt),
+        None => ask_message_box(parent, &prompt),
     }
+}
+
+/// [`ask`] owned by a window handle passed as a number (0: no owner).
+pub(crate) fn ask_owned(owner: isize, prompt: &Prompt) -> Answer {
+    ask(HWND(owner as *mut core::ffi::c_void), prompt)
 }
 
 fn ask_task_dialog(dialog: TaskDialogIndirectFn, parent: HWND, prompt: &Prompt) -> Answer {
@@ -141,7 +157,7 @@ fn ask_message_box(parent: HWND, prompt: &Prompt) -> Answer {
 
 /// A plain information or error message (results that need attention).
 pub fn tell(parent: HWND, title: &str, text: &str) {
-    let text = wide(&format!("{title}\n\n{text}"));
+    let text = wide(&crate::display::shown(&format!("{title}\n\n{text}")));
     let caption = wide("Vigil");
     // SAFETY: both strings are NUL-terminated and outlive the call.
     unsafe {

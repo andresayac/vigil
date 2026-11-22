@@ -328,7 +328,7 @@ impl AccountsPage {
                                 div()
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .when(!a.b("enabled"), |this| this.text_color(tk.ink2))
-                                    .child(a.s("name").to_string()),
+                                    .child(kit::plain(a.s("name").to_string())),
                             )
                             .when(a.has("fullName"), |this| {
                                 this.child(kit::faint(a.s("fullName").to_string(), tk))

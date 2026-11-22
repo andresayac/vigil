@@ -230,9 +230,10 @@ pub fn cancel() {
 }
 
 /// Investigates one finding of the loaded report with the configured AI agent. Blocking (it
-/// waits for the person and for the model): call it off the UI thread. `ui` shows the consent
-/// dialog (the destination, the anonymization, the read-only tools) and gets one progress line
-/// per tool call ("name (bytes B)"). `Ok(None)`: the person declined.
+/// waits for the person and for the model): call it off the UI thread. The core shows the native
+/// consent dialog (the destination, the anonymization, the read-only tools), owned by `ui`'s
+/// window; `ui` gets one progress line per tool call ("name (bytes B)"). `Ok(None)`: the person
+/// declined.
 pub fn investigate(st: &AppState, id: &str, ui: &(dyn Ui + Sync)) -> Result<Option<InvestigationView>, String> {
     if RUNNING.swap(true, Ordering::SeqCst) {
         return Err(tr!("An investigation is already running."));
@@ -278,7 +279,7 @@ fn run(st: &AppState, id: &str, ui: &(dyn Ui + Sync)) -> Result<Option<Investiga
         destructive: false,
         restore_point: None,
     };
-    if !matches!(ui.ask(prompt), Answer::Confirm { .. }) {
+    if !matches!(crate::service::confirm(ui, &prompt), Answer::Confirm { .. }) {
         return Ok(None);
     }
     CANCEL.store(false, Ordering::Relaxed);

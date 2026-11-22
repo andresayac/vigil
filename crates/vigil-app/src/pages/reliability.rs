@@ -432,7 +432,7 @@ impl ReliabilityPage {
                             div()
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .min_w(px(120.))
-                                .child(first.s("subject").to_string()),
+                                .child(kit::plain(first.s("subject").to_string())),
                         )
                         .child(kit::body(count_text))
                         .child(kit::faint(tf("rel.last", &[("when", &when(first.s("time")))]), tk))

@@ -58,6 +58,7 @@ pub fn page(key: &str) -> char {
         "programs" => '\u{E71D}',
         "storage" => '\u{EDA2}',
         "system" => '\u{E950}',
+        "updates" => '\u{E895}',
         "reliability" => '\u{E95E}',
         _ => '\u{E8A5}',
     }

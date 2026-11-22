@@ -279,6 +279,11 @@ fn base_definitions() -> Vec<ToolDef> {
             ),
         ),
         def(
+            "get_updates",
+            "Windows Update as this computer recorded it (nothing is searched online): install history with failures grouped by update, last successful install, pending restart, pause, active hours, policies that disable, defer or redirect updates, the service's start type, the Windows build, and hints.",
+            schema(json!({}), &[]),
+        ),
+        def(
             "list_alerts",
             "Alerts of Vigil's background watch (new startup entries, services, tasks, drivers, changed security settings, open remote-access ports), newest first.",
             schema(
@@ -444,6 +449,7 @@ pub fn call(ctx: &Context, name: &str, input: &Value) -> Result<Value, String> {
         "list_extensions" => list_extensions(ctx, input),
         "get_signins_summary" => signins(input),
         "get_reliability_summary" => reliability(input),
+        "get_updates" => Ok(compact(&to_value(&vigil_sys::updates::read()), 30)),
         "list_alerts" => alerts(input),
         "check_file" => check_file(input),
         "get_scan_summary" | "get_related" | "get_process_events" | "get_file_history" => {

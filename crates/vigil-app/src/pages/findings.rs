@@ -53,6 +53,8 @@ pub struct FindingsPage {
     /// The finding the details show, and its planned actions.
     current: Option<String>,
     plans: Vec<Value>,
+    /// The report's items, copied once per report revision (not every frame).
+    items: (u64, std::sync::Arc<Vec<Value>>),
     copied: bool,
     investigation: Investigation,
     acting: Acting,
@@ -125,6 +127,7 @@ impl FindingsPage {
             ids: None,
             current: None,
             plans: Vec::new(),
+            items: (u64::MAX, std::sync::Arc::new(Vec::new())),
             copied: false,
             investigation: Investigation::default(),
             acting: Acting::default(),
@@ -167,6 +170,12 @@ impl FindingsPage {
     /// "Export": the loaded report's findings (or the page) as a file the user names. The report
     /// is read-only here; only the chosen file is written.
     fn export(&mut self, format: Format, window: &mut Window, cx: &mut Context<Self>) {
+        // The demo changes nothing on the computer, not even a file the person names.
+        if self.ctx.demo() {
+            self.export_note = Some((ui::Severity::Info, t("app.demoNoActions"), None));
+            cx.notify();
+            return;
+        }
         let Some(report) = self.ctx.report.read(cx).analysis.clone() else {
             self.export_note = Some((ui::Severity::Info, t("findings.runScan"), None));
             cx.notify();
@@ -419,11 +428,15 @@ impl FindingsPage {
         );
     }
 
+    /// Asks for action `index` of the selected finding, naming the op and target the page shows:
+    /// the core refuses it if the report changed meanwhile.
     fn act(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(id) = self.current.clone() else { return };
+        let Some(spec) = self.plans.get(index) else { return };
+        let (op, target) = (spec.s("op").to_string(), spec.s("target").to_string());
         common::send_json(
             self,
-            json!({"kind": "finding", "itemId": id, "index": index}),
+            json!({"kind": "finding", "itemId": id, "index": index, "op": op, "target": target}),
             window,
             cx,
         );
@@ -1147,11 +1160,15 @@ impl Render for FindingsPage {
         let has_report = report.analysis.is_some();
         // A report the tray copy saved where any program can change it: shown to read only.
         let view_only = report.analysis.as_ref().is_some_and(|a| a.b("viewOnly"));
-        let all: Vec<Value> = report
-            .analysis
-            .as_ref()
-            .map(|a| a.a("items").to_vec())
-            .unwrap_or_default();
+        if self.items.0 != report.revision {
+            let items = report
+                .analysis
+                .as_ref()
+                .map(|a| a.a("items").to_vec())
+                .unwrap_or_default();
+            self.items = (report.revision, std::sync::Arc::new(items));
+        }
+        let all = std::sync::Arc::clone(&self.items.1);
         let ignored = report.ignored.clone();
         let counted: Vec<&Value> = all
             .iter()

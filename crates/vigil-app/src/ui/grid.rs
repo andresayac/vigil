@@ -104,8 +104,15 @@ pub struct GridCell {
 }
 
 impl GridCell {
+    /// A text cell. Names and paths come from the computer: hidden or direction-changing
+    /// characters and line breaks are shown as markers (`vigil_core::display::shown_line`).
     pub fn text(text: impl Into<String>) -> Self {
         let text = text.into();
+        let text = if vigil_core::display::is_plain(&text) && !text.contains(['\n', '\r', '\t']) {
+            text
+        } else {
+            vigil_core::display::shown_line(&text)
+        };
         Self {
             sort: SortKey::Text(text.to_lowercase()),
             text,

@@ -18,10 +18,15 @@ use vigil_i18n::{tl, tr};
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum Request {
+    /// Action `index` of a finding's offered actions, with the op and target the page showed: if
+    /// the report changed meanwhile (another one was opened, a scan finished), the same index can
+    /// mean another action, and the request is refused.
     #[serde(rename_all = "camelCase")]
     Finding {
         item_id: String,
         index: usize,
+        op: String,
+        target: String,
     },
     #[serde(rename_all = "camelCase")]
     Process {
@@ -302,13 +307,23 @@ pub fn allowed_url(url: &str) -> bool {
 
 pub fn build(request: &Request, ctx: &Context<'_>) -> Result<Plan, String> {
     match request {
-        Request::Finding { item_id, index } => {
+        Request::Finding {
+            item_id,
+            index,
+            op,
+            target,
+        } => {
             let item = find_item(ctx.analysis, item_id).ok_or(tr!("The finding is no longer in the report."))?;
             let specs = planner::plan_actions(item, scan_started(ctx.analysis));
             let spec = specs
                 .into_iter()
                 .nth(*index)
                 .ok_or(tr!("That action is no longer offered for this finding."))?;
+            if spec.op != *op || spec.target != *target {
+                return Err(tr!(
+                    "The report changed since this finding was shown. Look at the finding again."
+                ));
+            }
             Ok(classify(spec, Some(item_id.clone())))
         }
         Request::Role { op, item_id, role } => role_plan(op, item_id, *role, ctx),
@@ -701,11 +716,7 @@ fn process_plan(
     ctx: &Context<'_>,
 ) -> Result<Plan, String> {
     // Re-read the process: the PID must still belong to the process the user selected.
-    let row = ctx
-        .processes
-        .iter()
-        .find(|r| r.pid == pid && (created_ms == 0 || r.created_ms == created_ms))
-        .ok_or(tr!("The process has exited."))?;
+    let row = live_row(ctx, pid, created_ms).ok_or(tr!("The process has exited."))?;
     let name = format!("{} (PID {})", row.name, row.pid);
     let ident = json!({"pid": row.pid, "create_time": row.created_ms as f64 / 1000.0});
     let exe = row.exe.clone();
@@ -833,10 +844,15 @@ fn process_plan(
     Ok(classify(spec, None))
 }
 
+/// The running process with this PID and start time. Both must match: a start time of 0 names no
+/// process (it is not a wildcard), so a PID reused by another process is never acted on.
 fn live_row<'r>(ctx: &'r Context<'_>, pid: u32, created_ms: i64) -> Option<&'r vigil_sys::process::ProcessRow> {
+    if created_ms == 0 {
+        return None;
+    }
     ctx.processes
         .iter()
-        .find(|r| r.pid == pid && (created_ms == 0 || r.created_ms == created_ms))
+        .find(|r| r.pid == pid && r.created_ms == created_ms)
 }
 
 /// End task on a group row: one `process.terminate` for every process of the group that still runs
@@ -1404,10 +1420,81 @@ mod tests {
                 ..
             }
         ));
-        let r: Request = serde_json::from_value(json!({"kind": "finding", "itemId": "B1", "index": 2}))
-            .unwrap_or(Request::Cleanup { keys: vec![] });
+        let r: Request = serde_json::from_value(
+            json!({"kind": "finding", "itemId": "B1", "index": 2, "op": "file.quarantine", "target": r"C:\x.exe"}),
+        )
+        .unwrap_or(Request::Cleanup { keys: vec![] });
         assert!(matches!(r, Request::Finding { index: 2, .. }));
+        // A finding request names the action the page showed, or it is not understood.
+        assert!(serde_json::from_value::<Request>(json!({"kind": "finding", "itemId": "B1", "index": 2})).is_err());
         assert!(serde_json::from_value::<Request>(json!({"kind": "exec", "cmd": "calc"})).is_err());
+    }
+
+    /// A start time of 0 is not a wildcard: the request names no process and is refused, even when
+    /// a process with that PID runs (it may have taken the PID of the one the page showed).
+    #[test]
+    fn a_zero_start_time_names_no_process() {
+        let rows = [row(4242, "notes.exe", 1000)];
+        let ctx = context(&rows);
+        let ask = |created_ms: i64, op: &str| {
+            build(
+                &Request::Process {
+                    op: op.into(),
+                    pid: 4242,
+                    created_ms,
+                    priority: None,
+                    pids: Vec::new(),
+                    cores: Vec::new(),
+                },
+                &ctx,
+            )
+        };
+        assert!(ask(1000, "terminate").is_ok());
+        for op in ["terminate", "block", "suspend", "location"] {
+            assert!(ask(0, op).is_err(), "{op} with a zero start time");
+        }
+        assert!(ask(999, "terminate").is_err(), "another start time is another process");
+    }
+
+    fn fixture_analysis() -> Value {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("data")
+            .join("fixture-analysis.json");
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap_or_default()).unwrap_or(Value::Null)
+    }
+
+    /// The same index can mean another action once another report is loaded: the op and target the
+    /// page showed must still match, or nothing runs.
+    #[test]
+    fn a_finding_action_must_be_the_one_shown() {
+        let analysis = fixture_analysis();
+        let started = scan_started(Some(&analysis));
+        let (item_id, spec) = items(Some(&analysis))
+            .iter()
+            .find_map(|item| {
+                let specs = planner::plan_actions(item, started);
+                let id = item.get("id").and_then(Value::as_str)?.to_string();
+                specs.into_iter().next().map(|spec| (id, spec))
+            })
+            .unwrap_or_default();
+        assert!(!item_id.is_empty(), "the fixture offers actions");
+        let mut ctx = context(&[]);
+        ctx.analysis = Some(&analysis);
+        let ask = |op: &str, target: &str| {
+            build(
+                &Request::Finding {
+                    item_id: item_id.clone(),
+                    index: 0,
+                    op: op.into(),
+                    target: target.into(),
+                },
+                &ctx,
+            )
+        };
+        assert!(ask(&spec.op, &spec.target).is_ok());
+        assert!(ask("not.this.op", &spec.target).is_err(), "a different op is refused");
+        assert!(ask(&spec.op, r"C:\Windows\explorer.exe").is_err());
     }
 
     fn row(pid: u32, name: &str, created_ms: i64) -> vigil_sys::process::ProcessRow {

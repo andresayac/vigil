@@ -111,14 +111,60 @@ pub fn scan_collect(
     Ok(offer)
 }
 
-/// Finishes the scan: with the AI review (`review`) or without it, and saves the report.
-/// `selected`: the AI review was chosen in the scan dialog. Returns the report.
-pub fn scan_finish(st: &AppState, review: bool, selected: bool, progress: &dyn Fn(&str)) -> Result<Value, String> {
+/// The native consent for sending a scan's items to the AI: where they go, whether they leave
+/// the computer, and how names are handled.
+fn review_consent(provider: &vigil_scan::ai::Provider, pending: usize, redact: bool) -> crate::confirm::Prompt {
+    use vigil_i18n::tr;
+    let where_text = if provider.local {
+        tr!("Your data stays on this computer.")
+    } else {
+        tr!("Data about this computer leaves it and is processed by this service.")
+    };
+    let names = if redact {
+        tr!("User, account, profile folder and computer names are replaced before anything is sent.")
+    } else {
+        tr!("User, account and computer names are sent as they are.")
+    };
+    crate::confirm::Prompt {
+        title: tr!("Send {0} findings for the AI review?", pending),
+        body: tr!(
+            "Destination: {0}\n{1}\n{2}\n\nA copy of what is sent is saved next to the report.",
+            provider.destination,
+            where_text,
+            names
+        ),
+        confirm: if provider.local { tr!("Review") } else { tr!("Send") },
+        ..Default::default()
+    }
+}
+
+/// Finishes the scan: with the AI review (`review`: the person chose it in the window) or without
+/// it, and saves the report. `selected`: the AI review was chosen in the scan dialog. Returns the
+/// report.
+///
+/// The window's choice is not enough to send anything: before the items leave for the AI, the core
+/// asks once more in a native dialog owned by `owner` (the window can show its preview, but cannot
+/// answer this).
+pub fn scan_finish(
+    st: &AppState,
+    review: bool,
+    selected: bool,
+    owner: isize,
+    progress: &dyn Fn(&str),
+) -> Result<Value, String> {
     let (mut pending, redact) = {
         let mut inner = st.lock();
         let pending = inner.pending.take().ok_or("There is no scan to finish.")?;
         (pending, inner.settings.ai.redact)
     };
+    let review = review
+        && match &pending.provider {
+            Some(provider) if pending.pending > 0 => matches!(
+                crate::confirm::ask_owned(owner, &review_consent(provider, pending.pending, redact)),
+                crate::confirm::Answer::Confirm { .. }
+            ),
+            _ => true,
+        };
     let reason = match (&pending.provider, review) {
         (Some(provider), true) if pending.pending > 0 => {
             progress(&format!(
@@ -457,18 +503,16 @@ pub fn open_auto_report(st: &AppState, watcher: &crate::watch::Watcher) -> Resul
     crate::autoscan::check_report_path(&path, &folders)?;
     // An elevated copy reads a report the standard-user tray copy wrote in a folder any program of
     // this user can write to: it may look, but nothing is planned from it (a planted report could
-    // mark a security product "remove"). Its own folder (Administrators only) is trusted.
-    let trusted = !st.admin || crate::autoscan::inside(&path, &own);
-    let analysis = vigil_scan::pipeline::load_report(&path).map_err(|e| format!("Could not open the report: {e}"))?;
-    if trusted {
-        st.set_analysis(analysis, Some(path));
-    } else {
-        st.set_analysis_untrusted(analysis, path);
-    }
-    let mut json = st.lock().analysis_json.clone();
-    // The page says why this report offers no actions.
-    if let (false, Some(Value::Object(map))) = (trusted, json.as_mut()) {
-        map.insert("viewOnly".into(), Value::Bool(true));
-    }
-    Ok(json)
+    // mark a security product "remove"). Its own folder (Administrators only) is trusted. The same
+    // rule as "Open report…" (`AppState::report_trusted`).
+    st.open_report(&path)?;
+    Ok(st.report_view())
+}
+
+/// "Open report…": a saved `*-report.json` the person picked becomes the current report, trusted
+/// only in this copy's own scans folder (see `AppState::report_trusted`). Returns the report as the
+/// window reads it (`viewOnly` when it is only to be looked at).
+pub fn open_report(st: &AppState, path: &Path) -> Result<Option<Value>, String> {
+    st.open_report(path)?;
+    Ok(st.report_view())
 }

@@ -11,7 +11,7 @@ use windows::Win32::System::SystemInformation::OSVERSIONINFOW;
 use windows::Win32::UI::WindowsAndMessaging::{IsIconic, SHOW_WINDOW_CMD, SW_HIDE, SW_RESTORE, SW_SHOW, ShowWindow};
 use windows::core::BOOL;
 
-/// The window's HWND as an integer (0 when it has none), for `vigil_core::service::Ui::owner`.
+/// The window's HWND as an integer (0 when it has none): the owner of the core's native dialogs.
 pub fn hwnd(window: &Window) -> isize {
     match HasWindowHandle::window_handle(window).map(|handle| handle.as_raw()) {
         Ok(RawWindowHandle::Win32(handle)) => handle.hwnd.get(),

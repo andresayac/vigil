@@ -396,6 +396,13 @@ fn plain_folder(path: &Path) -> bool {
     std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_dir() && is_plain(&meta))
 }
 
+/// `path` is a plain file directly in `folder`, itself a plain folder (no link on the way).
+pub fn plain_file_in(path: &Path, folder: &Path) -> bool {
+    inside(path, folder)
+        && plain_folder(folder)
+        && std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_file() && is_plain(&meta))
+}
+
 /// Deletes the files of all but the newest `keep` automatic scans in `dir`, and temporary files a
 /// stopped scan left behind. Only files named like Vigil's own automatic reports, directly in
 /// `dir`, never through a link (a folder that is a link is left alone). Returns how many files

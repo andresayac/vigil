@@ -2956,6 +2956,7 @@ mod tests {
     #[test]
     fn only_remote_access_ports_on_every_interface_count() {
         let row = |protocol: &str, local: &str, state: &str, process: &str| vigil_sys::net::Connection {
+            created_ms: 0,
             pid: 1,
             process: process.into(),
             exe: String::new(),

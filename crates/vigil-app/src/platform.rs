@@ -5,27 +5,35 @@
 //! `Shell_NotifyIconW` reports clicks there, and the menu is a native popup menu, so it looks and
 //! reads (Narrator) like every other tray menu. What the user picks travels to the UI thread as a
 //! [`Command`]. A second copy of the window finds that hidden window and asks it to show the first
-//! copy, then quits. The watch's own named mutex (`watch::claim_watch`) still decides which copy
-//! of Vigil watches and owns the icon.
+//! copy, then quits, unless it runs elevated and the first copy does not: then the first copy is
+//! asked to quit and the elevated one takes over (see [`claim_window`]). The watch's own named
+//! mutex (`watch::claim_watch`) still decides which copy of Vigil watches and owns the icon.
 
 use std::sync::atomic::{AtomicIsize, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use futures::channel::mpsc::UnboundedSender;
 use vigil_core::watch::{self, Watcher};
-use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError, HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows::Win32::Foundation::{
+    CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, HWND, LPARAM, LRESULT, POINT, WPARAM,
+};
+use windows::Win32::Security::{GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::System::Threading::CreateMutexW;
+use windows::Win32::System::Threading::{
+    CreateMutexW, OpenProcess, OpenProcessToken, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+    PROCESS_SYNCHRONIZE, QueryFullProcessImageNameW, WaitForSingleObject,
+};
 use windows::Win32::UI::Shell::{
     NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NIM_SETVERSION, NOTIFYICON_VERSION_4,
     NOTIFYICONDATAW, Shell_NotifyIconW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreateIconFromResourceEx, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
-    DispatchMessageW, FindWindowExW, GetCursorPos, GetMessageW, GetSystemMetrics, HICON, HWND_MESSAGE, LR_DEFAULTCOLOR,
-    LookupIconIdFromDirectoryEx, MF_SEPARATOR, MF_STRING, MSG, PostMessageW, RegisterClassW, RegisterWindowMessageW,
-    SM_CXSMICON, SM_CYSMICON, SetForegroundWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage,
-    WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CONTEXTMENU, WM_LBUTTONUP, WM_NULL, WM_RBUTTONUP, WNDCLASSW,
+    AppendMenuW, ChangeWindowMessageFilterEx, CreateIconFromResourceEx, CreatePopupMenu, CreateWindowExW,
+    DefWindowProcW, DestroyMenu, DispatchMessageW, FindWindowExW, GetCursorPos, GetMessageW, GetSystemMetrics,
+    GetWindowThreadProcessId, HICON, HWND_MESSAGE, LR_DEFAULTCOLOR, LookupIconIdFromDirectoryEx, MF_SEPARATOR,
+    MF_STRING, MSG, MSGFLT_ALLOW, PostMessageW, RegisterClassW, RegisterWindowMessageW, SM_CXSMICON, SM_CYSMICON,
+    SetForegroundWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WM_APP, WM_CONTEXTMENU, WM_LBUTTONUP, WM_NULL, WM_RBUTTONUP, WNDCLASSW,
 };
 use windows::core::{PCWSTR, w};
 
@@ -53,6 +61,9 @@ const WM_REFRESH: u32 = WM_APP + 2;
 const WM_ACTIVATE_COPY: u32 = WM_APP + 3;
 /// This copy took the watch over: show the icon.
 const WM_SHOW_ICON: u32 = WM_APP + 4;
+/// An elevated copy starts while this copy (not elevated) has the window: quit so it takes over.
+/// Windows only delivers it from a process of the same or a higher integrity level.
+const WM_YIELD_TO_ELEVATED: u32 = WM_APP + 5;
 const ICON_ID: u32 = 1;
 
 const ID_OPEN: usize = 1;
@@ -114,23 +125,221 @@ fn post(message: u32) {
     }
 }
 
-/// Holds this session's "one native window" mutex. `false`: another copy holds it; that copy has
-/// been asked to show its window and this one should quit.
+/// Who holds this session's window, found through its hidden tray window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Holder {
+    /// No Vigil window answers: the holder is still starting, has hung, or another program took
+    /// the mutex's name.
+    None,
+    /// This same `vigil.exe`: its process id and whether it runs elevated (`None`: unknown).
+    Vigil { pid: u32, elevated: Option<bool> },
+    /// A window with Vigil's class that belongs to another program.
+    Other,
+}
+
+/// What a copy that starts does about the window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Claim {
+    /// Open the window.
+    Open,
+    /// Ask the copy that has it to show it, and quit.
+    Activate,
+    /// Ask that copy (not elevated) to quit, wait for its process, then open: the person approved
+    /// UAC and must get the elevated window.
+    Replace(u32),
+}
+
+/// The decision, without side effects. `taken`: the session's window mutex already existed.
+///
+/// - Free: open.
+/// - Held by this same `vigil.exe`: show that window, unless this copy is elevated and that one
+///   is not, which then quits and lets this one take over.
+/// - Held by anything else (no Vigil window answers, or the window belongs to another program):
+///   open anyway. Another program creating the name first must not keep Vigil from opening.
+pub fn decide(taken: bool, holder: Holder, elevated: bool) -> Claim {
+    match holder {
+        _ if !taken => Claim::Open,
+        Holder::Vigil {
+            pid,
+            elevated: Some(false),
+        } if elevated => Claim::Replace(pid),
+        Holder::Vigil { .. } => Claim::Activate,
+        Holder::None | Holder::Other => Claim::Open,
+    }
+}
+
+/// This session's "one native window" mutex (kept open for the life of the process on purpose: it
+/// is what marks this copy as the one with the window).
+static WINDOW_MUTEX: AtomicIsize = AtomicIsize::new(0);
+
+/// Decides whether this copy opens the window (see [`decide`]). `false`: another copy shows its
+/// window and this one should quit.
 pub fn claim_window() -> bool {
-    // SAFETY: plain Win32 call with a static name; the handle stays open for the life of the
-    // process on purpose (it is what marks this copy as the one with the window).
+    let elevated = vigil_sys::elevation::is_elevated();
+    for _ in 0..3 {
+        let taken = create_window_mutex();
+        if !taken {
+            return true;
+        }
+        let (holder, window) = find_holder();
+        match decide(taken, holder, elevated) {
+            Claim::Open => {
+                eprintln!("the window mutex is held by something other than Vigil: opening anyway");
+                return true;
+            }
+            Claim::Activate => {
+                if let Some(window) = window {
+                    // SAFETY: posts a message without pointers to another process's window.
+                    let _ = unsafe { PostMessageW(Some(window), WM_ACTIVATE_COPY, WPARAM(0), LPARAM(0)) };
+                }
+                return false;
+            }
+            Claim::Replace(pid) => {
+                if let Some(window) = window {
+                    // SAFETY: as above; an elevated sender reaches a window of lower integrity.
+                    let _ = unsafe { PostMessageW(Some(window), WM_YIELD_TO_ELEVATED, WPARAM(0), LPARAM(0)) };
+                }
+                wait_for_exit(pid, 15_000);
+                release_window_mutex();
+            }
+        }
+    }
+    // The other copy did not quit: open rather than leave the person without a window.
+    true
+}
+
+/// Creates (or opens) the window mutex. Returns whether it already existed.
+fn create_window_mutex() -> bool {
+    // SAFETY: plain Win32 call with a static name; the handle is kept in WINDOW_MUTEX.
     let handle = unsafe { CreateMutexW(None, false, w!("Local\\Vigil.Window")) };
     // SAFETY: reads this thread's last error, set by CreateMutexW just above.
     let exists = unsafe { GetLastError() } == ERROR_ALREADY_EXISTS;
-    if handle.is_ok() && !exists {
-        return true;
+    if let Ok(handle) = handle {
+        release_window_mutex();
+        WINDOW_MUTEX.store(handle.0 as isize, Ordering::Release);
     }
-    // SAFETY: looks for the other copy's message-only window by class; nothing is dereferenced.
-    if let Ok(other) = unsafe { FindWindowExW(Some(HWND_MESSAGE), None, CLASS, PCWSTR::null()) } {
-        // SAFETY: posts a message without pointers to another process's window.
-        let _ = unsafe { PostMessageW(Some(other), WM_ACTIVATE_COPY, WPARAM(0), LPARAM(0)) };
+    exists
+}
+
+/// Closes this copy's handle on the window mutex: before taking it again, and before "Restart as
+/// administrator" starts the elevated copy that must get it.
+pub fn release_window_mutex() {
+    let raw = WINDOW_MUTEX.swap(0, Ordering::AcqRel);
+    if raw != 0 {
+        // SAFETY: the handle came from CreateMutexW and is closed once (swapped out above).
+        let _ = unsafe { CloseHandle(HANDLE(raw as *mut _)) };
     }
-    false
+}
+
+/// The copy that holds the window, by its hidden tray window: the first window of Vigil's class
+/// whose process runs this same executable. A copy that is still starting gets two seconds to
+/// create its window.
+fn find_holder() -> (Holder, Option<HWND>) {
+    let own = own_image();
+    for attempt in 0..10 {
+        let mut other = false;
+        let mut after: Option<HWND> = None;
+        // SAFETY: walks the message-only windows of Vigil's class; nothing is dereferenced.
+        while let Ok(window) = unsafe { FindWindowExW(Some(HWND_MESSAGE), after, CLASS, PCWSTR::null()) } {
+            after = Some(window);
+            let mut pid = 0u32;
+            // SAFETY: `pid` is a valid out pointer for the window's process id.
+            unsafe { GetWindowThreadProcessId(window, Some(&mut pid)) };
+            if pid == 0 || pid == std::process::id() {
+                continue;
+            }
+            let (image, elevated) = process_facts(pid);
+            if own.is_some() && image.is_some() && image == own {
+                return (Holder::Vigil { pid, elevated }, Some(window));
+            }
+            other = true;
+        }
+        if other {
+            return (Holder::Other, None);
+        }
+        if attempt < 9 {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+    }
+    (Holder::None, None)
+}
+
+/// This executable's path, lower case, as Windows names it.
+fn own_image() -> Option<String> {
+    let exe = std::env::current_exe().ok()?;
+    let full = std::fs::canonicalize(&exe).unwrap_or(exe);
+    Some(normalize(&full.to_string_lossy()))
+}
+
+fn normalize(path: &str) -> String {
+    path.trim_start_matches(r"\\?\").to_lowercase()
+}
+
+/// The image path (lower case) of process `pid`, and whether it runs elevated (`None` when its
+/// token cannot be read, as from a standard process for an elevated one).
+fn process_facts(pid: u32) -> (Option<String>, Option<bool>) {
+    // SAFETY: opens the process for limited queries only; the handle is closed below.
+    let Ok(process) = (unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }) else {
+        return (None, None);
+    };
+    let mut buffer = vec![0u16; 1024];
+    let mut size = buffer.len() as u32;
+    // SAFETY: `buffer` holds `size` characters; Windows writes the path and its length.
+    let image = unsafe {
+        QueryFullProcessImageNameW(
+            process,
+            PROCESS_NAME_WIN32,
+            windows::core::PWSTR(buffer.as_mut_ptr()),
+            &mut size,
+        )
+    }
+    .ok()
+    .map(|()| String::from_utf16_lossy(&buffer[..size as usize]))
+    .map(|path| {
+        let full = std::fs::canonicalize(&path).map_or(path, |p| p.to_string_lossy().into_owned());
+        normalize(&full)
+    });
+    let elevated = token_elevated(process);
+    // SAFETY: the handle came from OpenProcess above.
+    let _ = unsafe { CloseHandle(process) };
+    (image, elevated)
+}
+
+fn token_elevated(process: HANDLE) -> Option<bool> {
+    let mut token = HANDLE::default();
+    // SAFETY: opens the process token for queries; closed below.
+    unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut token) }.ok()?;
+    let mut elevation = TOKEN_ELEVATION::default();
+    let mut returned = 0u32;
+    // SAFETY: `elevation` is the structure TokenElevation fills, of the size given.
+    let read = unsafe {
+        GetTokenInformation(
+            token,
+            TokenElevation,
+            Some(std::ptr::from_mut(&mut elevation).cast()),
+            size_of::<TOKEN_ELEVATION>() as u32,
+            &mut returned,
+        )
+    };
+    // SAFETY: the token handle came from OpenProcessToken above.
+    let _ = unsafe { CloseHandle(token) };
+    read.ok().map(|()| elevation.TokenIsElevated != 0)
+}
+
+/// Waits up to `timeout_ms` for process `pid` to end (at once when it already has, or when it
+/// cannot be opened).
+pub fn wait_for_exit(pid: u32, timeout_ms: u32) {
+    if pid == 0 || pid == std::process::id() {
+        return;
+    }
+    // SAFETY: opens the process only to wait on it; the handle is closed below.
+    let Ok(process) = (unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, pid) }) else {
+        return;
+    };
+    // SAFETY: waits on a valid process handle for a bounded time.
+    let _ = unsafe { WaitForSingleObject(process, timeout_ms) };
+    // SAFETY: the handle came from OpenProcess above.
+    let _ = unsafe { CloseHandle(process) };
 }
 
 fn send(command: Command) {
@@ -290,6 +499,14 @@ extern "system" fn window_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam:
             send(Command::Open);
             LRESULT(0)
         }
+        WM_YIELD_TO_ELEVATED => {
+            // Only a process of this integrity level or higher can deliver it: an elevated copy
+            // takes the window over, so this one quits (the watch goes with it).
+            if !vigil_sys::elevation::is_elevated() {
+                send(Command::Quit);
+            }
+            LRESULT(0)
+        }
         _ if TASKBAR_CREATED.get().is_some_and(|m| *m == message) => {
             // Explorer restarted: the icon must be added again.
             if SHARED.get().is_some_and(|s| s.icon) {
@@ -337,6 +554,12 @@ fn run() {
         }
     };
     TRAY_HWND.store(hwnd.0 as isize, Ordering::Release);
+    // Explorer (not elevated) announces a restart with TaskbarCreated; an elevated copy must let it
+    // through, or the icon never comes back. It carries no data.
+    if let Some(message) = TASKBAR_CREATED.get() {
+        // SAFETY: changes the message filter of this thread's own window.
+        let _ = unsafe { ChangeWindowMessageFilterEx(hwnd, *message, MSGFLT_ALLOW, None) };
+    }
     if SHARED.get().is_some_and(|s| s.icon) {
         add_icon(hwnd);
     }
@@ -399,4 +622,55 @@ pub fn accent(dark: bool) -> Option<gpui_kit::Hsla> {
     let c = settings.GetColorValue(kind).ok()?;
     let rgba = (u32::from(c.R) << 24) | (u32::from(c.G) << 16) | (u32::from(c.B) << 8) | 0xff;
     Some(gpui_kit::rgba(rgba).into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_free_window_opens() {
+        assert_eq!(decide(false, Holder::None, false), Claim::Open);
+        assert_eq!(decide(false, Holder::None, true), Claim::Open);
+    }
+
+    #[test]
+    fn a_second_copy_shows_the_first() {
+        let vigil = |elevated| Holder::Vigil { pid: 42, elevated };
+        assert_eq!(decide(true, vigil(Some(false)), false), Claim::Activate);
+        assert_eq!(decide(true, vigil(Some(true)), false), Claim::Activate);
+        assert_eq!(decide(true, vigil(None), false), Claim::Activate);
+        assert_eq!(decide(true, vigil(Some(true)), true), Claim::Activate);
+        // An elevated copy that cannot read the other's token does not take its window.
+        assert_eq!(decide(true, vigil(None), true), Claim::Activate);
+    }
+
+    #[test]
+    fn an_elevated_copy_takes_over_from_a_standard_one() {
+        // The sign-in copy (`--tray`, not elevated) holds the window; the person then starts
+        // Vigil from the Start menu and approves UAC: the elevated window must open.
+        let holder = Holder::Vigil {
+            pid: 42,
+            elevated: Some(false),
+        };
+        assert_eq!(decide(true, holder, true), Claim::Replace(42));
+    }
+
+    #[test]
+    fn something_else_holding_the_name_does_not_keep_vigil_closed() {
+        assert_eq!(decide(true, Holder::Other, false), Claim::Open);
+        assert_eq!(decide(true, Holder::None, true), Claim::Open);
+    }
+
+    #[test]
+    fn image_paths_compare_without_the_long_path_prefix() {
+        assert_eq!(
+            normalize(r"\\?\C:\Program Files\Vigil\vigil.exe"),
+            r"c:\program files\vigil\vigil.exe"
+        );
+        assert_eq!(
+            normalize(r"C:\Program Files\Vigil\VIGIL.EXE"),
+            r"c:\program files\vigil\vigil.exe"
+        );
+    }
 }

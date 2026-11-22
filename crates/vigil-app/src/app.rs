@@ -28,6 +28,9 @@ pub enum Focus {
 #[derive(Default)]
 pub struct Report {
     pub analysis: Option<Value>,
+    /// Bumped each time `analysis` is replaced (see [`Report::set_analysis`]): pages keep what they
+    /// derive from the report (sorted items) until it changes, instead of every frame.
+    pub revision: u64,
     pub ignored: Vec<String>,
     pub loaded: bool,
     pub scanning: bool,
@@ -44,6 +47,12 @@ pub struct Report {
 }
 
 impl Report {
+    /// Replaces the loaded report.
+    pub fn set_analysis(&mut self, analysis: Option<Value>) {
+        self.analysis = analysis;
+        self.revision = self.revision.wrapping_add(1);
+    }
+
     pub fn is_ignored(&self, id: &str) -> bool {
         self.ignored.iter().any(|i| i == id)
     }
@@ -67,8 +76,8 @@ impl Report {
             let (analysis, ignored) = task.await;
             let _ = this.update(cx, |report, cx| {
                 match analysis {
-                    Ok(Value::Null) => report.analysis = None,
-                    Ok(value) => report.analysis = Some(value),
+                    Ok(Value::Null) => report.set_analysis(None),
+                    Ok(value) => report.set_analysis(Some(value)),
                     Err(error) => report.error = Some(error),
                 }
                 if let Ok(Value::Array(ids)) = ignored {
@@ -247,7 +256,7 @@ pub fn start_scan(ctx: &Ctx, days: u32, virustotal: bool, use_ai: bool, window: 
                             let line = tf("scan.aiUnavailable", &[("problem", offer.s("problem"))]);
                             ctx.report.update(cx, |r, _| r.log.push(line));
                         }
-                        finish_scan(&ctx, false, use_ai, cx);
+                        finish_scan(&ctx, false, use_ai, crate::win::hwnd(window), cx);
                     }
                 }
             });
@@ -255,8 +264,9 @@ pub fn start_scan(ctx: &Ctx, days: u32, virustotal: bool, use_ai: bool, window: 
         .detach();
 }
 
-/// Finishes the scan waiting for the AI decision (`review`: with the AI review).
-pub fn finish_scan(ctx: &Ctx, review: bool, selected: bool, cx: &mut App) {
+/// Finishes the scan waiting for the AI decision (`review`: with the AI review). Before anything is
+/// sent, the core confirms in its own native dialog, owned by `owner` (the main window).
+pub fn finish_scan(ctx: &Ctx, review: bool, selected: bool, owner: isize, cx: &mut App) {
     let report = ctx.report.clone();
     report.update(cx, |r, cx| {
         r.title = if review {
@@ -275,7 +285,7 @@ pub fn finish_scan(ctx: &Ctx, review: bool, selected: bool, cx: &mut App) {
         };
         match core {
             Some(st) => {
-                let analysis = vigil_core::api::scan_finish(&st, review, selected, &send);
+                let analysis = vigil_core::api::scan_finish(&st, review, selected, owner, &send);
                 let ignored = vigil_core::api::ignored_list(&st);
                 analysis.map(|a| (a, ignored))
             }
@@ -290,7 +300,7 @@ pub fn finish_scan(ctx: &Ctx, review: bool, selected: bool, cx: &mut App) {
         report.update(cx, |r, cx| {
             match result {
                 Ok((analysis, ignored)) => {
-                    r.analysis = Some(analysis);
+                    r.set_analysis(Some(analysis));
                     r.ignored = ignored;
                 }
                 Err(error) => r.error = Some(error),

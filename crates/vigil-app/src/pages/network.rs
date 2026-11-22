@@ -259,6 +259,9 @@ impl Render for NetworkPage {
         let current = self.current(cx);
         let busy = self.acting.busy;
         let pid = current.as_ref().map(|c| c.i("pid")).unwrap_or(0);
+        // With the PID, the start time names exactly the process the list showed: if it ended and
+        // another took its PID, the core refuses the request.
+        let created = current.as_ref().map(|c| c.i("createdMs")).unwrap_or(0);
         let exe = current.as_ref().map(|c| c.s("exe").to_string()).unwrap_or_default();
         let remote = current.as_ref().map(|c| c.s("remote").to_string()).unwrap_or_default();
         let weak = cx.entity().downgrade();
@@ -362,11 +365,11 @@ impl Render for NetworkPage {
                     .child(
                         ui::button("net-end", t("proc.end"))
                             .danger(true)
-                            .disabled(current.is_none() || pid <= 4 || busy)
+                            .disabled(current.is_none() || pid <= 4 || created == 0 || busy)
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 common::send_json(
                                     this,
-                                    json!({"kind": "process", "op": "terminate", "pid": pid, "createdMs": 0}),
+                                    json!({"kind": "process", "op": "terminate", "pid": pid, "createdMs": created}),
                                     window,
                                     cx,
                                 )
@@ -374,11 +377,11 @@ impl Render for NetworkPage {
                     )
                     .child(
                         ui::button("net-block", t("proc.block"))
-                            .disabled(exe_block.is_empty() || !self.ctx.elevated || busy)
+                            .disabled(exe_block.is_empty() || !self.ctx.elevated || created == 0 || busy)
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 common::send_json(
                                     this,
-                                    json!({"kind": "process", "op": "block", "pid": pid, "createdMs": 0}),
+                                    json!({"kind": "process", "op": "block", "pid": pid, "createdMs": created}),
                                     window,
                                     cx,
                                 )

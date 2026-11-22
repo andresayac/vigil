@@ -715,6 +715,7 @@ pub(crate) fn collect_autoruns() -> Vec<Value> {
     entries.extend(crate::persist::collect_autoruns());
     entries.extend(crate::amsi::collect_autoruns());
     entries.extend(crate::com::collect().0);
+    entries.extend(crate::shellext::collect().0);
     entries
 }
 
@@ -1264,6 +1265,7 @@ pub(crate) fn collect_sysconfig() -> Value {
     cfg.insert(crate::secrets::SECTION.into(), crate::secrets::collect(is_admin()));
     cfg.insert(crate::netcfg::SECTION.into(), crate::netcfg::collect());
     cfg.insert("com_classes".into(), crate::com::collect().1);
+    cfg.insert(crate::shellext::SECTION.into(), crate::shellext::collect().1);
     cfg.insert("remote_agents".into(), crate::rmm::collect_config());
     cfg.insert(crate::certs::SECTION.into(), crate::certs::collect());
     cfg.insert(crate::amsi::SECTION.into(), crate::amsi::collect_config());
@@ -1604,6 +1606,12 @@ pub(crate) fn collect_all(workdir: &Path, days: u32, progress: &dyn Fn(&str), ca
         notes.extend(list(config.at(crate::secrets::SECTION).at("notes")).iter().cloned());
         notes.extend(list(config.at(crate::certs::SECTION).at("notes")).iter().cloned());
         notes.extend(list(config.at(crate::bits::SECTION).at("notes")).iter().cloned());
+        if truthy(config.at(crate::shellext::SECTION).at("capped")) {
+            notes.push(json!({
+                "area": tr!("Explorer extensions"),
+                "message": tr!("only the first {0} Explorer extensions were checked", crate::shellext::MAX_ENTRIES),
+            }));
+        }
         if truthy(config.at("com_classes").at("capped")) {
             notes.push(json!({
                 "area": tr!("COM classes"),

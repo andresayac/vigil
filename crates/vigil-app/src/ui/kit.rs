@@ -1,6 +1,8 @@
 //! The building blocks of the report and maintenance pages: headings, muted and faint text,
 //! selectable text, panels, chips, links, badges, read-outs, label/value grids, list rows, meters,
-//! an indeterminate progress bar and a stacked bar chart. Everything draws plain text.
+//! an indeterminate progress bar and a stacked bar chart. Everything draws plain text, and every
+//! text helper shows hidden or direction-changing characters as visible markers ([`plain`]): names
+//! and paths come from the computer, and `invoice\u{202E}fdp.exe` must not read "invoiceexe.pdf".
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -19,6 +21,18 @@ use crate::icons;
 use crate::theme::{FONT_MONO, RADIUS, RADIUS_CARD, Tokens};
 
 static NULL: Value = Value::Null;
+
+/// `text` as it is drawn: hidden and direction-changing characters (a right-to-left override, a
+/// control character) become visible markers (`⟨U+202E⟩`, see `vigil_core::display`). Ordinary text
+/// is passed on without a copy.
+pub fn plain(text: impl Into<SharedString>) -> SharedString {
+    let text: SharedString = text.into();
+    if vigil_core::display::is_plain(&text) {
+        text
+    } else {
+        vigil_core::display::shown(&text).into()
+    }
+}
 
 /// Reading fields of the JSON the core and the demo give (camelCase, as the report keeps them).
 pub trait J {
@@ -112,60 +126,58 @@ pub fn chart_top(max: f64) -> f64 {
 }
 
 pub fn h1(text: impl Into<SharedString>) -> Div {
+    let text = plain(text);
     div()
         .font_family(crate::theme::FONT_DISPLAY)
         .text_size(px(24.))
         .font_weight(FontWeight::SEMIBOLD)
-        .child(text.into())
+        .child(text)
 }
 
 pub fn h2(text: impl Into<SharedString>) -> Div {
-    div()
-        .text_size(px(16.))
-        .font_weight(FontWeight::SEMIBOLD)
-        .child(text.into())
+    let text = plain(text);
+    div().text_size(px(16.)).font_weight(FontWeight::SEMIBOLD).child(text)
 }
 
 pub fn h3(text: impl Into<SharedString>) -> Div {
-    div()
-        .text_size(px(14.))
-        .font_weight(FontWeight::SEMIBOLD)
-        .child(text.into())
+    let text = plain(text);
+    div().text_size(px(14.)).font_weight(FontWeight::SEMIBOLD).child(text)
 }
 
 /// A small heading inside a detail pane.
 pub fn h4(text: impl Into<SharedString>, tk: &Tokens) -> Div {
+    let text = plain(text);
     div()
         .pt_2()
         .text_size(px(13.))
         .font_weight(FontWeight::SEMIBOLD)
         .text_color(tk.ink2)
-        .child(text.into())
+        .child(text)
 }
 
 pub fn body(text: impl Into<SharedString>) -> Div {
-    div().text_size(px(13.)).child(text.into())
+    div().text_size(px(13.)).child(plain(text))
 }
 
 pub fn muted(text: impl Into<SharedString>, tk: &Tokens) -> Div {
-    div().text_size(px(13.)).text_color(tk.ink2).child(text.into())
+    div().text_size(px(13.)).text_color(tk.ink2).child(plain(text))
 }
 
 pub fn faint(text: impl Into<SharedString>, tk: &Tokens) -> Div {
-    div().text_size(px(12.)).text_color(tk.ink3).child(text.into())
+    div().text_size(px(12.)).text_color(tk.ink3).child(plain(text))
 }
 
 pub fn colored(text: impl Into<SharedString>, color: Hsla) -> Div {
-    div().text_size(px(13.)).text_color(color).child(text.into())
+    div().text_size(px(13.)).text_color(color).child(plain(text))
 }
 
 pub fn mono(text: impl Into<SharedString>) -> Div {
-    div().font_family(FONT_MONO).text_size(px(12.)).child(text.into())
+    div().font_family(FONT_MONO).text_size(px(12.)).child(plain(text))
 }
 
 /// Text the mouse can select and copy (Ctrl+C), drawn as plain text.
 pub fn sel(id: impl Into<ElementId>, text: impl Into<SharedString>) -> Div {
-    div().min_w_0().child(SelectableText::new(id, text))
+    div().min_w_0().child(SelectableText::new(id, plain(text)))
 }
 
 /// Monospace selectable text on a sunken background (a path, a command line).
@@ -179,7 +191,7 @@ pub fn code(id: impl Into<ElementId>, text: impl Into<SharedString>, tk: &Tokens
         .bg(tk.sunken)
         .border_1()
         .border_color(tk.rule)
-        .child(SelectableText::new(id, text))
+        .child(SelectableText::new(id, plain(text)))
 }
 
 /// A panel of the page (a card with room inside).
@@ -313,7 +325,7 @@ pub fn badge(text: impl Into<SharedString>, color: Option<Hsla>, tk: &Tokens) ->
         .border_color(color.opacity(0.5))
         .text_size(px(12.))
         .text_color(color)
-        .child(text.into())
+        .child(plain(text))
 }
 
 /// A pill: solid (the colour behind on-chart text) or tinted.
@@ -325,7 +337,7 @@ pub fn pill(text: impl Into<SharedString>, color: Hsla, solid: bool, tk: &Tokens
         .rounded(px(10.))
         .text_size(px(12.))
         .font_weight(FontWeight::SEMIBOLD)
-        .child(text.into());
+        .child(plain(text));
     if solid {
         base.bg(color).text_color(tk.on_chart)
     } else {
@@ -400,7 +412,7 @@ pub fn kv(label: impl Into<SharedString>, value: impl IntoElement, width: f32, t
         .flex()
         .gap_3()
         .text_size(px(13.))
-        .child(div().w(px(width)).flex_none().text_color(tk.ink3).child(label.into()))
+        .child(div().w(px(width)).flex_none().text_color(tk.ink3).child(plain(label)))
         .child(div().flex_1().min_w_0().child(value))
 }
 
@@ -428,7 +440,7 @@ pub fn list_row(
     let tk = *tk;
     BaseButton::new(id)
         .role(Role::ListItem)
-        .accessibility_label(name.into())
+        .accessibility_label(plain(name))
         .aria_selected(selected)
         .w_full()
         .flex()

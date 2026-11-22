@@ -20,6 +20,9 @@ use crate::process::PathResolver;
 #[serde(rename_all = "camelCase")]
 pub struct Connection {
     pub pid: u32,
+    /// When the owning process started (Unix ms; 0 when unknown): with the PID it names exactly
+    /// that process, so an action never reaches another process that reused the PID.
+    pub created_ms: i64,
     pub process: String,
     pub exe: String,
     /// "TCP", "TCPv6", "UDP" or "UDPv6".
@@ -122,12 +125,15 @@ pub fn listening_tcp() -> Result<Vec<Connection>, SysError> {
     }
     endpoints.retain(|e| e.state == "LISTEN");
     let owners: HashSet<u32> = endpoints.iter().map(|e| e.pid).collect();
-    let names: HashMap<u32, (String, String)> = SystemProcesses::new()
+    let names: HashMap<u32, (String, String, i64)> = SystemProcesses::new()
         .sample()
         .map(|list| {
             list.into_iter()
                 .filter(|p| owners.contains(&p.pid))
-                .map(|p| (p.pid, (p.name, String::new())))
+                .map(|p| {
+                    let created = crate::util::filetime_to_unix_ms(p.created_raw);
+                    (p.pid, (p.name, String::new(), created))
+                })
                 .collect()
         })
         .unwrap_or_default();
@@ -165,10 +171,10 @@ impl Endpoint {
         }
     }
 
-    fn into_connection(self, names: &HashMap<u32, (String, String)>) -> Connection {
-        let (process, exe) = match names.get(&self.pid) {
-            Some((name, exe)) => (name.clone(), exe.clone()),
-            None => (fallback_name(self.pid), String::new()),
+    fn into_connection(self, names: &HashMap<u32, (String, String, i64)>) -> Connection {
+        let (process, exe, created_ms) = match names.get(&self.pid) {
+            Some((name, exe, created)) => (name.clone(), exe.clone(), *created),
+            None => (fallback_name(self.pid), String::new(), 0),
         };
         let (remote, remote_ip, public) = match self.remote {
             Some((ip, port)) => (endpoint_text(ip, port), ip.to_string(), is_public(ip)),
@@ -176,6 +182,7 @@ impl Endpoint {
         };
         Connection {
             pid: self.pid,
+            created_ms,
             process,
             exe,
             protocol: self.protocol.to_string(),
@@ -196,9 +203,9 @@ fn fallback_name(pid: u32) -> String {
     }
 }
 
-/// Name and image path of the processes that own `endpoints`: one kernel call for the names,
-/// one path query per owning process.
-fn process_names(endpoints: &[Endpoint]) -> HashMap<u32, (String, String)> {
+/// Name, image path and start time of the processes that own `endpoints`: one kernel call for the
+/// names and start times, one path query per owning process.
+fn process_names(endpoints: &[Endpoint]) -> HashMap<u32, (String, String, i64)> {
     let owners: HashSet<u32> = endpoints.iter().map(|e| e.pid).collect();
     let Ok(list) = SystemProcesses::new().sample() else {
         return HashMap::new();
@@ -208,7 +215,8 @@ fn process_names(endpoints: &[Endpoint]) -> HashMap<u32, (String, String)> {
         .filter(|p| owners.contains(&p.pid))
         .map(|p| {
             let path = paths.dos_path(p.pid);
-            (p.pid, (p.name, path))
+            let created = crate::util::filetime_to_unix_ms(p.created_raw);
+            (p.pid, (p.name, path, created))
         })
         .collect()
 }

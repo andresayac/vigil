@@ -26,6 +26,8 @@ pub enum Src {
     Tasks,
     Connections,
     Startup,
+    StartupImpact,
+    Updates,
     Tuning,
     Hardware(bool),
     Insights,
@@ -60,7 +62,8 @@ pub fn fetch(core: Option<&Arc<AppState>>, src: Src) -> Result<Value, String> {
     };
     use vigil_core::api;
     match src {
-        Src::Report => Ok(st.lock().analysis_json.clone().unwrap_or(Value::Null)),
+        // `viewOnly` is kept on every read of a report that is only to be looked at.
+        Src::Report => Ok(st.report_view().unwrap_or(Value::Null)),
         Src::Ignored => to(api::ignored_list(st)),
         Src::Plans(id) => Ok(Value::Array(api::plan_actions(st, &id))),
         Src::Accounts(days) => to(vigil_core::accounts::read(Some(days), &st.store.records())),
@@ -75,6 +78,8 @@ pub fn fetch(core: Option<&Arc<AppState>>, src: Src) -> Result<Value, String> {
         Src::Tasks => to(vigil_sys::tasks::list().map_err(|e| e.to_string())?),
         Src::Connections => to(vigil_sys::net::connections().map_err(|e| e.to_string())?),
         Src::Startup => to(vigil_sys::startup::list()),
+        Src::StartupImpact => to(vigil_sys::bootimpact::read()),
+        Src::Updates => to(vigil_sys::updates::read()),
         Src::Tuning => to(vigil_maint::tuning::tuning_state()),
         Src::Hardware(force) => to(st.hardware(force)?),
         Src::Insights => to(api::insights(st)?),
@@ -104,6 +109,8 @@ fn from_demo(src: Src) -> Value {
         Src::Tasks => demo("tasks"),
         Src::Connections => demo("connections"),
         Src::Startup => serde_json::to_value(crate::demo_pages::startup().0).unwrap_or(json!([])),
+        Src::StartupImpact => demo("startupImpact"),
+        Src::Updates => demo("updates"),
         Src::Tuning => demo("tuning"),
         Src::Hardware(_) => demo("hardware"),
         Src::Insights => demo("insights"),

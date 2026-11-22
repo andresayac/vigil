@@ -217,6 +217,18 @@ fn role_steps(role: &Role) -> Vec<Step> {
                         .danger(),
                 ];
             }
+            if source == crate::shellext::SOURCE {
+                // Deleting the registration by hand leaves the program half removed; the
+                // program's own settings or its uninstaller remove it cleanly.
+                return vec![
+                    Step::new(tr!("Turn the extension off in the settings of the program it belongs to"))
+                        .note(tr!(
+                            "Most programs that add to Explorer's menus, icons or previews have a setting for it. Explorer has to restart before the DLL is unloaded."
+                        )),
+                    Step::new(tr!("Uninstall the program it belongs to if you no longer use it"))
+                        .note(tr!("Settings → Apps → Installed apps. The page Installed programs lists it too.")),
+                ];
+            }
             if source == "com_hijack"
                 && let Some(key) = &key
             {

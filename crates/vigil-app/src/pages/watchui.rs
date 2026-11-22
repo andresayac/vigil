@@ -169,7 +169,7 @@ pub fn watch_card(ctx: &Ctx, status: &Value, tk: &Tokens) -> impl IntoElement {
                     .text_ellipsis()
                     .whitespace_nowrap()
                     .when(unread, |this| this.font_weight(FontWeight::SEMIBOLD))
-                    .child(alert.s("title").to_string()),
+                    .child(kit::plain(alert.s("title").to_string())),
             )
             .child(kit::faint(since(alert.i("time")), &tk)),
         );
@@ -253,20 +253,28 @@ pub fn auto_scan_line(status: &Value) -> String {
     line
 }
 
-/// Opens the report of the last automatic scan (checked by the core) and shows its findings.
+/// Opens the report of the last automatic scan (checked by the core) and shows its findings. The
+/// report is read and parsed off the UI thread; Findings shows it when it is ready.
 pub fn open_auto_report(ctx: &Ctx, window: &mut Window, cx: &mut App) {
-    if let (Some(core), Some(watcher)) = (&ctx.core, &ctx.watcher) {
-        match vigil_core::api::open_auto_report(core, watcher) {
-            Ok(Some(analysis)) => ctx.report.update(cx, |r, cx| {
-                r.analysis = Some(analysis);
+    if let (Some(core), Some(watcher)) = (ctx.core.clone(), ctx.watcher.clone()) {
+        let report = ctx.report.clone();
+        let task =
+            gpui_kit::AppContext::background_spawn(
+                cx,
+                async move { vigil_core::api::open_auto_report(&core, &watcher) },
+            );
+        cx.spawn(async move |cx| {
+            let result = task.await;
+            report.update(cx, |r, cx| {
+                match result {
+                    Ok(Some(analysis)) => r.set_analysis(Some(analysis)),
+                    Ok(None) => {}
+                    Err(error) => r.error = Some(error),
+                }
                 cx.notify();
-            }),
-            Ok(None) => {}
-            Err(error) => ctx.report.update(cx, |r, cx| {
-                r.error = Some(error);
-                cx.notify();
-            }),
-        }
+            });
+        })
+        .detach();
     }
     ctx.go("findings", window, cx);
 }

@@ -693,7 +693,7 @@ impl ProtectionPage {
                                 .overflow_hidden()
                                 .text_ellipsis()
                                 .whitespace_nowrap()
-                                .child(x.s("name").to_string()),
+                                .child(kit::plain(x.s("name").to_string())),
                         ),
                 )
                 .child(div().w(px(130.)).child(category))

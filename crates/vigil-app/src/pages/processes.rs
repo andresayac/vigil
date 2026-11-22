@@ -830,7 +830,12 @@ impl TableDelegate for ProcTable {
                         .when_some(mark, |this, color| {
                             this.child(div().w(px(8.)).h(px(8.)).rounded(px(4.)).bg(color))
                         })
-                        .child(div().overflow_hidden().text_ellipsis().child(label.clone()))
+                        .child(
+                            div()
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .child(crate::ui::kit::plain(label.clone())),
+                        )
                         .into_any_element();
                 }
                 let text = self.cell_text(&item, col_ix);
@@ -839,7 +844,12 @@ impl TableDelegate for ProcTable {
                     this.bg(tk.heat[level]).border_l_1().border_color(tk.heat_rule)
                 })
                 .when(COLS[col_ix].key == "path", |this| this.text_color(tk.ink2))
-                .child(div().overflow_hidden().text_ellipsis().child(text))
+                .child(
+                    div()
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .child(crate::ui::kit::plain(text)),
+                )
                 .into_any_element()
             }
         }
@@ -880,8 +890,8 @@ impl TableDelegate for ProcTable {
         Some(match item {
             Item::Section(label) if col_ix == 0 => label.clone().into(),
             Item::Section(_) => return None,
-            Item::Row { label, .. } if col_ix == 0 => label.clone().into(),
-            Item::Row { .. } => self.cell_text(item, col_ix).into(),
+            Item::Row { label, .. } if col_ix == 0 => crate::ui::kit::plain(label.clone()),
+            Item::Row { .. } => crate::ui::kit::plain(self.cell_text(item, col_ix)),
         })
     }
 
@@ -1537,7 +1547,7 @@ impl ProcessesPage {
                                                 .flex_none()
                                                 .overflow_hidden()
                                                 .text_ellipsis()
-                                                .child(m.name.clone()),
+                                                .child(crate::ui::kit::plain(m.name.clone())),
                                         )
                                         .child(
                                             div()
@@ -1592,7 +1602,7 @@ impl ProcessesPage {
                                 .flex_1()
                                 .overflow_hidden()
                                 .text_ellipsis()
-                                .child(s.display_name.clone()),
+                                .child(crate::ui::kit::plain(s.display_name.clone())),
                         )
                 }))
                 .into_any_element(),

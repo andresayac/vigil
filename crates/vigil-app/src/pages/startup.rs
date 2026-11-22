@@ -1,7 +1,8 @@
 //! The Startup apps page: what Windows starts at
 //! sign-in, from the Run keys, the Startup folders and policies, with each program's publisher,
-//! state, signature (checked in the background) and location; Enable, Disable and (for policy
-//! entries) Delete go through the action service.
+//! state, signature (checked in the background), startup impact (as Windows measured it at the
+//! last starts, with administrator rights) and location; Enable, Disable and (for policy entries)
+//! Delete go through the action service.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -13,12 +14,13 @@ use gpui_kit::{
     AppContext as _, Context, Entity, FocusHandle, InteractiveElement as _, IntoElement, ParentElement, Render, Styled,
     Subscription, Window, div, px,
 };
+use serde_json::Value;
 use vigil_core::inspect::StartupSignature;
 use vigil_core::requests::Request;
 use vigil_core::state::AppState;
 use vigil_sys::startup::StartupEntry;
 
-use crate::i18n::{t, tf};
+use crate::i18n::{t, tf, tn};
 use crate::icons;
 use crate::pages::common::{self, Acting, Acts};
 use crate::theme::{Tokens, tokens};
@@ -73,6 +75,36 @@ fn location(e: &StartupEntry) -> String {
     t(key)
 }
 
+/// The measured impact of a program (by full path first, then by file name), from the
+/// `bootimpact` read.
+fn impact_of<'a>(impact: &'a Value, executable: &str) -> Option<&'a Value> {
+    if executable.is_empty() {
+        return None;
+    }
+    let lower = executable.to_lowercase();
+    let name = base_name(&lower).to_string();
+    let programs = impact.get("programs")?.as_array()?;
+    let field = |p: &Value, key: &str| p.get(key).and_then(Value::as_str).unwrap_or("").to_lowercase();
+    programs
+        .iter()
+        .find(|p| !field(p, "path").is_empty() && field(p, "path") == lower)
+        .or_else(|| programs.iter().find(|p| field(p, "key") == name))
+}
+
+/// The impact column: text and sort rank.
+fn impact_cell(found: Option<&Value>) -> (String, f64) {
+    match found.and_then(|p| p.get("level")).and_then(Value::as_str) {
+        Some("high") => (t("startup.impactHigh"), 3.0),
+        Some("medium") => (t("startup.impactMedium"), 2.0),
+        Some("low") => (t("startup.impactLow"), 1.0),
+        _ => (t("startup.impactNone"), 0.0),
+    }
+}
+
+fn seconds(ms: f64) -> String {
+    tf("startup.seconds", &[("n", &crate::format::num(ms / 1000.0, 1))])
+}
+
 /// The signature column: text, colour (only when something is wrong) and sort rank.
 fn signature(
     e: &StartupEntry,
@@ -111,6 +143,8 @@ pub struct StartupPage {
     rows: Vec<StartupEntry>,
     signatures: HashMap<String, StartupSignature>,
     checking: bool,
+    /// Startup impact and start durations (`vigil_sys::bootimpact`), read in the background.
+    impact: Value,
     /// Program icons by lower-case path (`None`: the file has none).
     icons: HashMap<String, Option<Arc<gpui_kit::Image>>>,
     table: Entity<TableState<Grid>>,
@@ -142,6 +176,7 @@ impl StartupPage {
             GridCol::new("name", t("startup.colName"), 300.),
             GridCol::new("publisher", t("startup.colPublisher"), 220.),
             GridCol::new("status", t("startup.colStatus"), 130.),
+            GridCol::new("impact", t("startup.colImpact"), 130.),
             GridCol::new("signature", t("startup.colSignature"), 150.),
             GridCol::new("location", t("startup.colLocation"), 260.),
         ];
@@ -168,6 +203,7 @@ impl StartupPage {
             rows: Vec::new(),
             signatures: HashMap::new(),
             checking: false,
+            impact: Value::Null,
             icons: HashMap::new(),
             table,
             search,
@@ -189,9 +225,11 @@ impl StartupPage {
             let (rows, signatures) = crate::demo_pages::startup();
             self.rows = rows;
             self.signatures = signatures;
+            self.impact = crate::data::demo("startupImpact");
             self.fill(cx);
             return;
         }
+        self.read_impact(cx);
         self.loading = true;
         common::read(cx, vigil_sys::startup::list, |page, rows, cx| {
             page.loading = false;
@@ -200,6 +238,19 @@ impl StartupPage {
             page.check(cx);
             page.read_icons(cx);
         });
+    }
+
+    /// The measured startup impact and start durations (administrator rights; nothing is changed).
+    fn read_impact(&mut self, cx: &mut Context<Self>) {
+        let core = self.core.clone();
+        common::read(
+            cx,
+            move || crate::data::fetch(core.as_ref(), crate::data::Src::StartupImpact).unwrap_or(Value::Null),
+            |page, impact, cx| {
+                page.impact = impact;
+                page.fill(cx);
+            },
+        );
     }
 
     /// The programs' icons, read once each in the background.
@@ -268,6 +319,7 @@ impl StartupPage {
             .iter()
             .map(|e| {
                 let (state, rank) = status(e);
+                let (impact, impact_rank) = impact_cell(impact_of(&self.impact, &e.executable));
                 let (sig, color, sig_rank) = signature(e, self.signatures.get(&e.executable), self.checking, &tk);
                 let image = self.icons.get(&e.executable.to_lowercase()).cloned().flatten();
                 let mut name = GridCell::text(display_name(e));
@@ -283,6 +335,7 @@ impl StartupPage {
                     name,
                     GridCell::text(publisher(e)),
                     GridCell::text(state).ranked(rank),
+                    GridCell::text(impact).ranked(impact_rank),
                     GridCell::text(sig).ranked(sig_rank).color(color),
                     GridCell::text(location(e)),
                 ];
@@ -350,6 +403,37 @@ impl StartupPage {
         } else {
             format!(r"{}\{}", e.location, e.value)
         };
+        let impact = impact_of(&self.impact, &e.executable).map(|p| {
+            let num = |key: &str| p.get(key).and_then(Value::as_f64).unwrap_or(0.0);
+            let (level, _) = impact_cell(Some(p));
+            let mut text = level;
+            if num("boots") > 0.0 {
+                text = format!(
+                    "{text} · {}",
+                    tn(
+                        "startup.impactDetail",
+                        num("boots") as u64,
+                        &[
+                            ("cpu", &seconds(num("cpuMs"))),
+                            ("disk", &crate::format::size(num("diskBytes"), 1)),
+                        ],
+                    )
+                );
+            }
+            if num("degradationMs") > 0.0 {
+                text = format!(
+                    "{text} · {}",
+                    tf(
+                        "startup.impactSlowed",
+                        &[
+                            ("s", &seconds(num("degradationMs"))),
+                            ("when", &common::when_ms(num("degradedMs") as i64)),
+                        ],
+                    )
+                );
+            }
+            text
+        });
         let signer = self
             .signatures
             .get(&e.executable)
@@ -404,9 +488,46 @@ impl StartupPage {
             .when_some(signer, |this, signer| {
                 this.child(ui::fact(t("startup.colSignature"), signer, false, tk))
             })
+            .when_some(impact, |this, impact| {
+                this.child(ui::fact(t("startup.colImpact"), impact, false, tk))
+            })
             .when(!note.is_empty(), |this| {
                 this.child(div().pt_1().text_size(px(12.)).text_color(tk.ink3).child(note))
             })
+    }
+}
+
+impl StartupPage {
+    /// How long recent starts took, and what the impact column is based on.
+    fn impact_line(&self) -> String {
+        let boots = self
+            .impact
+            .get("boots")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let measured = self.impact.get("measured").and_then(Value::as_bool).unwrap_or(false);
+        let needs_admin = self.impact.get("needsAdmin").and_then(Value::as_bool).unwrap_or(false);
+        if self.impact.is_null() {
+            return t("startup.impactReading");
+        }
+        if !measured && needs_admin && !self.elevated {
+            return t("startup.impactNeedsAdmin");
+        }
+        let mut line = t("startup.impactNote");
+        let ms = |b: &Value| b.get("bootMs").and_then(Value::as_f64).unwrap_or(0.0);
+        if let Some(last) = boots.first() {
+            let average = boots.iter().map(ms).sum::<f64>() / boots.len() as f64;
+            line = format!(
+                "{} {line}",
+                tn(
+                    "startup.bootTrend",
+                    boots.len() as u64,
+                    &[("last", &seconds(ms(last))), ("average", &seconds(average))],
+                )
+            );
+        }
+        line
     }
 }
 
@@ -502,6 +623,7 @@ impl Render for StartupPage {
                     ),
             )
             .child(div().text_size(px(12.)).text_color(tk.ink3).child(t("startup.note")))
+            .child(div().text_size(px(12.)).text_color(tk.ink3).child(self.impact_line()))
             .children(self.acting.bar("st-result", &tk))
             .child(grid::frame(&tk).child(grid::table(&self.table, t("page.startup"))))
             .when_some(current.as_ref(), |this, e| this.child(self.details(e, &tk)))

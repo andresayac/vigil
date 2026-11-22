@@ -24,4 +24,5 @@ pub mod startup;
 pub mod storage;
 pub mod system;
 pub mod tasks;
+pub mod updates;
 pub mod watchui;

@@ -3,8 +3,9 @@
 //! The window sends a typed [`Request`]; [`run_action`] rebuilds the action from Rust's own state
 //! (requests.rs), asks for confirmation in a native Windows dialog (confirm.rs) and runs it through
 //! the action engine (`vigil_actions::execute`), which journals it. The window never builds an
-//! `ActionSpec` and never calls the engine itself: it only implements [`Ui`], which shows the
-//! dialog on its own thread and passes progress lines on.
+//! `ActionSpec`, never calls the engine and never answers the confirmation: it only implements
+//! [`Ui`], which names the window that owns the dialog and passes progress lines on. The dialog
+//! itself is shown here, by the core.
 //!
 //! [`run_action`] blocks (it reads live state, waits for the user and runs the action): call it on
 //! a worker thread, never on the UI thread.
@@ -22,15 +23,18 @@ use crate::planner::spec;
 use crate::requests::{self, Context, Plan, Request};
 use crate::state::AppState;
 
-/// What the window provides to the action path.
+/// What the window provides to the action path: where the native confirmation belongs and where
+/// progress goes. It cannot answer the confirmation; the core shows it ([`confirm`]).
 pub trait Ui {
     /// The window that owns the confirmation dialog (an HWND; 0 for none).
     fn owner(&self) -> isize;
-    /// Shows the native confirmation (`confirm::ask`) on the UI thread and waits for the answer.
-    /// Anything that goes wrong is `Answer::Cancel`.
-    fn ask(&self, prompt: Prompt) -> Answer;
     /// One line of progress while an action runs.
     fn progress(&self, text: &str);
+}
+
+/// Shows the native confirmation, owned by the window of `ui`, and waits for the answer.
+pub(crate) fn confirm(ui: &dyn Ui, prompt: &Prompt) -> Answer {
+    crate::confirm::ask_owned(ui.owner(), prompt)
 }
 
 #[derive(Debug, Serialize, Default)]
@@ -80,15 +84,36 @@ pub fn run_action(st: &AppState, request: &Request, ui: &dyn Ui) -> Result<Actio
     match plan {
         Plan::Shell(spec) => run_shell(&spec, ui.owner()),
         Plan::Run { spec, item } => run_spec(st, spec, item, ui),
-        Plan::Undo(id) => match vigil_actions::undo(&id, &st.store) {
-            Ok(record) => Ok(ActionOutcome::message(
-                record
-                    .undo_message()
-                    .map_or_else(|| vigil_i18n::tr!("Undone."), str::to_string),
-            )),
-            Err(error) => Err(error.to_string()),
-        },
+        Plan::Undo(id) => {
+            let record = st
+                .store
+                .find(&id)
+                .ok_or_else(|| vigil_i18n::tr!("that action is not in the journal"))?;
+            if confirm(ui, &undo_prompt(&[record])) == Answer::Cancel {
+                return Ok(ActionOutcome::cancelled());
+            }
+            match vigil_actions::undo(&id, &st.store) {
+                Ok(record) => Ok(ActionOutcome::message(
+                    record
+                        .undo_message()
+                        .map_or_else(|| vigil_i18n::tr!("Undone."), str::to_string),
+                )),
+                Err(error) => Err(error.to_string()),
+            }
+        }
         Plan::UndoBatch(batch) => {
+            let steps: Vec<Record> = st
+                .store
+                .records()
+                .into_iter()
+                .filter(|r| r.batch() == Some(batch.as_str()) && vigil_actions::can_undo(r))
+                .collect();
+            if steps.is_empty() {
+                return Ok(ActionOutcome::message(vigil_i18n::tr!("Nothing to undo.")));
+            }
+            if confirm(ui, &undo_prompt(&steps)) == Answer::Cancel {
+                return Ok(ActionOutcome::cancelled());
+            }
             let results = vigil_actions::undo_batch(&batch, &st.store);
             let mut lines: Vec<String> = Vec::new();
             for (record, error) in &results {
@@ -259,6 +284,47 @@ pub fn prompt_for(spec: &ActionSpec, offer_restore_point: bool) -> Prompt {
     }
 }
 
+/// Undo ops that put a file back where it ran (a quarantine undo): the same warning as the
+/// Quarantine page's Restore.
+const RESTORES_FILE: [&str; 1] = ["file.quarantine"];
+
+/// The confirmation for undoing journaled steps (one, or every step of a composite action): what
+/// each undo puts back, and a warning when a quarantined file goes back where it can run.
+pub fn undo_prompt(steps: &[Record]) -> Prompt {
+    let mut body = vigil_i18n::tr!("Vigil puts back what these steps changed:");
+    for step in steps {
+        if step.target().is_empty() {
+            body.push_str(&format!("\n•  {}", step.label()));
+        } else {
+            body.push_str(&format!("\n•  {}\n      {}", step.label(), step.target()));
+        }
+    }
+    let restores_file = steps.iter().any(|s| RESTORES_FILE.contains(&s.op()));
+    if restores_file {
+        body.push_str(&format!(
+            "\n\n{}",
+            vigil_i18n::tr!("Quarantined files go back to their original location and can run again.")
+        ));
+    }
+    let title = match steps {
+        [one] => vigil_i18n::tr!("Undo: {0}", one.label()),
+        _ => vigil_i18n::tr!("Undo {0} steps", steps.len()),
+    };
+    Prompt {
+        title,
+        body,
+        warning: if restores_file {
+            vigil_i18n::tr!("Restore only files you are sure are safe.")
+        } else {
+            String::new()
+        },
+        confirm: vigil_i18n::tr!("Undo"),
+        // Undoing can turn persistence back on or let a file run again: Cancel is the default.
+        destructive: restores_file,
+        restore_point: None,
+    }
+}
+
 fn run_spec(st: &AppState, spec: ActionSpec, item: Option<String>, ui: &dyn Ui) -> Result<ActionOutcome, String> {
     if spec.admin && !st.admin && !USER_OPS.contains(&spec.op.as_str()) {
         return Err(vigil_i18n::tr!(
@@ -274,7 +340,7 @@ fn run_spec(st: &AppState, spec: ActionSpec, item: Option<String>, ui: &dyn Ui) 
             && !inner.restore_point_done
             && spec.op != "system.restore_point"
     };
-    let Answer::Confirm { restore_point } = ui.ask(prompt_for(&spec, offer)) else {
+    let Answer::Confirm { restore_point } = confirm(ui, &prompt_for(&spec, offer)) else {
         return Ok(ActionOutcome::cancelled());
     };
     let make_point = restore_point && st.admin;
@@ -437,7 +503,7 @@ fn quarantine_action(st: &AppState, id: String, delete: bool, ui: &dyn Ui) -> Re
             ..Default::default()
         }
     };
-    if ui.ask(prompt) == Answer::Cancel {
+    if confirm(ui, &prompt) == Answer::Cancel {
         return Ok(ActionOutcome::cancelled());
     }
     let result = if delete {
@@ -493,6 +559,38 @@ mod tests {
         let chinese = vigil_i18n::with_language("zh", || prompt_for(&plan, false));
         assert!(chinese.body.contains("步骤（按此顺序）："), "{}", chinese.body);
         assert_eq!(chinese.confirm, "继续");
+    }
+
+    fn record(op: &str, label: &str, target: &str) -> Record {
+        let value = json!({"id": "r1", "op": op, "label": label, "target": target, "ok": true});
+        Record(value.as_object().cloned().unwrap_or_default())
+    }
+
+    #[test]
+    fn undoing_a_quarantine_warns_like_restore() {
+        let prompt = undo_prompt(&[record(
+            "file.quarantine",
+            "Quarantine file",
+            "C:\\Users\\jdoe\\AppData\\Roaming\\winupd.exe",
+        )]);
+        assert_eq!(prompt.title, "Undo: Quarantine file");
+        assert!(prompt.body.contains("winupd.exe"), "{}", prompt.body);
+        assert!(prompt.body.contains("can run again"), "{}", prompt.body);
+        assert_eq!(prompt.warning, "Restore only files you are sure are safe.");
+        assert!(prompt.destructive);
+        assert_eq!(prompt.confirm, "Undo");
+    }
+
+    #[test]
+    fn undoing_several_steps_lists_each_one() {
+        let prompt = undo_prompt(&[
+            record("startup.disable", "Disable startup entry", "HKCU Run: winupd"),
+            record("task.disable", "Disable task", "\\Contoso\\Updater"),
+        ]);
+        assert_eq!(prompt.title, "Undo 2 steps");
+        assert!(prompt.body.contains("Disable startup entry") && prompt.body.contains("\\Contoso\\Updater"));
+        assert!(prompt.warning.is_empty());
+        assert!(!prompt.destructive);
     }
 
     #[test]
