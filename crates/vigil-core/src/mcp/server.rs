@@ -313,7 +313,8 @@ impl Server {
                         None,
                     )),
                     Ok(line) => {
-                        let line = line.trim();
+                        // Windows clients often start their stream with a UTF-8 byte order mark.
+                        let line = line.trim_start_matches('\u{feff}').trim();
                         if line.is_empty() {
                             continue;
                         }
@@ -437,6 +438,16 @@ mod tests {
             log,
             Budget::default(),
         )
+    }
+
+    #[test]
+    fn a_byte_order_mark_before_the_first_message_is_skipped() {
+        let server = server(None);
+        let input = b"\xef\xbb\xbf{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n".to_vec();
+        let mut out = Vec::new();
+        server.serve(input.as_slice(), &mut out).expect("serve");
+        let reply: Value = serde_json::from_str(String::from_utf8_lossy(&out).trim()).expect("json");
+        assert_eq!(reply["id"], 1, "{reply}");
     }
 
     #[test]
