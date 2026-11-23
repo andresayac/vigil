@@ -15,6 +15,10 @@ fn main() {
     // statically (.cargo/config.toml), so no runtime DLL is needed beside it.
     if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
         println!("cargo:rustc-link-arg-bins=/DEPENDENTLOADFLAG:0x800");
+        // The UI thread builds whole pages and dialogs as element trees; Windows' default 1 MB
+        // stack is not enough for the larger ones in debug builds (the Settings dialog overflowed
+        // it). 8 MB, as other GPUI apps on Windows use.
+        println!("cargo:rustc-link-arg-bins=/STACK:8388608");
     }
     let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap_or_default());
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap_or_default());
